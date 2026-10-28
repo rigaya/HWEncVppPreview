@@ -31,3 +31,5 @@ run/cancel/quitとstdinのEOFに対応し、新しいrunは実行中の要求を
 
 BackendTestsは実時間のsleepを使わず、出力イベント・パイプの完了・手動時計で同期する。
 実時間のWaitAsyncはテスト自体の無限停止を防ぐための上限だけに使う。
+
+`FAKE_ENCODER_LOG_READY_FILE`を指定すると、stderrへFAKEPIDを書き終えた直後に空ファイルを作る。タイムアウト検証でログ出力と偽時計の進行を同期するために使う。

@@ -127,6 +127,9 @@ internal static class Program
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\0", vpp)));
         double seek = ParseSeek(Value(args, "--seek"));
         await Console.Error.WriteLineAsync($"FAKEPID {Environment.ProcessId} seek={seek.ToString(CultureInfo.InvariantCulture)}");
+        // ログ到着後に偽時計を進めるテスト用の同期点。
+        string? logReadyFile = Environment.GetEnvironmentVariable("FAKE_ENCODER_LOG_READY_FILE");
+        if (!string.IsNullOrEmpty(logReadyFile)) await File.WriteAllTextAsync(logReadyFile, "");
         int stderrBytes = Number(args, "--fake-stderr-bytes", 0);
         if (stderrBytes > 0) await Console.Error.WriteLineAsync(new string('x', stderrBytes));
         if (rc != 0) await Console.Error.WriteLineAsync($"FAKE requested rc={rc}");

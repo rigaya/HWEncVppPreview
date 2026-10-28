@@ -20,6 +20,7 @@ public sealed class PreviewController : IAsyncDisposable
     private readonly FrameCache _cache;
     private readonly IPreviewBackend _preferred;
     private readonly IPreviewBackend _fallback;
+    private readonly bool _enableFallback;
     private readonly HashSet<string> _unsupported = new(StringComparer.Ordinal);
     private readonly HashSet<Task> _tasks = new();
     private CancellationTokenSource? _scheduled;
@@ -30,7 +31,7 @@ public sealed class PreviewController : IAsyncDisposable
 
     public PreviewController(IPreviewBackend? backend = null, IPreviewBackend? fallback = null,
         FrameCache? cache = null, TimeProvider? timeProvider = null,
-        TimeSpan? debounce = null, TimeSpan? watchdog = null)
+        TimeSpan? debounce = null, TimeSpan? watchdog = null, bool enableFallback = true)
     {
         _clock = timeProvider ?? TimeProvider.System;
         _debounce = debounce ?? TimeSpan.FromMilliseconds(150);
@@ -39,6 +40,7 @@ public sealed class PreviewController : IAsyncDisposable
         if (_watchdog <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(watchdog));
         _preferred = backend ?? new ServerBackend(_clock);
         _fallback = fallback ?? new OneShotBackend();
+        _enableFallback = enableFallback;
         _cache = cache ?? new FrameCache();
     }
 
@@ -153,7 +155,7 @@ public sealed class PreviewController : IAsyncDisposable
             async Task<PreviewRunResult> RunWithFallbackAsync()
             {
                 try { return await backend.RunAsync(request, sink, active.Token).ConfigureAwait(false); }
-                catch (PreviewServerNotSupportedException) when (ReferenceEquals(backend, _preferred))
+                catch (PreviewServerNotSupportedException) when (_enableFallback && ReferenceEquals(backend, _preferred))
                 {
                     _unsupported.Add(request.EncoderPath);
                     backend = _fallback;
