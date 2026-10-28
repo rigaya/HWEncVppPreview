@@ -1,0 +1,186 @@
+﻿<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HWEncParamViewer.App.ViewModels"
+        x:Class="HWEncParamViewer.App.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="HWEnc パラメータビューワー"
+        Width="1440" Height="900" MinWidth="960" MinHeight="600"
+        WindowStartupLocation="CenterScreen">
+
+  <Window.KeyBindings>
+    <KeyBinding Gesture="F5" Command="{Binding RefreshCommand}" />
+    <KeyBinding Gesture="Ctrl+S" Command="{Binding SaveFiltersCommand}" />
+    <KeyBinding Gesture="Ctrl+O" Command="{Binding LoadFiltersCommand}" />
+  </Window.KeyBindings>
+
+  <Grid RowDefinitions="Auto,*,Auto,Auto">
+
+    <!-- ツールバー: エンコーダと入力 -->
+    <Border Grid.Row="0" Background="{DynamicResource BarBackgroundBrush}"
+            BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1" Padding="10,8">
+      <Grid ColumnDefinitions="Auto,2*,Auto,Auto,Auto,Auto,3*,Auto">
+        <TextBlock Grid.Column="0" Classes="header" Text="エンコーダ" Margin="0,0,8,0" />
+        <TextBox Grid.Column="1" Classes="mono" Text="{Binding EncoderPath}"
+                 PlaceholderText="QSVEncC64.exe / NVEncC64.exe / VCEEncC64.exe" />
+        <Button Grid.Column="2" Classes="icon" Content="…" Margin="4,0,0,0"
+                Command="{Binding BrowseEncoderCommand}" ToolTip.Tip="エンコーダを選択" />
+        <TextBlock Grid.Column="3" Classes="subtle" Text="{Binding EncoderDescription}" Margin="10,0,20,0" />
+        <TextBlock Grid.Column="5" Classes="header" Text="入力" Margin="0,0,8,0" />
+        <TextBox Grid.Column="6" Classes="mono" Text="{Binding InputPath}" PlaceholderText="入力ファイル" />
+        <Button Grid.Column="7" Classes="icon" Content="…" Margin="4,0,0,0"
+                Command="{Binding BrowseInputCommand}" ToolTip.Tip="入力ファイルを選択" />
+      </Grid>
+    </Border>
+
+    <!-- 本体: 左にプレビュー、右にフィルタ編集とヘルプ -->
+    <Grid Grid.Row="1" ColumnDefinitions="*,Auto,560">
+
+      <!-- 左: プレビューとシーク -->
+      <Grid Grid.Column="0" RowDefinitions="*,Auto">
+        <Border Grid.Row="0" Background="{StaticResource PreviewBackgroundBrush}" ClipToBounds="True">
+          <Panel>
+            <!-- SAR を考慮した表示サイズで置き、Viewbox でウィンドウに合わせる -->
+            <Viewbox Stretch="Uniform" StretchDirection="Both" Margin="8">
+              <Image Source="{Binding PreviewImage}" Stretch="Fill"
+                     Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}" />
+            </Viewbox>
+
+            <TextBlock Text="エンコーダと入力ファイルを指定してください"
+                       Foreground="{StaticResource PreviewPlaceholderBrush}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       IsVisible="{Binding PreviewImage, Converter={x:Static ObjectConverters.IsNull}}" />
+
+            <!-- エラー: 上端に帯で表示 (画像の中央は隠さない) -->
+            <Border VerticalAlignment="Top" Background="{StaticResource ErrorBackgroundBrush}" Padding="12,8"
+                    IsVisible="{Binding ErrorText, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <SelectableTextBlock Text="{Binding ErrorText}" Foreground="{StaticResource ErrorTextBrush}"
+                                   FontFamily="{StaticResource MonoFont}" FontSize="12" TextWrapping="Wrap"
+                                   MaxHeight="160" />
+            </Border>
+
+            <!-- 処理中: 右下に小さく重ねる (直前の画像は表示したまま) -->
+            <Border Classes="overlay" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    IsVisible="{Binding IsBusy}">
+              <TextBlock Text="処理中…" Foreground="{StaticResource OverlayTextBrush}" FontSize="12" />
+            </Border>
+          </Panel>
+        </Border>
+
+        <!-- シーク操作 -->
+        <Border Grid.Row="1" Background="{DynamicResource PaneBackgroundBrush}"
+                BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,1,0,0" Padding="10,6">
+          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto">
+            <Button Grid.Column="0" Classes="icon flat" Content="⏮" Command="{Binding GoToStartCommand}" ToolTip.Tip="先頭 (Home)" />
+            <Button Grid.Column="1" Classes="icon flat" Content="◀" Command="{Binding StepFrameCommand}"
+                    CommandParameter="-1" ToolTip.Tip="前のフレーム (←)" />
+            <TextBox Grid.Column="2" x:Name="TimeBox" Classes="mono" Width="120" Margin="4,0" VerticalAlignment="Center"
+                     HorizontalContentAlignment="Center" Text="{Binding CurrentTimeText}"
+                     ToolTip.Tip="時刻 (h:mm:ss.fff / mm:ss / 秒)。Enter で移動" />
+            <Button Grid.Column="3" Classes="icon flat" Content="▶" Command="{Binding StepFrameCommand}"
+                    CommandParameter="1" ToolTip.Tip="次のフレーム (→)" />
+            <Button Grid.Column="4" Classes="icon flat" Content="⏭" Command="{Binding GoToEndCommand}" ToolTip.Tip="終端 (End)" />
+            <Slider Grid.Column="5" x:Name="SeekBar" Margin="12,0" VerticalAlignment="Center"
+                    Minimum="0" Maximum="{Binding DurationSeconds}" Value="{Binding CurrentSeconds}"
+                    IsVisible="{Binding HasDuration}" />
+            <TextBlock Grid.Column="6" Classes="subtle" FontFamily="{StaticResource MonoFont}"
+                       Text="{Binding DurationText}" IsVisible="{Binding HasDuration}" />
+          </Grid>
+        </Border>
+      </Grid>
+
+      <GridSplitter Grid.Column="1" Width="4" ResizeDirection="Columns" />
+
+      <!-- 右: フィルタ編集とヘルプ -->
+      <Grid Grid.Column="2" RowDefinitions="*,Auto,*" Background="{DynamicResource PaneBackgroundBrush}">
+
+        <!-- フィルタ編集 -->
+        <Grid Grid.Row="0" RowDefinitions="Auto,*,Auto">
+          <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="10,8,10,4">
+            <TextBlock Grid.Column="0" Classes="header" Text="フィルタ" />
+            <Button Grid.Column="1" Classes="small" Content="読み込み" Margin="0,0,4,0"
+                    Command="{Binding LoadFiltersCommand}" ToolTip.Tip="テキストファイルから読み込み (Ctrl+O)" />
+            <Button Grid.Column="2" Classes="small" Content="保存"
+                    Command="{Binding SaveFiltersCommand}" ToolTip.Tip="テキストファイルに保存 (Ctrl+S)" />
+          </Grid>
+
+          <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" Padding="10,0">
+            <StackPanel Spacing="4">
+              <ItemsControl ItemsSource="{Binding FilterLines}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:FilterLineViewModel">
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,2">
+                      <CheckBox Grid.Column="0" IsChecked="{Binding IsEnabled}" MinWidth="0" Margin="0,0,4,0"
+                                VerticalAlignment="Center" ToolTip.Tip="有効 / 無効" />
+                      <TextBox Grid.Column="1" Classes="mono filterLine" Text="{Binding Text}"
+                               PlaceholderText="--vpp-xxx param=value,..."
+                               GotFocus="FilterLine_GotFocus"
+                               PointerWheelChanged="FilterLine_PointerWheelChanged"
+                               KeyDown="FilterLine_KeyDown" />
+                      <Button Grid.Column="2" Classes="icon flat" Content="✕" Margin="2,0,0,0"
+                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RemoveFilterLineCommand}"
+                              CommandParameter="{Binding}" ToolTip.Tip="この行を削除" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <Button Classes="small flat" Content="＋ 行を追加" HorizontalAlignment="Left"
+                      Command="{Binding AddFilterLineCommand}" />
+            </StackPanel>
+          </ScrollViewer>
+
+          <Grid Grid.Row="2" ColumnDefinitions="Auto,*" Margin="10,6,10,10">
+            <TextBlock Grid.Column="0" Classes="subtle" Text="入力の追加引数" Margin="0,0,8,0" />
+            <TextBox Grid.Column="1" Classes="mono" Text="{Binding InputArgsText}" />
+          </Grid>
+        </Grid>
+
+        <GridSplitter Grid.Row="1" Height="4" ResizeDirection="Rows" />
+
+        <!-- ヘルプ -->
+        <Grid Grid.Row="2" RowDefinitions="Auto,*">
+          <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="6" Margin="10,8,10,4">
+            <TextBlock Classes="header" Text="ヘルプ" />
+            <TextBlock Classes="subtle" FontFamily="{StaticResource MonoFont}"
+                       Text="{Binding SelectedFilterLine.OptionName, FallbackValue=''}" />
+          </StackPanel>
+          <Border Grid.Row="1" Margin="10,0,10,10" BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1"
+                  CornerRadius="3">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto">
+              <SelectableTextBlock Classes="help" Text="{Binding HelpText}" />
+            </ScrollViewer>
+          </Border>
+        </Grid>
+      </Grid>
+    </Grid>
+
+    <!-- ログ (折りたたみ) -->
+    <Border Grid.Row="2" Height="180" IsVisible="{Binding IsLogOpen}"
+            BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,1,0,0">
+      <TextBox Classes="mono" Text="{Binding LogText}" IsReadOnly="True" AcceptsReturn="True"
+               Background="{DynamicResource PaneBackgroundBrush}"
+               TextWrapping="NoWrap" FontSize="12" BorderThickness="0" CornerRadius="0"
+               VerticalContentAlignment="Top" />
+    </Border>
+
+    <!-- ステータスバー -->
+    <Border Grid.Row="3" Background="{DynamicResource BarBackgroundBrush}"
+            BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,1,0,0" Padding="10,4">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
+          <TextBlock Classes="subtle" Text="{Binding BackendModeText}" />
+          <TextBlock Classes="subtle" Text="│" />
+          <TextBlock Classes="subtle" Text="{Binding ElapsedText}" />
+          <TextBlock Classes="subtle" Text="│" />
+          <TextBlock Classes="subtle" Text="{Binding InputInfoText}" />
+          <TextBlock Classes="subtle" Text="│" />
+          <TextBlock Classes="subtle" Text="{Binding StatusText}" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+          <ToggleButton Classes="small" Content="ログ" IsChecked="{Binding IsLogOpen}" />
+          <Button Classes="small" Content="コマンドをコピー" Command="{Binding CopyCommandLineCommand}"
+                  ToolTip.Tip="有効なフィルタ行を連結した vpp オプションをコピー" />
+        </StackPanel>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

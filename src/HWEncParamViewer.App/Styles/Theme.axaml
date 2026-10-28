@@ -1,0 +1,103 @@
+﻿<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!--
+    見た目の方針 (設計書 17.3):
+    - プレビュー領域は無彩色の中間グレー。画像の色の評価を周囲の色で狂わせない
+    - アクセント色は選択・フォーカスだけに使う
+    - オプションとヘルプは等幅フォント
+  -->
+  <Styles.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="PaneBackgroundBrush" Color="#F3F3F3" />
+          <SolidColorBrush x:Key="BarBackgroundBrush" Color="#E9E9E9" />
+          <SolidColorBrush x:Key="DividerBrush" Color="#D0D0D0" />
+          <SolidColorBrush x:Key="SubtleTextBrush" Color="#606060" />
+          <SolidColorBrush x:Key="HeaderTextBrush" Color="#303030" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="PaneBackgroundBrush" Color="#2B2B2B" />
+          <SolidColorBrush x:Key="BarBackgroundBrush" Color="#252525" />
+          <SolidColorBrush x:Key="DividerBrush" Color="#3C3C3C" />
+          <SolidColorBrush x:Key="SubtleTextBrush" Color="#A0A0A0" />
+          <SolidColorBrush x:Key="HeaderTextBrush" Color="#E0E0E0" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+
+      <!-- テーマに依存させない色 -->
+      <SolidColorBrush x:Key="PreviewBackgroundBrush" Color="#202020" />
+      <SolidColorBrush x:Key="PreviewPlaceholderBrush" Color="#8A8A8A" />
+      <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="#B0000000" />
+      <SolidColorBrush x:Key="OverlayTextBrush" Color="#F0F0F0" />
+      <SolidColorBrush x:Key="ErrorBackgroundBrush" Color="#E0701818" />
+      <SolidColorBrush x:Key="ErrorTextBrush" Color="#FFFFFF" />
+
+      <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas, DejaVu Sans Mono, Noto Sans Mono CJK JP, monospace</FontFamily>
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <!-- 区画の見出し -->
+  <Style Selector="TextBlock.header">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{DynamicResource HeaderTextBrush}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="TextBlock.subtle">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Foreground" Value="{DynamicResource SubtleTextBrush}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- オプションのテキスト (等幅) -->
+  <Style Selector="TextBox.mono">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="MinHeight" Value="28" />
+    <Setter Property="Padding" Value="6,3" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="SelectableTextBlock.help">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="TextWrapping" Value="NoWrap" />
+    <Setter Property="Margin" Value="10,6" />
+  </Style>
+
+  <!-- 小さなアイコンボタン (コマ送り・行の削除など) -->
+  <Style Selector="Button.icon">
+    <Setter Property="MinWidth" Value="32" />
+    <Setter Property="Height" Value="28" />
+    <Setter Property="Padding" Value="6,0" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Button.flat">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
+  <Style Selector="Button.small, ToggleButton.small">
+    <Setter Property="Height" Value="26" />
+    <Setter Property="Padding" Value="10,0" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <!-- 画像の上に重ねる状態表示 -->
+  <Style Selector="Border.overlay">
+    <Setter Property="Background" Value="{StaticResource OverlayBackgroundBrush}" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Padding" Value="10,5" />
+    <Setter Property="Margin" Value="12" />
+  </Style>
+
+  <Style Selector="GridSplitter">
+    <Setter Property="Background" Value="{DynamicResource DividerBrush}" />
+  </Style>
+</Styles>
