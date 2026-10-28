@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\FakeEncoder\FakeEncoder.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\HWEncParamViewer.Core\HWEncParamViewer.Core.csproj" />
   </ItemGroup>
 
