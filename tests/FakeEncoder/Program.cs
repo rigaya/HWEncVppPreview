@@ -151,7 +151,8 @@ internal static class Program
         double seek = ParseSeek(Value(args, "--seek"));
         await Console.Error.WriteLineAsync($"FAKEPID {Environment.ProcessId} seek={seek.ToString(CultureInfo.InvariantCulture)}");
         string? duration = Value(args, "--fake-duration");
-        if (duration != null) await Console.Error.WriteLineAsync($"  Duration: {duration}, start: 0.000000, bitrate: 1000 kb/s");
+        bool durationAtExit = args.Contains("--fake-duration-at-exit", StringComparer.Ordinal);
+        if (duration != null && !durationAtExit) await Console.Error.WriteLineAsync($"  Duration: {duration}, start: 0.000000, bitrate: 1000 kb/s");
         // ログ到着後に偽時計を進めるテスト用の同期点。
         string? logReadyFile = Environment.GetEnvironmentVariable("FAKE_ENCODER_LOG_READY_FILE");
         if (!string.IsNullOrEmpty(logReadyFile)) await File.WriteAllTextAsync(logReadyFile, "");
@@ -187,6 +188,14 @@ internal static class Program
                 // フレーム単位で書き切り、中断でバイナリ境界が壊れないようにする。
                 await Output.WriteAsync(data);
                 await Output.FlushAsync();
+            }
+            if (durationAtExit)
+            {
+                string? exitGate = Value(args, "--fake-duration-exit-gate");
+                string? ready = Environment.GetEnvironmentVariable("FAKE_ENCODER_DURATION_EXIT_READY_FILE");
+                if (!string.IsNullOrEmpty(ready)) await File.WriteAllTextAsync(ready, "");
+                if (exitGate != null) await WaitForFileAsync(exitGate, effectiveToken);
+                if (duration != null) await Console.Error.WriteLineAsync($"  Duration: {duration}, start: 0.000000, bitrate: 1000 kb/s");
             }
             return rc;
         }

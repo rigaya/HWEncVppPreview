@@ -256,6 +256,168 @@ public sealed class InputProbeTests
         finally { System.Globalization.CultureInfo.CurrentCulture = previous; }
     }
 
+    [Fact]
+    public async Task DurationAtExitIsReadAfterFormatProbeStoppedAndThenCached()
+    {
+        var commands = new List<string[]>();
+        await using var probe = new InputProbe(configureStartInfo: info => commands.Add(info.ArgumentList.ToArray()));
+        string[] args = ["--avhw", "--fake-duration", "00:30:07.56", "--fake-duration-at-exit"];
+        var input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitAsync(SafetyTimeout);
+        Assert.Null(input.Duration);
+        var duration = await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitAsync(SafetyTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(1807.56), duration);
+        Assert.Equal(duration, await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitAsync(SafetyTimeout));
+        Assert.Equal(duration, (await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitAsync(SafetyTimeout)).Duration);
+        Assert.Equal(2, commands.Count);
+        Assert.Equal(args.Concat(new[] { "-i", "input.ts", "--log-level", "input=debug", "--frames", "1", "-c", "raw", "-o", "-" }), commands[1]);
+    }
+
+    [Fact]
+    public async Task KnownDurationFromFormatProbeAvoidsAnotherProcess()
+    {
+        int starts = 0;
+        await using var probe = new InputProbe(configureStartInfo: _ => ++starts);
+        string[] args = ["--fake-duration", "00:00:10.00", "--fake-hang-after", "1"];
+        var input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitAsync(SafetyTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(10), input.Duration);
+        Assert.Equal(input.Duration, await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitAsync(SafetyTimeout));
+        Assert.Equal(1, starts);
+    }
+
+    [Theory]
+    [InlineData("00:30:07.56", 1807.56)]
+    [InlineData("N/A", null)]
+    public async Task DurationIgnoresErrorExitAndCachesUnknownResults(string value, double? expected)
+    {
+        int starts = 0;
+        await using var probe = new InputProbe(configureStartInfo: info =>
+        {
+            ++starts;
+            info.ArgumentList[info.ArgumentList.IndexOf("--frames") + 1] = "0";
+        });
+        string[] args = ["--fake-duration", value, "--fake-duration-at-exit", "--fake-rc", "23"];
+        for (int i = 0; i < 2; ++i)
+        {
+            var result = await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitAsync(SafetyTimeout);
+            Assert.Equal(expected.HasValue ? TimeSpan.FromSeconds(expected.Value) : null, result);
+        }
+        Assert.Equal(1, starts);
+    }
+
+    [Fact]
+    public async Task DurationCacheIncludesEncoderInputAndArgumentValues()
+    {
+        int starts = 0;
+        await using var probe = new InputProbe(configureStartInfo: _ => ++starts);
+        string encoder = BackendTests.FakeEncoderPath();
+        var args = new List<string> { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit" };
+        Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(encoder, "a.ts", args).WaitAsync(SafetyTimeout));
+        args[1] = "00:00:20.00";
+        Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(encoder, "a.ts",
+            new[] { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit" }).WaitAsync(SafetyTimeout));
+        Assert.Equal(TimeSpan.FromSeconds(20), await probe.ProbeDurationAsync(encoder, "a.ts", args).WaitAsync(SafetyTimeout));
+        await probe.ProbeDurationAsync(encoder, "b.ts", args).WaitAsync(SafetyTimeout);
+        string alternate = Path.GetDirectoryName(encoder) + Path.DirectorySeparatorChar + "." + Path.DirectorySeparatorChar + Path.GetFileName(encoder);
+        await probe.ProbeDurationAsync(alternate, "b.ts", args).WaitAsync(SafetyTimeout);
+        Assert.Equal(4, starts);
+    }
+
+    [Fact]
+    public async Task MissingDurationAndNonVideoStdoutAreDrainedAndCached()
+    {
+        int starts = 0;
+        await using var probe = new InputProbe(configureStartInfo: _ => ++starts);
+        for (int i = 0; i < 2; ++i)
+            Assert.Null(await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "a.ts", new[] { "--version" }).WaitAsync(SafetyTimeout));
+        Assert.Equal(1, starts);
+    }
+
+    [Fact]
+    public async Task DurationDrainsLargeStdoutAndStderrWithoutDeadlock()
+    {
+        await using var probe = new InputProbe(configureStartInfo: info =>
+            info.ArgumentList[info.ArgumentList.IndexOf("--frames") + 1] = "1000");
+        Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts",
+            new[] { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit", "--fake-stderr-bytes", "131072" }).WaitAsync(SafetyTimeout));
+    }
+
+    [Fact]
+    public async Task WaitingForExitDurationDoesNotBlockFormatProbe()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "duration-parallel-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string gate = Path.Combine(directory, "release"), ready = Path.Combine(directory, "ready");
+        await using var probe = new InputProbe(configureStartInfo: info => info.Environment["FAKE_ENCODER_DURATION_EXIT_READY_FILE"] = ready);
+        try
+        {
+            string[] args = ["--fake-duration", "00:00:10.00", "--fake-duration-at-exit", "--fake-duration-exit-gate", gate];
+            var duration = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args);
+            await WaitForFileAsync(ready);
+            var input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitAsync(SafetyTimeout);
+            Assert.Equal(64, input.Width);
+            Assert.Null(input.Duration);
+            Assert.False(duration.IsCompleted);
+            await File.WriteAllTextAsync(gate, "");
+            Assert.Equal(TimeSpan.FromSeconds(10), await duration.WaitAsync(SafetyTimeout));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task DurationTimeoutUsesFakeClockReapsProcessAndDoesNotCacheFailure()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "duration-timeout-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string pidFile = Path.Combine(directory, "pid"), ready = Path.Combine(directory, "ready");
+        var clock = new FakeTimeProvider();
+        int starts = 0;
+        await using var probe = new InputProbe(clock, configureStartInfo: info =>
+        {
+            ++starts;
+            info.Environment["FAKE_ENCODER_PID_FILE"] = pidFile;
+            info.Environment["FAKE_ENCODER_LOG_READY_FILE"] = ready;
+        });
+        try
+        {
+            using var cancellation = new CancellationTokenSource();
+            string[] args = ["--fake-hang-after", "0"];
+            var run = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args);
+            int pid = await ReadPidAsync(pidFile);
+            await WaitForFileAsync(ready);
+            clock.Advance(TimeSpan.FromSeconds(30));
+            var error = await Assert.ThrowsAsync<InputProbeTimeoutException>(() => run.WaitAsync(SafetyTimeout));
+            Assert.Contains($"FAKEPID {pid}", error.StandardError);
+            AssertStopped(pid);
+            var retry = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args, cancellation.Token);
+            Assert.Equal(2, starts);
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => retry.WaitAsync(SafetyTimeout));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task CancelledDurationWaiterDoesNotKillActiveQueryAndDisposeReapsIt()
+    {
+        string pidFile = Path.Combine(Path.GetTempPath(), "duration-dispose-" + Guid.NewGuid().ToString("N"));
+        var probe = new InputProbe(configureStartInfo: info => info.Environment["FAKE_ENCODER_PID_FILE"] = pidFile);
+        using var waitingCancellation = new CancellationTokenSource();
+        try
+        {
+            var active = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", new[] { "--fake-hang-after", "0" });
+            int pid = await ReadPidAsync(pidFile);
+            var waiting = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "other.ts", cancellationToken: waitingCancellation.Token);
+            waitingCancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting.WaitAsync(SafetyTimeout));
+            Assert.False(active.IsCompleted);
+            await probe.DisposeAsync().AsTask().WaitAsync(SafetyTimeout);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => active.WaitAsync(SafetyTimeout));
+            AssertStopped(pid);
+            await Assert.ThrowsAsync<ObjectDisposedException>(() => probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts"));
+        }
+        finally { await probe.DisposeAsync(); File.Delete(pidFile); }
+    }
+
     private static async Task WaitForFileAsync(string path)
     {
         async Task WaitAsync()

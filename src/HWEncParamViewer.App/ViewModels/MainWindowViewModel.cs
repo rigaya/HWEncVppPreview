@@ -218,6 +218,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     private void InputChanged()
     {
+        CancelDuration();
         _inputInfo = null;
         HasDuration = false;
         DurationSeconds = 0;
@@ -292,10 +293,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                 await PostAsync(() =>
                 {
                     if (!IsCurrent(generation)) return;
-                    _inputInfo = info;
-                    HasDuration = info.Duration.HasValue;
-                    DurationSeconds = info.Duration?.TotalSeconds ?? 0;
-                    DurationText = info.Duration is { } duration ? FormatTime(duration.TotalSeconds, milliseconds: false) : "";
+                    ApplyInputInfo(info);
                     // ドラッグ中に入力情報の取得が終わっても、離すまでは現在位置を確定しない。
                     if (_seekDragging) { IsBusy = false; StatusText = "位置を選択中"; return; }
                     double target = HasDuration ? Math.Min(seconds, DurationSeconds) : seconds;
@@ -310,6 +308,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                     Volatile.Write(ref _context, context);
                     StatusText = "処理中…";
                     _controller.Submit(request, bypassCache);
+                    QueueDuration(encoder, input, inputArgs);
                 }).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
@@ -631,6 +630,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _disposed = true;
         _initialized = false;
         Interlocked.Increment(ref _generation);
+        CancelDuration();
         _lifetime.Cancel();
         CancelBefore(updatePresentation: false);
         lock (_taskLock) _preparationCancellation?.Cancel();
@@ -642,6 +642,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         await WaitForIdleAsync().ConfigureAwait(false);
         await PostAsync(() =>
         {
+            HasDuration = false;
+            DurationSeconds = 0;
+            DurationText = "";
             PreviewImage = null;
             BeforeImage = null;
             IsBeforeBusy = false;
