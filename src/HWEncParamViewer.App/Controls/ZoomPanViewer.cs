@@ -44,6 +44,10 @@ public sealed class ZoomPanViewer : Control
     private DragKind _drag;
     private Point _lastPointer;
     private string _zoomText = "";
+    private double _wheelAccumulated;
+
+    /// <summary>ホイールでのフレーム移動の要求。引数は移動するフレーム数 (正なら先へ、負なら前へ)。</summary>
+    public event EventHandler<int>? FrameStepRequested;
 
     static ZoomPanViewer()
     {
@@ -167,9 +171,20 @@ public sealed class ZoomPanViewer : Control
     {
         base.OnPointerWheelChanged(e);
         if (e.Delta.Y == 0) return;
-        double factor = e.Delta.Y > 0 ? ZoomMath.WheelStep : 1.0 / ZoomMath.WheelStep;
-        Zoom = ZoomMath.ZoomAt(Zoom, Bounds.Size, ContentSize, e.GetPosition(this), factor);
         e.Handled = true;
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            double factor = e.Delta.Y > 0 ? ZoomMath.WheelStep : 1.0 / ZoomMath.WheelStep;
+            Zoom = ZoomMath.ZoomAt(Zoom, Bounds.Size, ContentSize, e.GetPosition(this), factor);
+            return;
+        }
+        // ホイールはフレーム移動 (設計書 19.3)。下 (手前) へ回すと次のフレーム。
+        // タッチパッドは1回の量が小さいので積算し、1目盛り分たまるごとに1フレーム動かす
+        _wheelAccumulated += e.Delta.Y;
+        int steps = (int)Math.Truncate(_wheelAccumulated);
+        if (steps == 0) return;
+        _wheelAccumulated -= steps;
+        FrameStepRequested?.Invoke(this, -steps);
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)

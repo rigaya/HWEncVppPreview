@@ -1,6 +1,7 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
 using HWEncParamViewer.App.ViewModels;
 
 namespace HWEncParamViewer.App.Views;
@@ -48,6 +49,49 @@ public partial class MainWindow : Window
             RoutingStrategies.Tunnel, handledEventsToo: true);
         SeekBar.AddHandler(PointerCaptureLostEvent, (_, _) => ViewModel?.EndSeekDrag(SeekBar.Value),
             RoutingStrategies.Direct, handledEventsToo: true);
+
+        // 表示領域のホイールはフレーム移動 (Ctrl+ホイールは拡大縮小、設計書 19.3)
+        foreach (var viewer in new[] { MainViewer, BeforeViewer, AfterViewer })
+        {
+            viewer.FrameStepRequested += (_, frames) => StepFrames(frames);
+        }
+
+        // ファイルのドロップ (設計書 19.4)。TextBox は自前でドラッグを処理済みにすることがあるので handledEventsToo で受ける
+        foreach (var target in new Control[] { EncoderBox, InputBox, PreviewArea })
+        {
+            target.AddHandler(DragDrop.DragOverEvent, File_DragOver, handledEventsToo: true);
+            target.AddHandler(DragDrop.DropEvent, File_Drop, handledEventsToo: true);
+        }
+    }
+
+    private void StepFrames(int frames)
+    {
+        if (ViewModel is not { } vm) return;
+        int direction = Math.Sign(frames);
+        for (int i = 0; i < Math.Abs(frames); i++) vm.StepFrameCommand.Execute(direction);
+    }
+
+    /// <summary>ドロップされたファイルのうち、先頭のローカルファイルのパス。フォルダやローカル以外は null。</summary>
+    private static string? DroppedFile(DragEventArgs e)
+    {
+        var item = e.DataTransfer.TryGetFiles()?.FirstOrDefault();
+        return item is IStorageFile ? item.TryGetLocalPath() : null;
+    }
+
+    private static void File_DragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = DroppedFile(e) != null ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void File_Drop(object? sender, DragEventArgs e)
+    {
+        e.Handled = true;
+        if (ViewModel is not { } vm || DroppedFile(e) is not { } path) return;
+        bool isExe = string.Equals(Path.GetExtension(path), ".exe", StringComparison.OrdinalIgnoreCase);
+        // 表示領域では拡張子で振り分ける (exe を落としても入力扱いにしない)
+        if (ReferenceEquals(sender, EncoderBox) || (ReferenceEquals(sender, PreviewArea) && isExe)) vm.EncoderPath = path;
+        else vm.InputPath = path;
     }
 
     private MainWindowViewModel? ViewModel => DataContext as MainWindowViewModel;

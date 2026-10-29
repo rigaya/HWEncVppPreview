@@ -21,13 +21,15 @@
             BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1" Padding="10,8">
       <Grid ColumnDefinitions="Auto,2*,Auto,Auto,Auto,Auto,3*,Auto">
         <TextBlock Grid.Column="0" Classes="header" Text="エンコーダ" Margin="0,0,8,0" />
-        <TextBox Grid.Column="1" Classes="mono" Text="{Binding EncoderPath}"
+        <!-- エンコーダ欄・入力欄・表示領域はファイルのドロップを受け付ける (設計書 19.4) -->
+        <TextBox Grid.Column="1" x:Name="EncoderBox" Classes="mono" Text="{Binding EncoderPath}" DragDrop.AllowDrop="True"
                  PlaceholderText="QSVEncC64.exe / NVEncC64.exe / VCEEncC64.exe" />
         <Button Grid.Column="2" Classes="icon" Content="…" Margin="4,0,0,0"
                 Command="{Binding BrowseEncoderCommand}" ToolTip.Tip="エンコーダを選択" />
         <TextBlock Grid.Column="3" Classes="subtle" Text="{Binding EncoderDescription}" Margin="10,0,20,0" />
         <TextBlock Grid.Column="5" Classes="header" Text="入力" Margin="0,0,8,0" />
-        <TextBox Grid.Column="6" Classes="mono" Text="{Binding InputPath}" PlaceholderText="入力ファイル" />
+        <TextBox Grid.Column="6" x:Name="InputBox" Classes="mono" Text="{Binding InputPath}" DragDrop.AllowDrop="True"
+                 PlaceholderText="入力ファイル" />
         <Button Grid.Column="7" Classes="icon" Content="…" Margin="4,0,0,0"
                 Command="{Binding BrowseInputCommand}" ToolTip.Tip="入力ファイルを選択" />
       </Grid>
@@ -38,7 +40,8 @@
 
       <!-- 左: プレビューとシーク -->
       <Grid Grid.Column="0" RowDefinitions="*,Auto">
-        <Border Grid.Row="0" Background="{StaticResource PreviewBackgroundBrush}" ClipToBounds="True">
+        <Border Grid.Row="0" x:Name="PreviewArea" Background="{StaticResource PreviewBackgroundBrush}" ClipToBounds="True"
+                DragDrop.AllowDrop="True">
           <Panel>
             <!--
               単一・切替・分割は MainViewer 1つで表示する。並べて表示は左右2つのビューアで、拡大・パンを共有する。
@@ -64,9 +67,9 @@
                                   Zoom="{Binding #MainViewer.Zoom, Mode=TwoWay}" />
             </Grid>
 
-            <TextBlock Text="エンコーダと入力ファイルを指定してください"
+            <TextBlock Text="エンコーダと入力ファイルを指定してください (ここへのドロップでも指定できます)"
                        Foreground="{StaticResource PreviewPlaceholderBrush}"
-                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
                        IsVisible="{Binding PreviewImage, Converter={x:Static ObjectConverters.IsNull}}" />
 
             <!-- エラー: 上端に帯で表示 (画像の中央は隠さない) -->
@@ -78,7 +81,7 @@
             </Border>
 
             <!-- 状態: 右下に小さく重ねる (直前の画像は表示したまま) -->
-            <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom" Orientation="Horizontal">
+            <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom" Orientation="Horizontal" IsHitTestVisible="False">
               <Border Classes="overlay" IsVisible="{Binding IsShowingBefore}">
                 <TextBlock Text="フィルタ前" Foreground="{StaticResource OverlayTextBrush}" FontSize="12" />
               </Border>
@@ -127,7 +130,7 @@
             <!-- 拡大率。クリックでウィンドウに合わせる (0)、右の 1:1 で等倍 (Ctrl+0) -->
             <StackPanel Grid.Column="8" Orientation="Horizontal" Margin="12,0,0,0" Spacing="2">
               <Button Classes="small flat" x:Name="ZoomFitButton" MinWidth="56" FontFamily="{StaticResource MonoFont}"
-                      ToolTip.Tip="クリックでウィンドウに合わせる (0)" />
+                      ToolTip.Tip="クリックでウィンドウに合わせる (0)。画像の上で Ctrl+ホイールで拡大縮小、ホイールでフレーム移動" />
               <Button Classes="small flat" x:Name="ZoomActualButton" Content="1:1" ToolTip.Tip="等倍 (Ctrl+0)" />
             </StackPanel>
           </Grid>
