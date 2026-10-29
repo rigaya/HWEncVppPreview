@@ -297,7 +297,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                     SetTimeOnly(target);
                     var request = new PreviewRequest { EncoderPath = encoder, InputFile = input, InputArgs = inputArgs,
                         VppArgs = vpp, Fps = info.Fps, TargetSeconds = target, CorrelationId = generation };
-                    InputInfoText = $"{info.Width}x{info.Height} (SAR {info.SarNum}:{info.SarDen}) {info.Fps:0.###}fps";
+                    // y4m の A0:0 は「不明」で、正方画素として扱う。1:1 と同じく SAR の表記を省く
+                    bool squarePixel = info.SarNum <= 0 || info.SarDen <= 0 || info.SarNum == info.SarDen;
+                    string sar = squarePixel ? "" : $" (SAR {info.SarNum}:{info.SarDen})";
+                    InputInfoText = $"{info.Width}x{info.Height}{sar}  {info.Fps:0.###}fps";
                     var context = new RequestContext(generation, request, _clock.GetTimestamp());
                     Volatile.Write(ref _context, context);
                     StatusText = "処理中…";

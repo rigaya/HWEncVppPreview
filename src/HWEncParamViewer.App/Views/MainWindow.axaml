@@ -125,6 +125,10 @@
               </ItemsControl>
               <Button Classes="small flat" Content="＋ 行を追加" HorizontalAlignment="Left"
                       Command="{Binding AddFilterLineCommand}" />
+              <!-- フィルタが1行もないときの案内 -->
+              <TextBlock Classes="subtle" Margin="4,8,0,0" TextWrapping="Wrap"
+                         Text="1行に1つ、--vpp-xxx 形式でフィルタを書きます。チェックを外した行は無効になります。数値の上でホイール / Ctrl+↑↓ を使うと値を増減できます。"
+                         IsVisible="{Binding !FilterLines.Count}" />
             </StackPanel>
           </ScrollViewer>
 
@@ -146,7 +150,13 @@
           <Border Grid.Row="1" Margin="10,0,10,10" BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1"
                   CornerRadius="3">
             <ScrollViewer HorizontalScrollBarVisibility="Auto">
-              <SelectableTextBlock Classes="help" Text="{Binding HelpText}" />
+              <Panel>
+                <SelectableTextBlock Classes="help" Text="{Binding HelpText}" />
+                <!-- ヘルプが空のときの案内 -->
+                <TextBlock Classes="subtle" Margin="12,10" TextWrapping="Wrap" VerticalAlignment="Top"
+                           Text="フィルタの行をクリックすると、そのオプションのヘルプを表示します。"
+                           IsVisible="{Binding HelpText, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+              </Panel>
             </ScrollViewer>
           </Border>
         </Grid>
