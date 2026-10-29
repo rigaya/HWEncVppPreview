@@ -19,6 +19,26 @@ public partial class MainWindow : Window
         AddHandler(KeyDownEvent, Window_KeyDown, RoutingStrategies.Bubble);
 
         TimeBox.KeyDown += TimeBox_KeyDown;
+        AddHandler(KeyUpEvent, Window_KeyUp, RoutingStrategies.Bubble);
+
+        // 拡大率の表示をクリックでウィンドウに合わせ、1:1 で等倍 (設計書 18.3)
+        ZoomFitButton.Click += (_, _) => MainViewer.ZoomToFit();
+        ZoomActualButton.Click += (_, _) => ActiveViewer.ZoomToActualSize();
+        // 拡大率の表示は「いま見えているビューア」から取る (並べて表示では MainViewer が非表示で、大きさが 0 になるため)
+        foreach (var viewer in new[] { MainViewer, AfterViewer })
+        {
+            viewer.PropertyChanged += (_, e) =>
+            {
+                if (e.Property == Controls.ZoomPanViewer.ZoomTextProperty) UpdateZoomText();
+            };
+        }
+        DataContextChanged += (_, _) =>
+        {
+            if (ViewModel != null) ViewModel.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainWindowViewModel.CompareMode)) UpdateZoomText();
+            };
+        };
 
         // シークバーはドラッグ中に要求を出さない (設計書 17.4)。
         // Slider はポインタイベントを自分で処理済みにするので、handledEventsToo で受ける。
@@ -31,6 +51,12 @@ public partial class MainWindow : Window
     }
 
     private MainWindowViewModel? ViewModel => DataContext as MainWindowViewModel;
+
+    /// <summary>等倍の基準にするビューア (並べて表示では右側。拡大状態は全ビューアで共有している)。</summary>
+    private Controls.ZoomPanViewer ActiveViewer =>
+        ViewModel?.CompareMode == PreviewCompareMode.SideBySide ? AfterViewer : MainViewer;
+
+    private void UpdateZoomText() => ZoomFitButton.Content = ActiveViewer.ZoomText;
 
     private void FilterLine_GotFocus(object? sender, FocusChangedEventArgs e)
     {
@@ -71,6 +97,15 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private void Window_KeyUp(object? sender, KeyEventArgs e)
+    {
+        // TextBox の中で離した場合も、表示はフィルタ後に戻す (押したまま入力欄へ移ったときの取り残し防止)
+        if (e.Key == Key.Space && ViewModel is { IsShowingBefore: true } vm)
+        {
+            vm.IsShowingBefore = false;
+        }
+    }
+
     private void Window_KeyDown(object? sender, KeyEventArgs e)
     {
         var vm = ViewModel;
@@ -89,6 +124,17 @@ public partial class MainWindow : Window
             case Key.PageDown: vm.StepSecondsCommand.Execute(10.0); break;
             case Key.Home: vm.GoToStartCommand.Execute(null); break;
             case Key.End: vm.GoToEndCommand.Execute(null); break;
+            // 表示モード (設計書 18.2)
+            case Key.D1 or Key.NumPad1: vm.SetCompareModeCommand.Execute(PreviewCompareMode.Single); break;
+            case Key.D2 or Key.NumPad2: vm.SetCompareModeCommand.Execute(PreviewCompareMode.Split); break;
+            case Key.D3 or Key.NumPad3: vm.SetCompareModeCommand.Execute(PreviewCompareMode.SideBySide); break;
+            // 拡大 (設計書 18.3)
+            case Key.D0 or Key.NumPad0 when e.KeyModifiers.HasFlag(KeyModifiers.Control): ActiveViewer.ZoomToActualSize(); break;
+            case Key.D0 or Key.NumPad0: MainViewer.ZoomToFit(); break;
+            // Space を押している間だけフィルタ前を表示する (切替モード)。キーリピートでも true のまま
+            case Key.Space when vm.CompareMode is PreviewCompareMode.Single or PreviewCompareMode.Toggle:
+                vm.IsShowingBefore = true;
+                break;
             default: return;
         }
         e.Handled = true;

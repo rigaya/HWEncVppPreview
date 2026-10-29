@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using Avalonia;
+using Avalonia.Controls;
 using HWEncParamViewer.App.Services;
 using Avalonia.Headless;
 using Avalonia.Media.Imaging;
@@ -19,7 +20,7 @@ AppBuilder.Configure<HWEncParamViewer.App.App>()
     .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })
     .SetupWithoutStarting();
 
-void Capture(string name, ThemeVariant theme, Action<MainWindowViewModel> setup)
+void Capture(string name, ThemeVariant theme, Action<MainWindowViewModel> setup, Action<MainWindow>? afterShow = null)
 {
     Application.Current!.RequestedThemeVariant = theme;
     var vm = MainWindowViewModel.CreateDesignSample();
@@ -30,6 +31,11 @@ void Capture(string name, ThemeVariant theme, Action<MainWindowViewModel> setup)
     var window = new MainWindow { DataContext = vm, Width = 1440, Height = 900 };
     window.Show();
     Dispatcher.UIThread.RunJobs();
+    if (afterShow != null)
+    {
+        afterShow(window);
+        Dispatcher.UIThread.RunJobs();
+    }
     using var frame = window.CaptureRenderedFrame();
 #pragma warning disable CS0618 // 開発用ツールなので、PNG 保存は簡単な旧 API で十分
     frame!.Save(Path.Combine(outDir, name + ".png"));
@@ -54,6 +60,29 @@ Capture("dark_empty", ThemeVariant.Dark, vm =>
     vm.HasDuration = false;
     vm.FilterLines.Clear();
     vm.HelpText = "";
+});
+// V5: 比較表示と拡大 (フィルタ前はグレースケールにした画像で代用する)
+Capture("dark_split", ThemeVariant.Dark, vm =>
+{
+    vm.BeforeImage = CreateTestImage(1440, 1080, grayscale: true);
+    vm.CompareMode = PreviewCompareMode.Split;
+    vm.SplitPosition = 0.4;
+});
+Capture("dark_side_by_side", ThemeVariant.Dark, vm =>
+{
+    vm.BeforeImage = CreateTestImage(1440, 1080, grayscale: true);
+    vm.CompareMode = PreviewCompareMode.SideBySide;
+});
+Capture("dark_zoom_toggle_before", ThemeVariant.Dark, vm =>
+{
+    vm.BeforeImage = CreateTestImage(1440, 1080, grayscale: true);
+    vm.IsShowingBefore = true;
+    vm.IsBeforeBusy = true;
+}, window =>
+{
+    // カラーバーとグラデーションの境界付近を 800% で表示する (nearest 補間の確認)
+    var viewer = window.FindControl<HWEncParamViewer.App.Controls.ZoomPanViewer>("MainViewer")!;
+    viewer.Zoom = new HWEncParamViewer.App.Controls.ZoomState(false, 8.0, new Point(275, 720));
 });
 
 // 実行入口と同じViewModel経路で取得した画像を、デザイン用の生成画像とは別名で保存する。
@@ -116,7 +145,7 @@ static void Pump(Task operation)
 }
 
 // テスト用の画像: グラデーションとカラーバー (色の評価に使う画面なので、無彩色の背景との見え方を確認する)
-static WriteableBitmap CreateTestImage(int w, int h)
+static WriteableBitmap CreateTestImage(int w, int h, bool grayscale = false)
 {
     var bmp = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
     using var fb = bmp.Lock();
@@ -128,7 +157,17 @@ static WriteableBitmap CreateTestImage(int w, int h)
             var row = (uint*)((byte*)fb.Address + y * fb.RowBytes);
             for (int x = 0; x < w; x++)
             {
-                if (y < h * 2 / 3) row[x] = bars[x * bars.Length / w];
+                if (y < h * 2 / 3)
+                {
+                    uint c = bars[x * bars.Length / w];
+                    if (grayscale)
+                    {
+                        // フィルタ前の代用: 同じ図柄をグレースケールにする
+                        uint g = (((c >> 16) & 0xFF) * 77 + ((c >> 8) & 0xFF) * 150 + (c & 0xFF) * 29) >> 8;
+                        c = 0xFF000000 | (g << 16) | (g << 8) | g;
+                    }
+                    row[x] = c;
+                }
                 else
                 {
                     uint g = (uint)(x * 255 / (w - 1));

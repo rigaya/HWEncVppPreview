@@ -1,6 +1,7 @@
 ﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:HWEncParamViewer.App.ViewModels"
+        xmlns:ctrl="using:HWEncParamViewer.App.Controls"
         x:Class="HWEncParamViewer.App.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="HWEnc パラメータビューワー"
@@ -39,11 +40,29 @@
       <Grid Grid.Column="0" RowDefinitions="*,Auto">
         <Border Grid.Row="0" Background="{StaticResource PreviewBackgroundBrush}" ClipToBounds="True">
           <Panel>
-            <!-- SAR を考慮した表示サイズで置き、Viewbox でウィンドウに合わせる -->
-            <Viewbox Stretch="Uniform" StretchDirection="Both" Margin="8">
-              <Image Source="{Binding PreviewImage}" Stretch="Fill"
-                     Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}" />
-            </Viewbox>
+            <!--
+              単一・切替・分割は MainViewer 1つで表示する。並べて表示は左右2つのビューアで、拡大・パンを共有する。
+              2枚とも「フィルタ後の表示サイズ (SAR 考慮後)」の矩形に描くので、解像度が変わるフィルタでも位置がそろう。
+            -->
+            <ctrl:ZoomPanViewer x:Name="MainViewer"
+                                IsVisible="{Binding CompareMode, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:PreviewCompareMode.SideBySide}}"
+                                AfterSource="{Binding PreviewImage}" BeforeSource="{Binding BeforeImage}"
+                                ContentWidth="{Binding DisplayWidth}" ContentHeight="{Binding DisplayHeight}"
+                                ShowBefore="{Binding IsShowingBefore}"
+                                IsSplit="{Binding CompareMode, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PreviewCompareMode.Split}}"
+                                SplitPosition="{Binding SplitPosition}" />
+            <Grid ColumnDefinitions="*,2,*"
+                  IsVisible="{Binding CompareMode, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PreviewCompareMode.SideBySide}}">
+              <ctrl:ZoomPanViewer Grid.Column="0" x:Name="BeforeViewer" CornerLabel="前" ShowBefore="True"
+                                  BeforeSource="{Binding BeforeImage}"
+                                  ContentWidth="{Binding DisplayWidth}" ContentHeight="{Binding DisplayHeight}"
+                                  Zoom="{Binding #MainViewer.Zoom, Mode=TwoWay}" />
+              <Border Grid.Column="1" Background="{DynamicResource DividerBrush}" />
+              <ctrl:ZoomPanViewer Grid.Column="2" x:Name="AfterViewer" CornerLabel="後"
+                                  AfterSource="{Binding PreviewImage}"
+                                  ContentWidth="{Binding DisplayWidth}" ContentHeight="{Binding DisplayHeight}"
+                                  Zoom="{Binding #MainViewer.Zoom, Mode=TwoWay}" />
+            </Grid>
 
             <TextBlock Text="エンコーダと入力ファイルを指定してください"
                        Foreground="{StaticResource PreviewPlaceholderBrush}"
@@ -58,18 +77,25 @@
                                    MaxHeight="160" />
             </Border>
 
-            <!-- 処理中: 右下に小さく重ねる (直前の画像は表示したまま) -->
-            <Border Classes="overlay" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                    IsVisible="{Binding IsBusy}">
-              <TextBlock Text="処理中…" Foreground="{StaticResource OverlayTextBrush}" FontSize="12" />
-            </Border>
+            <!-- 状態: 右下に小さく重ねる (直前の画像は表示したまま) -->
+            <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom" Orientation="Horizontal">
+              <Border Classes="overlay" IsVisible="{Binding IsShowingBefore}">
+                <TextBlock Text="フィルタ前" Foreground="{StaticResource OverlayTextBrush}" FontSize="12" />
+              </Border>
+              <Border Classes="overlay" IsVisible="{Binding IsBeforeBusy}">
+                <TextBlock Text="フィルタ前を取得中…" Foreground="{StaticResource OverlayTextBrush}" FontSize="12" />
+              </Border>
+              <Border Classes="overlay" IsVisible="{Binding IsBusy}">
+                <TextBlock Text="処理中…" Foreground="{StaticResource OverlayTextBrush}" FontSize="12" />
+              </Border>
+            </StackPanel>
           </Panel>
         </Border>
 
         <!-- シーク操作 -->
         <Border Grid.Row="1" Background="{DynamicResource PaneBackgroundBrush}"
                 BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,1,0,0" Padding="10,6">
-          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto">
+          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto">
             <Button Grid.Column="0" Classes="icon flat" Content="⏮" Command="{Binding GoToStartCommand}" ToolTip.Tip="先頭 (Home)" />
             <Button Grid.Column="1" Classes="icon flat" Content="◀" Command="{Binding StepFrameCommand}"
                     CommandParameter="-1" ToolTip.Tip="前のフレーム (←)" />
@@ -84,6 +110,26 @@
                     IsVisible="{Binding HasDuration}" />
             <TextBlock Grid.Column="6" Classes="subtle" FontFamily="{StaticResource MonoFont}"
                        Text="{Binding DurationText}" IsVisible="{Binding HasDuration}" />
+
+            <!-- 表示モード (設計書 18.2)。切替モードは単一表示で Space を押している間 -->
+            <StackPanel Grid.Column="7" Orientation="Horizontal" Margin="16,0,0,0" Spacing="0">
+              <Button Classes="seg first" Content="単一" ToolTip.Tip="フィルタ後だけ (1)。Space を押している間はフィルタ前"
+                      Classes.active="{Binding CompareMode, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PreviewCompareMode.Single}}"
+                      Command="{Binding SetCompareModeCommand}" CommandParameter="{x:Static vm:PreviewCompareMode.Single}" />
+              <Button Classes="seg" Content="分割" ToolTip.Tip="左がフィルタ前、右がフィルタ後 (2)。境界はドラッグで移動"
+                      Classes.active="{Binding CompareMode, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PreviewCompareMode.Split}}"
+                      Command="{Binding SetCompareModeCommand}" CommandParameter="{x:Static vm:PreviewCompareMode.Split}" />
+              <Button Classes="seg last" Content="並べる" ToolTip.Tip="フィルタ前と後を並べて表示 (3)"
+                      Classes.active="{Binding CompareMode, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PreviewCompareMode.SideBySide}}"
+                      Command="{Binding SetCompareModeCommand}" CommandParameter="{x:Static vm:PreviewCompareMode.SideBySide}" />
+            </StackPanel>
+
+            <!-- 拡大率。クリックでウィンドウに合わせる (0)、右の 1:1 で等倍 (Ctrl+0) -->
+            <StackPanel Grid.Column="8" Orientation="Horizontal" Margin="12,0,0,0" Spacing="2">
+              <Button Classes="small flat" x:Name="ZoomFitButton" MinWidth="56" FontFamily="{StaticResource MonoFont}"
+                      ToolTip.Tip="クリックでウィンドウに合わせる (0)" />
+              <Button Classes="small flat" x:Name="ZoomActualButton" Content="1:1" ToolTip.Tip="等倍 (Ctrl+0)" />
+            </StackPanel>
           </Grid>
         </Border>
       </Grid>
@@ -182,6 +228,8 @@
           <TextBlock Classes="subtle" Text="{Binding ElapsedText}" />
           <TextBlock Classes="subtle" Text="│" />
           <TextBlock Classes="subtle" Text="{Binding InputInfoText}" />
+          <ToggleButton Classes="small mini" Content="SAR" IsChecked="{Binding UseSar}"
+                        ToolTip.Tip="オン: SAR を考慮した表示サイズ / オフ: 正方画素 (画素単位の確認用)" />
           <TextBlock Classes="subtle" Text="│" />
           <TextBlock Classes="subtle" Text="{Binding StatusText}" />
         </StackPanel>
