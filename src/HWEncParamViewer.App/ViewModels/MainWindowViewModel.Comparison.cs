@@ -69,6 +69,7 @@ public sealed partial class MainWindowViewModel
         {
             _beforeCancellation?.Cancel();
             _beforeCancellation = null;
+            _pendingBeforeImage = null;
         }
         Interlocked.Increment(ref _beforeImageGeneration);
         if (!updatePresentation) return;
@@ -172,35 +173,9 @@ public sealed partial class MainWindowViewModel
 
     private void DisplayBeforeFrame(Y4mFrame frame, long generation, bool finishBusy = false)
     {
-        _beforeDisplayedFrame = frame;
         long imageGeneration = Interlocked.Increment(ref _beforeImageGeneration);
-        Track(ConvertBeforeAsync());
-        async Task ConvertBeforeAsync()
-        {
-            try
-            {
-                byte[] data = await Task.Run(() => YuvToBgra.Convert(frame), _lifetime.Token).ConfigureAwait(false);
-                await PostAsync(() =>
-                {
-                    if (!IsCurrent(generation) || imageGeneration != _beforeImageGeneration) return;
-                    var bitmap = CreateBitmap(frame, data);
-                    RecalculateDisplaySizes();
-                    BeforeImage = bitmap;
-                    if (finishBusy) IsBeforeBusy = false;
-                }).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
-            catch (Exception)
-            {
-                await PostAsync(() =>
-                {
-                    if (!IsCurrent(generation) || imageGeneration != _beforeImageGeneration) return;
-                    IsBeforeBusy = false;
-                    BeforeImage = null;
-                    _beforeDisplayedFrame = null;
-                }).ConfigureAwait(false);
-            }
-        }
+        EnqueueImage(new ImageWork(frame, generation, Volatile.Read(ref _editEpoch), Before: true,
+            BeforeVersion: imageGeneration, FinishBeforeBusy: finishBusy));
     }
 
     private void RecalculateDisplaySizes()

@@ -26,6 +26,8 @@ public sealed class PreviewController : IAsyncDisposable
     private CancellationTokenSource? _scheduled;
     private CancellationTokenSource? _active;
     private long _version;
+    private long _lastEditVersion;
+    private long _lastNotifiedVersion;
     private bool _disposed;
     private Task? _disposeTask;
 
@@ -57,7 +59,8 @@ public sealed class PreviewController : IAsyncDisposable
     /// <summary>引数リストを複製し、最新要求として登録する。イベント購読はSubmitより前に行う。</summary>
     /// <param name="bypassCache">trueなら過去の画像を使わず実行する。直前の要求が後からキャッシュへ保存されても再実行を保証する。</param>
     /// <param name="bypassDebounce">内部の追加要求を即座に実行する場合だけtrue。通常の編集操作は既定の待機時間を使う。</param>
-    public void Submit(PreviewRequest request, bool bypassCache = false, bool bypassDebounce = false)
+    /// <param name="navigation">移動要求なら待機時間を省き、実行中の要求を完了させてから最新の待機要求を実行する。</param>
+    public void Submit(PreviewRequest request, bool bypassCache = false, bool bypassDebounce = false, bool navigation = false)
     {
         ArgumentNullException.ThrowIfNull(request);
         request = request with { InputArgs = request.InputArgs.ToArray(), VppArgs = request.VppArgs.ToArray() };
@@ -69,10 +72,11 @@ public sealed class PreviewController : IAsyncDisposable
             var scheduled = new CancellationTokenSource();
             _scheduled = scheduled;
             long version = ++_version;
+            if (!navigation) _lastEditVersion = version;
             // 同期完了や通知からのDispose再入より先に、回収対象を登録する。
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _tasks.Add(completion.Task);
-            _ = TrackAsync(ScheduleAsync(request, version, scheduled, bypassCache, bypassDebounce), completion);
+            _ = TrackAsync(ScheduleAsync(request, version, scheduled, bypassCache, bypassDebounce, navigation), completion);
         }
     }
 
@@ -95,23 +99,31 @@ public sealed class PreviewController : IAsyncDisposable
 
     private bool IsCurrent(long version) => !_disposed && version == _version;
 
-    private void Notify(long version, Action notification)
+    private void Notify(long version, bool navigation, Action notification, bool currentOnly = false)
     {
-        // 世代の確認と通知を同じ排他区間に置き、Submit後に古い結果を通知しない。
-        lock (_sync) { if (IsCurrent(version)) notification(); }
+        // 移動中は先行結果も表示する。ただし編集後の結果と、すでに通知した世代より古い結果は戻さない。
+        // 判定と通知を同じ排他区間に置き、通知からSubmitへ再入した場合も順序を守る。
+        lock (_sync)
+        {
+            if (_disposed || version < _lastNotifiedVersion) return;
+            if (!IsCurrent(version) && (currentOnly || !navigation || version < _lastEditVersion)) return;
+            _lastNotifiedVersion = version;
+            notification();
+        }
     }
 
-    private async Task ScheduleAsync(PreviewRequest request, long version, CancellationTokenSource scheduled, bool bypassCache, bool bypassDebounce)
+    private async Task ScheduleAsync(PreviewRequest request, long version, CancellationTokenSource scheduled,
+        bool bypassCache, bool bypassDebounce, bool navigation)
     {
         bool entered = false;
         CancellationTokenSource? active = null;
         try
         {
-            await Task.Delay(bypassDebounce ? TimeSpan.Zero : _debounce, _clock, scheduled.Token).ConfigureAwait(false);
+            await Task.Delay(navigation || bypassDebounce ? TimeSpan.Zero : _debounce, _clock, scheduled.Token).ConfigureAwait(false);
             lock (_sync)
             {
                 if (!IsCurrent(version)) return;
-                _active?.Cancel();
+                if (!navigation) _active?.Cancel();
             }
             await _execution.WaitAsync(scheduled.Token).ConfigureAwait(false);
             entered = true;
@@ -121,12 +133,12 @@ public sealed class PreviewController : IAsyncDisposable
                 active = new CancellationTokenSource();
                 _active = active;
             }
-            var sink = new SelectionSink(request, frame => Notify(version, () => FrameReady?.Invoke(frame)));
+            var sink = new SelectionSink(request, frame => Notify(version, navigation, () => FrameReady?.Invoke(frame)));
             if (!bypassCache && _cache.TryGet(request, out var frames))
             {
                 foreach (var frame in frames) sink.OnFrame(frame);
                 sink.Finish();
-                Notify(version, () => Completed?.Invoke(new(request, new(0, ""), true, sink.TargetNotReached)));
+                Notify(version, navigation, () => Completed?.Invoke(new(request, new(0, ""), true, sink.TargetNotReached)));
                 return;
             }
             IPreviewBackend backend = _unsupported.Contains(request.EncoderPath) ? _fallback : _preferred;
@@ -140,19 +152,19 @@ public sealed class PreviewController : IAsyncDisposable
                 active.Cancel();
                 await backend.AbortAsync().ConfigureAwait(false);
                 try { await run.ConfigureAwait(false); } catch (Exception) { /* タイムアウトを優先し、回収後に通知する。 */ }
-                Notify(version, () => Failed?.Invoke(new(request, "出力が進まないためタイムアウトしました")));
+                Notify(version, navigation, () => Failed?.Invoke(new(request, "出力が進まないためタイムアウトしました")), currentOnly: true);
                 return;
             }
             result = await run.ConfigureAwait(false);
             if (active.IsCancellationRequested || result.IsCancelled) return;
             if (result.ExitCode != 0)
             {
-                Notify(version, () => Failed?.Invoke(new(request, $"エンコーダがエラー終了しました: {result.ExitCode}", result)));
+                Notify(version, navigation, () => Failed?.Invoke(new(request, $"エンコーダがエラー終了しました: {result.ExitCode}", result)), currentOnly: true);
                 return;
             }
             sink.Finish();
             _cache.Store(request, sink.Frames);
-            Notify(version, () => Completed?.Invoke(new(request, result, false, sink.TargetNotReached)));
+            Notify(version, navigation, () => Completed?.Invoke(new(request, result, false, sink.TargetNotReached)));
 
             async Task<PreviewRunResult> RunWithFallbackAsync()
             {
@@ -169,7 +181,7 @@ public sealed class PreviewController : IAsyncDisposable
         catch (OperationCanceledException) when (scheduled.IsCancellationRequested || active?.IsCancellationRequested == true) { }
         catch (Exception ex)
         {
-            Notify(version, () => Failed?.Invoke(new(request, ex.Message, Exception: ex)));
+            Notify(version, navigation, () => Failed?.Invoke(new(request, ex.Message, Exception: ex)), currentOnly: true);
         }
         finally
         {

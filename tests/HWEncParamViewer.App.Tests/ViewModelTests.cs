@@ -99,7 +99,7 @@ public sealed class ViewModelTests
     }
 
     [AvaloniaFact]
-    public async Task SeekDragDefersRequestAndTimeFormatsAreAccepted()
+    public async Task SeekDragRequestsFramesBeforeReleaseAndTimeFormatsAreAccepted()
     {
         using var services = new TestServices();
         var clock = new FakeTimeProvider();
@@ -109,11 +109,13 @@ public sealed class ViewModelTests
         vm.BeginSeekDrag();
         vm.CurrentSeconds = 2;
         vm.CurrentSeconds = 3;
-        clock.Advance(TimeSpan.FromSeconds(1));
-        Assert.Equal(1, starts);
+        // ドラッグを離す前に最新位置の要求を完了でき、編集用の待機時間は不要。
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.True(starts >= 2);
+        Assert.Equal(3, vm.CurrentSeconds);
+        Assert.NotNull(vm.PreviewImage);
         vm.EndSeekDrag(3);
-        await RunPreparedAsync(vm, clock);
-        Assert.Equal(2, starts);
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
         Assert.Equal(3, vm.CurrentSeconds);
         foreach (var item in new[] { ("0:04", 4.0), ("0:00:05.500", 5.5), ("6.25", 6.25) })
         {

@@ -35,6 +35,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private readonly InputProbe _probe;
     private readonly FrameCache _cache;
     private readonly PreviewController _controller;
+    private readonly Func<Y4mFrame, CancellationToken, Task<byte[]>> _imageConverter;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly object _taskLock = new();
     private readonly HashSet<Task> _tasks = new();
@@ -42,7 +43,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private Task _preparation = Task.CompletedTask;
     private Task? _disposeTask;
     private bool _initialized, _disposed, _suspendChanges, _seekDragging;
-    private long _generation, _imageGeneration;
+    private long _generation;
     private RequestContext? _context;
     private InputInfo? _inputInfo;
     private HelpIndex _helpIndex = new("");
@@ -54,7 +55,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     public MainWindowViewModel(IViewModelServices? services = null, TimeProvider? timeProvider = null,
         IPreviewBackend? preferred = null, IPreviewBackend? fallback = null, InputProbe? probe = null, FrameCache? cache = null)
+        : this(services, timeProvider, preferred, fallback, probe, cache, null) { }
+
+    /// <summary>偽時計による描画待ちの再現用に、画像変換だけを差し替える内部入口。</summary>
+    internal MainWindowViewModel(IViewModelServices? services, TimeProvider? timeProvider,
+        IPreviewBackend? preferred, IPreviewBackend? fallback, InputProbe? probe, FrameCache? cache,
+        Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter)
     {
+        _imageConverter = converter ?? ((frame, token) => Task.Run(() => YuvToBgra.Convert(frame), token));
         _services = services ?? new AvaloniaViewModelServices();
         _clock = timeProvider ?? TimeProvider.System;
         _probe = probe ?? new InputProbe(_clock);
@@ -166,8 +174,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     /// <summary>時刻欄 (双方向)。Enter で CommitTimeTextCommand。</summary>
     public string CurrentTimeText { get => _currentTimeText; set => SetProperty(ref _currentTimeText, value ?? ""); }
-    /// <summary>シークバーの位置 (秒)。ドラッグ中は View が更新しても要求を出さないこと。</summary>
-    public double CurrentSeconds { get => _currentSeconds; set { if (SetProperty(ref _currentSeconds, ClampTime(value))) { CurrentTimeText = FormatTime(_currentSeconds); if (!_seekDragging) _ = QueuePreview(); } } }
+    /// <summary>シークバーの目標位置(秒)。ドラッグ中も移動要求を送り、待ちは最新位置へ置き換える。</summary>
+    public double CurrentSeconds { get => _currentSeconds; set { if (SetProperty(ref _currentSeconds, ClampTime(value))) { CurrentTimeText = FormatTime(_currentSeconds); _ = QueuePreview(navigation: true); } } }
     /// <summary>入力の長さ (秒)。HasDuration が false のときは意味を持たない。</summary>
     public double DurationSeconds { get => _durationSeconds; set => SetProperty(ref _durationSeconds, value); }
     /// <summary>入力の長さが分かっているか。false ならシークバーを隠す (設計書 17.1)。</summary>
@@ -213,7 +221,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         if (!_seekDragging) return;
         _seekDragging = false;
-        SeekTo(seconds, force: true);
+        SeekTo(seconds);
     }
 
     private void InputChanged()
@@ -246,94 +254,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     }
     private void ClearInterval() { _intervalFrames = Array.Empty<Y4mFrame>(); _intervalRequest = null; }
 
-    private Task QueuePreview(bool bypassCache = false)
-    {
-        if (!_initialized || _suspendChanges || _disposed) return Task.CompletedTask;
-        long generation = Interlocked.Increment(ref _generation);
-        Interlocked.Increment(ref _imageGeneration);
-        Volatile.Write(ref _context, null);
-        CancelBefore();
-        CancellationTokenSource cancellation;
-        lock (_taskLock)
-        {
-            _preparationCancellation?.Cancel();
-            cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-            _preparationCancellation = cancellation;
-        }
-        string encoder = EncoderPath, input = InputPath;
-        if (!string.IsNullOrWhiteSpace(encoder) && _metadataEncoder != encoder)
-        {
-            _metadataEncoder = encoder;
-            Track(LoadMetadataAsync(encoder, _lifetime.Token));
-        }
-        if (string.IsNullOrWhiteSpace(EncoderPath) || string.IsNullOrWhiteSpace(InputPath))
-        {
-            IsBusy = false;
-            ErrorText = null;
-            StatusText = "エンコーダと入力ファイルを選択してください";
-            _preparation = Task.CompletedTask;
-            lock (_taskLock) { if (ReferenceEquals(_preparationCancellation, cancellation)) _preparationCancellation = null; cancellation.Dispose(); }
-            return _preparation;
-        }
-        IsBusy = true;
-        ErrorText = null;
-        StatusText = "入力情報を取得中…";
-        string[] inputArgs = OptionTextParser.ParseText(InputArgsText);
-        string[] vpp = OptionTextParser.Parse(FilterLines.Select(line => new OptionLine(line.Text, line.IsEnabled)));
-        double seconds = CurrentSeconds;
-        _preparation = PrepareAsync();
-        Track(_preparation);
-        return _preparation;
-
-        async Task PrepareAsync()
-        {
-            try
-            {
-                InputInfo info = await _probe.ProbeAsync(encoder, input, inputArgs, cancellation.Token).ConfigureAwait(false);
-                await PostAsync(() =>
-                {
-                    if (!IsCurrent(generation)) return;
-                    ApplyInputInfo(info);
-                    // ドラッグ中に入力情報の取得が終わっても、離すまでは現在位置を確定しない。
-                    if (_seekDragging) { IsBusy = false; StatusText = "位置を選択中"; return; }
-                    double target = HasDuration ? Math.Min(seconds, DurationSeconds) : seconds;
-                    SetTimeOnly(target);
-                    var request = new PreviewRequest { EncoderPath = encoder, InputFile = input, InputArgs = inputArgs,
-                        VppArgs = vpp, Fps = info.Fps, TargetSeconds = target, CorrelationId = generation };
-                    // y4m の A0:0 は「不明」で、正方画素として扱う。1:1 と同じく SAR の表記を省く
-                    bool squarePixel = info.SarNum <= 0 || info.SarDen <= 0 || info.SarNum == info.SarDen;
-                    string sar = squarePixel ? "" : $" (SAR {info.SarNum}:{info.SarDen})";
-                    InputInfoText = $"{info.Width}x{info.Height}{sar}  {info.Fps:0.###}fps";
-                    var context = new RequestContext(generation, request, _clock.GetTimestamp());
-                    Volatile.Write(ref _context, context);
-                    StatusText = "処理中…";
-                    _controller.Submit(request, bypassCache);
-                    QueueDuration(encoder, input, inputArgs);
-                }).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
-            catch (Exception exception)
-            {
-                string diagnostics = exception switch
-                { InputProbeException probe => probe.StandardError, InputProbeTimeoutException timeout => timeout.StandardError,
-                    PreviewBackendException backend => backend.StandardError, _ => "" };
-                await PostAsync(() => { if (IsCurrent(generation)) ShowError(exception.Message, diagnostics); }).ConfigureAwait(false);
-            }
-            finally
-            {
-                lock (_taskLock)
-                {
-                    if (ReferenceEquals(_preparationCancellation, cancellation)) _preparationCancellation = null;
-                    cancellation.Dispose();
-                }
-            }
-        }
-    }
-
     private bool IsCurrent(long generation) => !_disposed && generation == Volatile.Read(ref _generation);
-    private bool IsCurrent(RequestContext context) => IsCurrent(context.Generation) && ReferenceEquals(Volatile.Read(ref _context), context);
+    private bool IsCurrent(RequestContext context) => context.Kind == RequestKind.Before
+        ? IsCurrent(context.Generation) && ReferenceEquals(Volatile.Read(ref _context), context)
+        : !_disposed && context.EditEpoch == Volatile.Read(ref _editEpoch) && context.Generation >= _lastDisplayedAfter;
     private RequestContext? ContextFor(PreviewRequest request)
     {
+        if (_afterRequests.TryGetValue(request.CorrelationId, out var after) && SameRequest(after.Request, request)) return after;
         var context = Volatile.Read(ref _context);
         return context != null && SameRequest(context.Request, request) ? context : null;
     }
@@ -348,7 +275,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             if (!IsCurrent(context)) return;
             if (context.Kind == RequestKind.Before) DisplayBeforeFrame(value.Frame, context.Generation);
-            else DisplayFrame(value.Frame, context.Generation);
+            else DisplayFrame(value.Frame, context);
         });
     }
     private void OnCompleted(PreviewCompletion value)
@@ -356,6 +283,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         var context = ContextFor(value.Request);
         if (context == null) return;
         _cache.TryGet(value.Request, out var frames);
+        if (context.Kind == RequestKind.After) _afterRequests.TryRemove(context.Generation, out _);
         Dispatcher.UIThread.Post(() =>
         {
             if (!IsCurrent(context)) return;
@@ -366,15 +294,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                 IsBeforeBusy = false;
                 return;
             }
+            if (_lastFailedAfter == Volatile.Read(ref _generation)) return;
             _intervalRequest = value.Request;
             _intervalFrames = frames;
-            IsBusy = false;
+            _lastCompletedAfter = Math.Max(_lastCompletedAfter, context.Generation);
+            if (frames.Count == 0 && context.Generation == Volatile.Read(ref _generation) && _lastQueuedAfter < context.Generation)
+            { _lastFailedAfter = context.Generation; ShowError("表示できるフレームがありません", value.Result.StandardError); return; }
             ErrorText = null;
             LogText = value.Result.StandardError;
             if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = context.Mode;
             ElapsedText = $"{_clock.GetElapsedTime(context.Started).TotalSeconds:0.00}秒";
-            StatusText = value.TargetNotReached ? "完了（目標時刻に届かなかったため最終フレームを表示）" : value.FromCache ? "完了（キャッシュ）" : "完了";
-            QueueBefore(value.Request, context.Generation);
+            if (context.Generation == Volatile.Read(ref _generation))
+            {
+                _completedAfterStatus = value.TargetNotReached ? "完了（目標時刻に届かなかったため最終フレームを表示）" : value.FromCache ? "完了（キャッシュ）" : "完了";
+                QueueBefore(value.Request, context.Generation);
+            }
+            UpdateNavigationStatus();
         });
     }
     private void OnFailed(PreviewFailure value)
@@ -382,6 +317,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         var context = ContextFor(value.Request);
         if (context == null) return;
         string diagnostics = value.Result?.StandardError ?? (value.Exception as PreviewBackendException)?.StandardError ?? context.Diagnostics;
+        if (context.Kind == RequestKind.After) _afterRequests.TryRemove(context.Generation, out _);
         Dispatcher.UIThread.Post(() =>
         {
             if (!IsCurrent(context)) return;
@@ -393,32 +329,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                 BeforeImage = null;
                 return;
             }
+            if (context.Generation != Volatile.Read(ref _generation)) return;
+            _lastFailedAfter = context.Generation;
             if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = context.Mode;
             ElapsedText = $"{_clock.GetElapsedTime(context.Started).TotalSeconds:0.00}秒";
             ShowError(value.Reason, diagnostics);
         });
     }
-    private void DisplayFrame(Y4mFrame frame, long generation)
+    private void DisplayFrame(Y4mFrame frame, RequestContext context)
     {
-        _displayedFrame = frame;
-        long imageGeneration = Interlocked.Increment(ref _imageGeneration);
-        Track(ConvertAsync());
-        async Task ConvertAsync()
-        {
-            try
-            {
-                byte[] data = await Task.Run(() => YuvToBgra.Convert(frame), _lifetime.Token).ConfigureAwait(false);
-                await PostAsync(() =>
-                {
-                    if (!IsCurrent(generation) || imageGeneration != _imageGeneration) return;
-                    var bitmap = CreateBitmap(frame, data);
-                    RecalculateDisplaySizes();
-                    PreviewImage = bitmap;
-                }).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
-            catch (Exception exception) { await PostAsync(() => { if (IsCurrent(generation)) ShowError("画像を表示できませんでした", exception.Message); }).ConfigureAwait(false); }
-        }
+        if (context.Generation <= _lastQueuedAfter) return;
+        _lastQueuedAfter = context.Generation;
+        EnqueueImage(new ImageWork(frame, context.Generation, context.EditEpoch));
     }
     private void ShowError(string message, string diagnostics)
     {
@@ -432,45 +354,55 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private void StepFrame(int direction)
     {
         if (direction == 0) return;
-        int index = _displayedFrame == null ? -1 : _intervalFrames.ToList().FindIndex(frame => ReferenceEquals(frame, _displayedFrame));
-        int next = index + Math.Sign(direction);
-        if (index >= 0 && next >= 0 && next < _intervalFrames.Count && _intervalRequest != null)
+        direction = Math.Sign(direction);
+        if (_intervalRequest is { } interval && _intervalFrames.Count > 0)
         {
-            var frame = _intervalFrames[next];
-            double timestamp = (CommandBuilder.Plan(_intervalRequest).SeekSeconds ?? 0) + (frame.Xts ?? next / _intervalRequest.Fps);
-            DisplayCached(frame, timestamp);
-        }
-        else
-        {
-            double origin = CurrentSeconds;
-            double duration = 1 / (_displayedFrame?.Header.Fps > 0 ? _displayedFrame.Header.Fps : _inputInfo?.Fps ?? 30);
-            if (index >= 0 && _intervalRequest != null && _displayedFrame != null)
+            var plan = CommandBuilder.Plan(interval);
+            double seek = plan.SeekSeconds ?? 0;
+            double target = CurrentSeconds - seek;
+            var first = _intervalFrames[0];
+            var last = _intervalFrames[^1];
+            double firstTime = first.Xts ?? 0;
+            double lastTime = last.Xts ?? (_intervalFrames.Count - 1) / interval.Fps;
+            double tolerance = (last.Xdur ?? 1 / interval.Fps) / 2;
+            if (target >= firstTime - tolerance && target <= lastTime + tolerance)
             {
-                origin = (CommandBuilder.Plan(_intervalRequest).SeekSeconds ?? 0) + (_displayedFrame.Xts ?? index / _intervalRequest.Fps);
-                duration = _displayedFrame.Xdur ?? duration;
+                int current = FrameSelector.Select(_intervalFrames.Select(frame => new FrameTiming(frame.Xts, frame.Xdur)).ToArray(), target, interval.Fps);
+                int next = current + direction;
+                if (current >= 0 && next >= 0 && next < _intervalFrames.Count)
+                {
+                    var frame = _intervalFrames[next];
+                    double seconds = seek + (frame.Xts ?? next / interval.Fps);
+                    if ((seconds - CurrentSeconds) * direction > 1e-9)
+                    { DisplayCached(frame, seconds); return; }
+                }
             }
-            SeekTo(origin + Math.Sign(direction) * duration);
         }
+        double fps = _displayedFrame?.Header.Fps > 0 ? _displayedFrame.Header.Fps : _inputInfo?.Fps ?? 30;
+        SeekTo(CurrentSeconds + direction / fps);
     }
     private void DisplayCached(Y4mFrame frame, double seconds)
     {
-        long generation = Interlocked.Increment(ref _generation);
-        Volatile.Write(ref _context, null);
-        CancelBefore();
-        lock (_taskLock) _preparationCancellation?.Cancel();
+        if (_intervalRequest == null) return;
+        long generation = BeginIntent(navigation: true);
         SetTimeOnly(seconds);
-        IsBusy = false;
+        var request = RetargetInterval(_intervalRequest, seconds) with { CorrelationId = generation };
+        var context = new RequestContext(generation, request, _clock.GetTimestamp(), editEpoch: _editEpoch);
+        RegisterContext(context);
+        IsBusy = true;
         ErrorText = null;
-        StatusText = "完了（キャッシュ）";
-        DisplayFrame(frame, generation);
-        if (_intervalRequest != null) QueueBefore(_intervalRequest, generation, seconds);
+        _completedAfterStatus = "完了（キャッシュ）";
+        DisplayFrame(frame, context);
+        // 表示は即時に進め、Coreにも最新の移動意図を伝えて古い待ち要求を置き換える。
+        _controller.Submit(request, navigation: true);
+        Track(ReleaseContextAsync(context));
     }
     private void SeekTo(double seconds, bool force = false)
     {
         seconds = ClampTime(seconds);
         if (!force && seconds == CurrentSeconds) return;
         SetTimeOnly(seconds);
-        _ = QueuePreview();
+        _ = QueuePreview(navigation: true);
     }
     private void SetTimeOnly(double seconds)
     {
@@ -658,12 +590,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     }
     private enum RequestKind { After, Before }
     private sealed class RequestContext(long generation, PreviewRequest request, long started, RequestKind kind = RequestKind.After,
-        CancellationTokenSource? beforeCancellation = null)
+        CancellationTokenSource? beforeCancellation = null, long editEpoch = 0)
     {
         public long Generation { get; } = generation;
         public PreviewRequest Request { get; } = request;
         public long Started { get; } = started;
         public RequestKind Kind { get; } = kind;
+        public long EditEpoch { get; } = editEpoch;
         public CancellationTokenSource? BeforeCancellation { get; } = beforeCancellation;
         public string Mode { get; set; } = "";
         public string Diagnostics { get; set; } = "";
