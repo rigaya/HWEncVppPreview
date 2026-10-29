@@ -7,3 +7,5 @@
 .gitattributes text eol=lf
 .gitignore text eol=lf
 *.y4m binary
+*.axaml text eol=crlf
+*.txt text eol=crlf

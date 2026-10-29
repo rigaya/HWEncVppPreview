@@ -48,4 +48,15 @@ public sealed class HelpIndexTests
         Assert.Equal("", index.Lookup("--not-a-heading"));
         Assert.Contains("--not-a-heading", index.Lookup("--first"));
     }
+    [Fact]
+    public void UnindentedDescriptionsDoNotBecomeHeadings()
+    {
+        var index = new HelpIndex("--vpp-first <params>\nparams\n  sigma=<float>\n-----\n--123 is an example\n--Upper is an example\n      --deeply-indented is a reference\n--vpp-second\n");
+        Assert.Equal(new[] { "--vpp-first", "--vpp-second" }, index.OptionNames);
+        Assert.Contains("params\n  sigma=<float>", index.Lookup("--vpp-first"));
+        Assert.Contains("--123 is an example", index.Lookup("--vpp-first"));
+        Assert.Contains("--Upper is an example", index.Lookup("--vpp-first"));
+        Assert.Empty(index.Lookup("--deeply-indented"));
+    }
+
 }

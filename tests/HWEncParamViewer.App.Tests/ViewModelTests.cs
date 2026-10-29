@@ -189,6 +189,29 @@ public sealed class ViewModelTests
     }
 
     [AvaloniaFact]
+    public async Task OrdinaryCommentsSurviveRepeatedLoadAndSaveUnchanged()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        await using var vm = Create(services, clock);
+        await InitializeAsync(vm, clock);
+        string[] lines = ["# 通常コメント", "   # インデントと末尾空白を保持  ", "#\tタブを含む説明", "--vpp-nlmeans sigma=0.1", "# --vpp-edgelevel strength=10", "", "# 最終コメント"];
+        string original = string.Join(Environment.NewLine, lines);
+        await File.WriteAllTextAsync(services.FiltersPath, original);
+        for (int i = 0; i < 2; ++i)
+        {
+            await LoadFiltersAndWaitAsync(vm, clock, () => vm.FilterLines.Count == lines.Length);
+            Assert.False(vm.FilterLines[4].IsEnabled);
+            Assert.Equal(lines[0], vm.FilterLines[0].Text);
+            Assert.Equal(lines[1], vm.FilterLines[1].Text);
+            Assert.Equal(lines[2], vm.FilterLines[2].Text);
+            vm.SaveFiltersCommand.Execute(null);
+            await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+            Assert.Equal(original, await File.ReadAllTextAsync(services.FiltersPath));
+        }
+    }
+
+    [AvaloniaFact]
     public async Task ChangedInputCancelsAnOlderProbeWithoutShowingItsError()
     {
         using var services = new TestServices();

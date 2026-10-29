@@ -6,8 +6,8 @@ namespace HWEncParamViewer.Core;
 public sealed class HelpIndex
 {
     // 実ヘルプではresizeだけ空白なしの見出しもあるため、通常の2〜4空白に加えて行頭も受け付ける。
-    private static readonly Regex Heading = new(@"^(?: {2,4})?(?<name>--[a-z0-9][a-z0-9-]*)(?=$|[\s,<\[/])", RegexOptions.CultureInvariant);
-    private static readonly Regex Alias = new(@"\G(?:\s*[,/]\s*| +)(?<name>--[a-z0-9][a-z0-9-]*)(?=$|[\s,<\[/])", RegexOptions.CultureInvariant);
+    private static readonly Regex Heading = new(@"^(?: {2,4})?(?<name>--[a-z][a-z0-9-]*)(?=$|[\s,<\[/])", RegexOptions.CultureInvariant);
+    private static readonly Regex Alias = new(@"\G(?:\s*[,/]\s*| +)(?<name>--[a-z][a-z0-9-]*)(?=$|[\s,<\[/])", RegexOptions.CultureInvariant);
     private readonly Dictionary<string, string> _sections = new(StringComparer.Ordinal);
 
     public HelpIndex(string helpText)
