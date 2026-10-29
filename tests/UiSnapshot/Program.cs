@@ -100,6 +100,13 @@ if (encoder != null || input != null)
         InputArgsText = Option(args, "--input-args") ?? "--avhw",
         CurrentSeconds = seconds,
     };
+    string? vpp = Option(args, "--vpp");
+    if (vpp != null)
+    {
+        var line = new FilterLineViewModel { Text = vpp };
+        vm.FilterLines.Add(line);
+        vm.SelectedFilterLine = line;
+    }
     var window = new MainWindow { DataContext = vm, Width = 1440, Height = 900 };
     window.Show();
     try
@@ -113,6 +120,23 @@ if (encoder != null || input != null)
             Dispatcher.UIThread.RunJobs();
             using var frame = window.CaptureRenderedFrame();
 #pragma warning disable CS0618 // 開発用ツールのPNG保存に既存APIを使う。
+            frame!.Save(Path.Combine(outDir, variant.Item1 + ".png"));
+#pragma warning restore CS0618
+            Console.WriteLine(variant.Item1);
+        }
+        Application.Current!.RequestedThemeVariant = ThemeVariant.Dark;
+        foreach (var variant in new[]
+        {
+            ("real_split", PreviewCompareMode.Split, false),
+            ("real_side_by_side", PreviewCompareMode.SideBySide, false),
+            ("real_toggle_before", PreviewCompareMode.Single, true),
+        })
+        {
+            vm.SetCompareModeCommand.Execute(variant.Item2);
+            vm.IsShowingBefore = variant.Item3;
+            Dispatcher.UIThread.RunJobs();
+            using var frame = window.CaptureRenderedFrame();
+#pragma warning disable CS0618 // 実プレビュー比較の目視確認用PNGを保存する。
             frame!.Save(Path.Combine(outDir, variant.Item1 + ".png"));
 #pragma warning restore CS0618
             Console.WriteLine(variant.Item1);

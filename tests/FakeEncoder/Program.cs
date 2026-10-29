@@ -117,7 +117,20 @@ internal static class Program
     private static async Task<int> EncodeAsync(string[] args, CancellationToken cancellationToken)
     {
         int count = Number(args, "--frames", 1);
-        int step = Math.Max(1, Number(args, "--fake-step", 1));
+        int step = Math.Max(1, Number(args, "--fake-step", args.Contains("--vpp-decimate", StringComparer.Ordinal) ? 2 : 1));
+        int width = 64, height = 36;
+        string? outputSize = Value(args, "--output-res");
+        if (outputSize != null)
+        {
+            string[] dimensions = outputSize.Split('x');
+            if (dimensions.Length != 2 || !int.TryParse(dimensions[0], out width) || !int.TryParse(dimensions[1], out height)
+                || width <= 0 || height <= 0 || width > 8192 || height > 8192)
+            {
+                await Console.Error.WriteLineAsync("FAKE invalid output size");
+                return -24;
+            }
+        }
+        string sar = Value(args, "--fake-sar") ?? "1:1";
         int hangAfter = Number(args, "--fake-hang-after", -1);
         int crashAt = Number(args, "--fake-crash-at", -1);
         int badControlAt = Number(args, "--fake-bad-control-at", -1);
@@ -149,7 +162,7 @@ internal static class Program
         {
             if (count > 0)
             {
-                await WriteLineAsync($"YUV4MPEG2 W64 H36 F30:1 Ip A1:1 C420jpeg XTIMEBASE=1:30 XPID={Environment.ProcessId} XSEEK={seek.ToString(CultureInfo.InvariantCulture)}");
+                await WriteLineAsync($"YUV4MPEG2 W{width} H{height} F30:1 Ip A{sar} C420jpeg XTIMEBASE=1:30 XPID={Environment.ProcessId} XSEEK={seek.ToString(CultureInfo.InvariantCulture)}");
             }
             for (int i = 0; i < count; i += step)
             {
@@ -162,8 +175,8 @@ internal static class Program
                 if (hangAfter >= 0 && i >= hangAfter) await Task.Delay(Timeout.Infinite, effectiveToken);
                 if (gate != null && i >= gateAfter) await WaitForFileAsync(gate, effectiveToken);
                 if (delayMs > 0) await Task.Delay(delayMs, effectiveToken);
-                await WriteLineAsync(string.Create(CultureInfo.InvariantCulture, $"FRAME Xts={i / 30.0:F9} Xdur={1.0 / 30:F9}"));
-                var data = new byte[64 * 36 * 3 / 2];
+                await WriteLineAsync(string.Create(CultureInfo.InvariantCulture, $"FRAME Xts={i / 30.0:F9} Xdur={step / 30.0:F9}"));
+                var data = new byte[width * height + 2 * ((width + 1) / 2) * ((height + 1) / 2)];
                 for (int j = 0; j < data.Length; j++) data[j] = (byte)(hash[j % hash.Length] + i);
                 if (crashAt == i)
                 {

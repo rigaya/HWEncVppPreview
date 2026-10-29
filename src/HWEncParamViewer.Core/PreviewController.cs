@@ -56,7 +56,8 @@ public sealed class PreviewController : IAsyncDisposable
 
     /// <summary>引数リストを複製し、最新要求として登録する。イベント購読はSubmitより前に行う。</summary>
     /// <param name="bypassCache">trueなら過去の画像を使わず実行する。直前の要求が後からキャッシュへ保存されても再実行を保証する。</param>
-    public void Submit(PreviewRequest request, bool bypassCache = false)
+    /// <param name="bypassDebounce">内部の追加要求を即座に実行する場合だけtrue。通常の編集操作は既定の待機時間を使う。</param>
+    public void Submit(PreviewRequest request, bool bypassCache = false, bool bypassDebounce = false)
     {
         ArgumentNullException.ThrowIfNull(request);
         request = request with { InputArgs = request.InputArgs.ToArray(), VppArgs = request.VppArgs.ToArray() };
@@ -71,7 +72,7 @@ public sealed class PreviewController : IAsyncDisposable
             // 同期完了や通知からのDispose再入より先に、回収対象を登録する。
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _tasks.Add(completion.Task);
-            _ = TrackAsync(ScheduleAsync(request, version, scheduled, bypassCache), completion);
+            _ = TrackAsync(ScheduleAsync(request, version, scheduled, bypassCache, bypassDebounce), completion);
         }
     }
 
@@ -100,13 +101,13 @@ public sealed class PreviewController : IAsyncDisposable
         lock (_sync) { if (IsCurrent(version)) notification(); }
     }
 
-    private async Task ScheduleAsync(PreviewRequest request, long version, CancellationTokenSource scheduled, bool bypassCache)
+    private async Task ScheduleAsync(PreviewRequest request, long version, CancellationTokenSource scheduled, bool bypassCache, bool bypassDebounce)
     {
         bool entered = false;
         CancellationTokenSource? active = null;
         try
         {
-            await Task.Delay(_debounce, _clock, scheduled.Token).ConfigureAwait(false);
+            await Task.Delay(bypassDebounce ? TimeSpan.Zero : _debounce, _clock, scheduled.Token).ConfigureAwait(false);
             lock (_sync)
             {
                 if (!IsCurrent(version)) return;

@@ -4,8 +4,8 @@
 `dotnet build`で生成されるapphostを直接起動する。
 
 通常の`--frames N`、`--seek h:mm:ss.fff`、VPP引数を受け取る。
-出力は64×36のy4mで、画素はVPP引数のSHA-256とフレーム番号から決まる。
-`Xts`はseek位置からの相対秒数、`Xdur`は1/30秒。
+出力の既定は64×36のy4mで、画素はVPP引数のSHA-256とフレーム番号から決まる。
+`Xts`はseek位置からの相対秒数、`Xdur`は通常1/30秒。間引いた場合はstep/30秒になる。
 `XPID`はテスト時のプロセス回収確認用、`XSEEK`は受け取ったseek値の確認用の拡張タグ。
 
 `--preview-server`で起動すると、READYと要求ごとのBEGIN/y4m/ENDを出力する。
@@ -36,3 +36,5 @@ BackendTestsは実時間のsleepを使わず、出力イベント・パイプの
 `FAKE_ENCODER_LOG_READY_FILE`を指定すると、stderrへFAKEPIDを書き終えた直後に空ファイルを作る。タイムアウト検証でログ出力と偽時計の進行を同期するために使う。
 
 `--version`は`FakeEncoder 1.0`、`--help`は簡易ヘルプをstdoutへ出して即座に終了する。ViewModelのメタデータ取得とヘルプ表示の検証に使う。
+
+V5の比較用に`--fake-sar 4:3`でSARを指定できる。`--output-res WxH`は実際のヘッダとフレームデータの大きさを変更する。`--vpp-decimate`を指定した要求は既定で2枚ごとの出力にし、VPP引数が空の要求とのフレーム数・時刻選択の差を再現する。`--fake-step`を明示した場合はそちらを優先する。

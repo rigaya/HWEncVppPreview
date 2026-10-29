@@ -322,6 +322,28 @@ public sealed class PreviewControllerTests
         Assert.Equal(2, completion.Request.CorrelationId);
     }
 
+    [Fact]
+    public async Task InternalRequestCanStartImmediatelyWhileNormalRequestStillDebounces()
+    {
+        var clock = new FakeTimeProvider();
+        var backend = new ControlledBackend();
+        await using var controller = new PreviewController(backend, timeProvider: clock);
+        controller.Submit(Request("internal"), bypassDebounce: true);
+        var immediate = await backend.NextAsync();
+        Assert.Equal("internal", immediate.Request.VppArgs[0]);
+        immediate.End(0);
+        await controller.WaitForIdleAsync();
+        controller.Submit(Request("edited"));
+        clock.Advance(TimeSpan.FromMilliseconds(149));
+        Assert.Equal(1, backend.Calls);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        var debounced = await backend.NextAsync();
+        Assert.Equal("edited", debounced.Request.VppArgs[0]);
+        debounced.End(0);
+        await controller.WaitForIdleAsync();
+        Assert.Equal(2, backend.Calls);
+    }
+
     private sealed class UnsupportedBackend : IPreviewBackend
     {
         public int Calls { get; private set; }

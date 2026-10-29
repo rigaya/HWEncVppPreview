@@ -77,7 +77,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         GoToStartCommand = new RelayCommand(() => SeekTo(0));
         GoToEndCommand = new RelayCommand(() => { if (HasDuration) SeekTo(DurationSeconds); });
         CommitTimeTextCommand = new RelayCommand(CommitTime);
-        RefreshCommand = new RelayCommand(() => { _cache.Clear(); ClearInterval(); _ = QueuePreview(bypassCache: true); });
+        RefreshCommand = new RelayCommand(() => { _cache.Clear(); ClearInterval(); ClearBeforeInterval(); _ = QueuePreview(bypassCache: true); });
         SaveFiltersCommand = new RelayCommand(() => RunCommand(SaveFiltersAsync));
         LoadFiltersCommand = new RelayCommand(() => RunCommand(LoadFiltersAsync));
         CopyCommandLineCommand = new RelayCommand(() => RunCommand(() => _services.CopyTextAsync(EnabledOptionsText())));
@@ -251,6 +251,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         long generation = Interlocked.Increment(ref _generation);
         Interlocked.Increment(ref _imageGeneration);
         Volatile.Write(ref _context, null);
+        CancelBefore();
         CancellationTokenSource cancellation;
         lock (_taskLock)
         {
@@ -344,7 +345,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         var context = ContextFor(value.Request);
         if (context == null) return;
-        Dispatcher.UIThread.Post(() => { if (IsCurrent(context)) DisplayFrame(value.Frame, context.Generation); });
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!IsCurrent(context)) return;
+            if (context.Kind == RequestKind.Before) DisplayBeforeFrame(value.Frame, context.Generation);
+            else DisplayFrame(value.Frame, context.Generation);
+        });
     }
     private void OnCompleted(PreviewCompletion value)
     {
@@ -354,6 +360,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         Dispatcher.UIThread.Post(() =>
         {
             if (!IsCurrent(context)) return;
+            if (context.Kind == RequestKind.Before)
+            {
+                _beforeIntervalRequest = value.Request;
+                _beforeIntervalFrames = frames;
+                IsBeforeBusy = false;
+                return;
+            }
             _intervalRequest = value.Request;
             _intervalFrames = frames;
             IsBusy = false;
@@ -362,6 +375,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = context.Mode;
             ElapsedText = $"{_clock.GetElapsedTime(context.Started).TotalSeconds:0.00}秒";
             StatusText = value.TargetNotReached ? "完了（目標時刻に届かなかったため最終フレームを表示）" : value.FromCache ? "完了（キャッシュ）" : "完了";
+            QueueBefore(value.Request, context.Generation);
         });
     }
     private void OnFailed(PreviewFailure value)
@@ -372,6 +386,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         Dispatcher.UIThread.Post(() =>
         {
             if (!IsCurrent(context)) return;
+            if (context.Kind == RequestKind.Before)
+            {
+                IsBeforeBusy = false;
+                Interlocked.Increment(ref _beforeImageGeneration);
+                _beforeDisplayedFrame = null;
+                BeforeImage = null;
+                return;
+            }
             if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = context.Mode;
             ElapsedText = $"{_clock.GetElapsedTime(context.Started).TotalSeconds:0.00}秒";
             ShowError(value.Reason, diagnostics);
@@ -390,15 +412,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                 await PostAsync(() =>
                 {
                     if (!IsCurrent(generation) || imageGeneration != _imageGeneration) return;
-                    var header = frame.Header;
-                    var bitmap = new WriteableBitmap(new PixelSize(header.Width, header.Height), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
-                    using (var locked = bitmap.Lock())
-                    {
-                        for (int y = 0; y < header.Height; y++) Marshal.Copy(data, y * header.Width * 4, locked.Address + y * locked.RowBytes, header.Width * 4);
-                    }
+                    var bitmap = CreateBitmap(frame, data);
+                    RecalculateDisplaySizes();
                     PreviewImage = bitmap;
-                    DisplayWidth = header.Width * (header.SarNum > 0 && header.SarDen > 0 ? (double)header.SarNum / header.SarDen : 1);
-                    DisplayHeight = header.Height;
                 }).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
@@ -441,12 +457,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         long generation = Interlocked.Increment(ref _generation);
         Volatile.Write(ref _context, null);
+        CancelBefore();
         lock (_taskLock) _preparationCancellation?.Cancel();
         SetTimeOnly(seconds);
         IsBusy = false;
         ErrorText = null;
         StatusText = "完了（キャッシュ）";
         DisplayFrame(frame, generation);
+        if (_intervalRequest != null) QueueBefore(_intervalRequest, generation, seconds);
     }
     private void SeekTo(double seconds, bool force = false)
     {
@@ -614,6 +632,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _initialized = false;
         Interlocked.Increment(ref _generation);
         _lifetime.Cancel();
+        CancelBefore(updatePresentation: false);
         lock (_taskLock) _preparationCancellation?.Cancel();
         _controller.FrameReady -= OnFrameReady;
         _controller.Completed -= OnCompleted;
@@ -621,14 +640,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         await _controller.DisposeAsync().ConfigureAwait(false);
         await _probe.DisposeAsync().ConfigureAwait(false);
         await WaitForIdleAsync().ConfigureAwait(false);
-        await PostAsync(() => PreviewImage = null).ConfigureAwait(false);
+        await PostAsync(() =>
+        {
+            PreviewImage = null;
+            BeforeImage = null;
+            IsBeforeBusy = false;
+            _displayedFrame = null;
+            _beforeDisplayedFrame = null;
+            ClearInterval();
+            ClearBeforeInterval();
+            _cache.Clear();
+        }).ConfigureAwait(false);
         _lifetime.Dispose();
     }
-    private sealed class RequestContext(long generation, PreviewRequest request, long started)
+    private enum RequestKind { After, Before }
+    private sealed class RequestContext(long generation, PreviewRequest request, long started, RequestKind kind = RequestKind.After,
+        CancellationTokenSource? beforeCancellation = null)
     {
         public long Generation { get; } = generation;
         public PreviewRequest Request { get; } = request;
         public long Started { get; } = started;
+        public RequestKind Kind { get; } = kind;
+        public CancellationTokenSource? BeforeCancellation { get; } = beforeCancellation;
         public string Mode { get; set; } = "";
         public string Diagnostics { get; set; } = "";
     }
@@ -636,11 +669,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
         {
-            var context = owner.ContextFor(request);
+            var context = owner.ExecutionContextFor(request);
             if (context != null) context.Mode = mode;
+            using var cancellation = context?.BeforeCancellation == null ? null
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, context.BeforeCancellation.Token);
             try
             {
-                var result = await inner.RunAsync(request, sink, cancellationToken).ConfigureAwait(false);
+                var result = await inner.RunAsync(request, sink, cancellation?.Token ?? cancellationToken).ConfigureAwait(false);
                 if (context != null) context.Diagnostics = result.StandardError;
                 return result;
             }

@@ -58,10 +58,12 @@ public sealed class ViewModelTests
         await InitializeAsync(vm, clock);
         string first = ImageHash(vm);
         Assert.Contains("--vpp-nlmeans", vm.HelpText);
-        Assert.Equal(1, starts);
+        // 初回はフィルタ後と、空のVPP引数で取得するフィルタ前の2回。
+        Assert.Equal(2, starts);
         line.Text = "--vpp-nlmeans sigma=0.2";
         await RunPreparedAsync(vm, clock);
-        Assert.Equal(2, starts);
+        // フィルタ前の同一区間はキャッシュから再利用する。
+        Assert.Equal(3, starts);
         Assert.NotEqual(first, ImageHash(vm));
         line.IsEnabled = false;
         await RunPreparedAsync(vm, clock);

@@ -101,8 +101,9 @@ public sealed class ZoomPanViewer : Control
         if (Background != null) context.FillRectangle(Background, new Rect(viewport));
         var rect = ZoomMath.ContentRect(Zoom, viewport, ContentSize);
         double scale = ZoomMath.EffectiveScale(Zoom, viewport, ContentSize);
-        // 等倍以上は画素をそのまま見せる (nearest)。縮小時は高品質に
-        var mode = scale >= 1.0 ? BitmapInterpolationMode.None : BitmapInterpolationMode.HighQuality;
+        // 手動で等倍以上に拡大したときは画素をそのまま見せる (nearest)。
+        // ウィンドウに合わせる表示は、倍率が 100% を超えても高品質に補間する (中途半端な倍率の nearest はムラになるため)
+        var mode = !Zoom.IsFit && scale >= 1.0 ? BitmapInterpolationMode.None : BitmapInterpolationMode.HighQuality;
         using (context.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = mode }))
         {
             if (IsSplit)
