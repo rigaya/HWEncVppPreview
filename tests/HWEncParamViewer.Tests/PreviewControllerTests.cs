@@ -289,6 +289,39 @@ public sealed class PreviewControllerTests
         }
     }
 
+    [Fact]
+    public async Task ForcedRefreshBypassesCacheFilledByPreviousRunDuringDebounce()
+    {
+        var clock = new FakeTimeProvider();
+        var backend = new ControlledBackend();
+        var cache = new FrameCache();
+        await using var controller = new PreviewController(backend, cache: cache, timeProvider: clock);
+        var completions = new List<PreviewCompletion>();
+        controller.Completed += completions.Add;
+        controller.Submit(Request() with { CorrelationId = 1 });
+        clock.Advance(TimeSpan.FromMilliseconds(150));
+        var first = await backend.NextAsync();
+        controller.Submit(Request() with { CorrelationId = 2 }, bypassCache: true);
+        first.Sink.OnFrame(Frame(1, 3));
+        first.End(0);
+        async Task WaitForCacheAsync()
+        {
+            while (cache.Count == 0) await Task.Yield();
+        }
+        // 再要求のdebounce待ち中に旧要求が成功して保存される競合を再現する。
+        await WaitForCacheAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromMilliseconds(150));
+        var second = await backend.NextAsync();
+        Assert.Equal(2, second.Request.CorrelationId);
+        second.Sink.OnFrame(Frame(1, 9));
+        second.End(0);
+        await controller.WaitForIdleAsync();
+        Assert.Equal(2, backend.Calls);
+        var completion = Assert.Single(completions);
+        Assert.False(completion.FromCache);
+        Assert.Equal(2, completion.Request.CorrelationId);
+    }
+
     private sealed class UnsupportedBackend : IPreviewBackend
     {
         public int Calls { get; private set; }

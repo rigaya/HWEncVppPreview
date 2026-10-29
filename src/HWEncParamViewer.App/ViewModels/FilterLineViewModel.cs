@@ -1,4 +1,6 @@
-﻿namespace HWEncParamViewer.App.ViewModels;
+﻿using HWEncParamViewer.Core;
+
+namespace HWEncParamViewer.App.ViewModels;
 
 /// <summary>フィルタ編集欄の1行 (設計書 17.5)。</summary>
 public sealed class FilterLineViewModel : ViewModelBase
@@ -17,7 +19,7 @@ public sealed class FilterLineViewModel : ViewModelBase
         get => _text;
         set
         {
-            if (SetProperty(ref _text, value)) OnPropertyChanged(nameof(OptionName));
+            if (SetProperty(ref _text, value ?? "")) OnPropertyChanged(nameof(OptionName));
         }
     }
 
@@ -27,7 +29,7 @@ public sealed class FilterLineViewModel : ViewModelBase
         get
         {
             var t = _text.TrimStart();
-            int end = t.IndexOfAny([' ', '\t']);
+            int end = t.IndexOfAny([' ', '\t', '=']);
             return end < 0 ? t : t[..end];
         }
     }
@@ -35,7 +37,12 @@ public sealed class FilterLineViewModel : ViewModelBase
     /// <summary>
     /// caret 位置の数値を増減する (設計書 4.2)。direction は +1/-1、coarse は Shift (10倍)。
     /// 変更したら Text を書き換えて新しいカーソル位置を返す。数値がなければ null。
-    /// TODO(airi): Core の NumberNudge で実装する。
     /// </summary>
-    public int? Nudge(int caret, int direction, bool coarse) => null;
+    public int? Nudge(int caret, int direction, bool coarse)
+    {
+        var result = NumberNudge.TryNudge(Text, caret, direction, coarse);
+        if (result == null) return null;
+        Text = result.Text;
+        return result.Caret;
+    }
 }

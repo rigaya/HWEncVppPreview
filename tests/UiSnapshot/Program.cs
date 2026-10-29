@@ -1,4 +1,6 @@
-﻿using Avalonia;
+﻿using System.Globalization;
+using Avalonia;
+using HWEncParamViewer.App.Services;
 using Avalonia.Headless;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -7,9 +9,9 @@ using Avalonia.Threading;
 using HWEncParamViewer.App.ViewModels;
 using HWEncParamViewer.App.Views;
 
-// 使い方: UiSnapshot <出力ディレクトリ>
+// 使い方: UiSnapshot <出力ディレクトリ> [--encoder <exe> --input <入力> --time <秒>]
 // MainWindow をデザイン用のダミー値で描画し、ライト/ダーク・状態違いの PNG を保存する。
-string outDir = args.Length > 0 ? args[0] : ".";
+string outDir = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : ".";
 Directory.CreateDirectory(outDir);
 
 AppBuilder.Configure<HWEncParamViewer.App.App>()
@@ -33,6 +35,7 @@ void Capture(string name, ThemeVariant theme, Action<MainWindowViewModel> setup)
     frame!.Save(Path.Combine(outDir, name + ".png"));
 #pragma warning restore CS0618
     window.Close();
+    Pump(vm.DisposeAsync().AsTask());
     Console.WriteLine(name);
 }
 
@@ -52,6 +55,65 @@ Capture("dark_empty", ThemeVariant.Dark, vm =>
     vm.FilterLines.Clear();
     vm.HelpText = "";
 });
+
+// 実行入口と同じViewModel経路で取得した画像を、デザイン用の生成画像とは別名で保存する。
+string? encoder = Option(args, "--encoder");
+string? input = Option(args, "--input");
+if (encoder != null || input != null)
+{
+    if (encoder == null || input == null) throw new ArgumentException("--encoderと--inputは両方指定してください");
+    double seconds = double.Parse(Option(args, "--time") ?? "0.5", CultureInfo.InvariantCulture);
+    if (!double.IsFinite(seconds) || seconds < 0) throw new ArgumentException("--timeは有限の0以上の秒数が必要です");
+    var vm = new MainWindowViewModel(new SnapshotServices(outDir))
+    {
+        EncoderPath = encoder,
+        InputPath = input,
+        InputArgsText = Option(args, "--input-args") ?? "--avhw",
+        CurrentSeconds = seconds,
+    };
+    var window = new MainWindow { DataContext = vm, Width = 1440, Height = 900 };
+    window.Show();
+    try
+    {
+        Pump(vm.InitializeAsync(false));
+        Pump(vm.WaitForIdleAsync());
+        if (vm.PreviewImage == null) throw new InvalidOperationException(vm.ErrorText ?? "実プレビュー画像が生成されませんでした");
+        foreach (var variant in new[] { ("real_dark", ThemeVariant.Dark), ("real_light", ThemeVariant.Light) })
+        {
+            Application.Current!.RequestedThemeVariant = variant.Item2;
+            Dispatcher.UIThread.RunJobs();
+            using var frame = window.CaptureRenderedFrame();
+#pragma warning disable CS0618 // 開発用ツールのPNG保存に既存APIを使う。
+            frame!.Save(Path.Combine(outDir, variant.Item1 + ".png"));
+#pragma warning restore CS0618
+            Console.WriteLine(variant.Item1);
+        }
+    }
+    finally
+    {
+        Pump(vm.DisposeAsync().AsTask());
+        window.Close();
+    }
+}
+
+static string? Option(string[] arguments, string name)
+{
+    int index = Array.IndexOf(arguments, name);
+    return index < 0 ? null : index + 1 < arguments.Length ? arguments[index + 1]
+        : throw new ArgumentException($"{name}の値がありません");
+}
+
+static void Pump(Task operation)
+{
+    // HeadlessのコンソールにはUIループがないため、Postの反映と非同期処理を同じスレッドで待つ。
+    while (!operation.IsCompleted)
+    {
+        Dispatcher.UIThread.RunJobs();
+        ((IAsyncResult)operation).AsyncWaitHandle.WaitOne(5);
+    }
+    operation.GetAwaiter().GetResult();
+    Dispatcher.UIThread.RunJobs();
+}
 
 // テスト用の画像: グラデーションとカラーバー (色の評価に使う画面なので、無彩色の背景との見え方を確認する)
 static WriteableBitmap CreateTestImage(int w, int h)
@@ -76,4 +138,14 @@ static WriteableBitmap CreateTestImage(int w, int h)
         }
     }
     return bmp;
+}
+
+sealed class SnapshotServices(string outputDirectory) : IViewModelServices
+{
+    public string SettingsPath => Path.Combine(outputDirectory, "snapshot.settings.json");
+    public Task<string?> BrowseEncoderAsync() => Task.FromResult<string?>(null);
+    public Task<string?> BrowseInputAsync() => Task.FromResult<string?>(null);
+    public Task<string?> ChooseSaveFiltersAsync() => Task.FromResult<string?>(null);
+    public Task<string?> ChooseLoadFiltersAsync() => Task.FromResult<string?>(null);
+    public Task CopyTextAsync(string text) => Task.CompletedTask;
 }

@@ -68,6 +68,12 @@ public sealed class FrameCache
         }
     }
 
+    /// <summary>保存区間をすべて捨てる。F5の明示的な再実行で利用する。</summary>
+    public void Clear()
+    {
+        lock (_gate) { _entries.Clear(); _lru.Clear(); _sizeBytes = 0; }
+    }
+
     private void Remove(LinkedListNode<Entry> node)
     {
         _entries.Remove(node.Value.Key);

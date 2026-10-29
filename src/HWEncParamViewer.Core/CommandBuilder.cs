@@ -5,7 +5,10 @@ namespace HWEncParamViewer.Core;
 /// <summary>プレビュー要求 (設計書 3.3)。</summary>
 public sealed record PreviewRequest
 {
-    /// <summary>エンコーダの exe パス。引数配列には含めない (起動側が使う)。</summary>
+    /// <summary>呼び出し側の要求識別子。通知へ引き継ぐが、エンコード引数と画像キャッシュのキーには含めない。</summary>
+    public long CorrelationId { get; init; }
+
+    /// <summary>エンコーダのexeパス。引数配列には含めない（起動側が使う）。</summary>
     public string EncoderPath { get; init; } = "";
     public string InputFile { get; init; } = "";
     /// <summary>入力の追加引数。</summary>

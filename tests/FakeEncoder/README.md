@@ -21,6 +21,7 @@ run/cancel/quitとstdinのEOFに対応し、新しいrunは実行中の要求を
 |`--fake-step N`|フレーム番号をNずつ進め、間引いたXtsを出す|
 |`--fake-delay-ms N`|各フレームを出す前に指定ミリ秒待つ。テストの時間判定には使わない|
 |`--fake-gate PATH --fake-gate-after N`|フレーム番号N以降はPATHが作られるまで待つ。FileSystemWatcherで進行を同期する|
+|`--fake-duration VALUE`|入力ログと同じDuration行をフレームより前にstderrへ書く。N/Aや不正値も指定可能|
 |`--fake-stderr-bytes N`|要求開始時にstderrへN文字書き、パイプ詰まりを検証する|
 
 |環境変数|動作|
@@ -33,3 +34,5 @@ BackendTestsは実時間のsleepを使わず、出力イベント・パイプの
 実時間のWaitAsyncはテスト自体の無限停止を防ぐための上限だけに使う。
 
 `FAKE_ENCODER_LOG_READY_FILE`を指定すると、stderrへFAKEPIDを書き終えた直後に空ファイルを作る。タイムアウト検証でログ出力と偽時計の進行を同期するために使う。
+
+`--version`は`FakeEncoder 1.0`、`--help`は簡易ヘルプをstdoutへ出して即座に終了する。ViewModelのメタデータ取得とヘルプ表示の検証に使う。

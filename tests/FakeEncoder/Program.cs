@@ -23,6 +23,16 @@ internal static class Program
         Console.OutputEncoding = new UTF8Encoding(false);
         string? pidFile = Environment.GetEnvironmentVariable("FAKE_ENCODER_PID_FILE");
         if (!string.IsNullOrEmpty(pidFile)) await File.AppendAllTextAsync(pidFile, $"{Environment.ProcessId}\n");
+        if (args.Contains("--version", StringComparer.Ordinal))
+        {
+            await Console.Out.WriteLineAsync("FakeEncoder 1.0");
+            return 0;
+        }
+        if (args.Contains("--help", StringComparer.Ordinal))
+        {
+            await Console.Out.WriteLineAsync("  --vpp-nlmeans [params]\n    非局所平均によるノイズ除去。\n    sigma=<float> 強さ\n  --vpp-edgelevel [params]\n    エッジの調整。\n  --vpp-deband [params]\n    バンディングの低減。\n  --vpp-yadif [params]\n    インターレースの解除。");
+            return 0;
+        }
         if (!args.Contains("--preview-server", StringComparer.Ordinal))
         {
             return await EncodeAsync(args, CancellationToken.None);
@@ -127,6 +137,8 @@ internal static class Program
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\0", vpp)));
         double seek = ParseSeek(Value(args, "--seek"));
         await Console.Error.WriteLineAsync($"FAKEPID {Environment.ProcessId} seek={seek.ToString(CultureInfo.InvariantCulture)}");
+        string? duration = Value(args, "--fake-duration");
+        if (duration != null) await Console.Error.WriteLineAsync($"  Duration: {duration}, start: 0.000000, bitrate: 1000 kb/s");
         // ログ到着後に偽時計を進めるテスト用の同期点。
         string? logReadyFile = Environment.GetEnvironmentVariable("FAKE_ENCODER_LOG_READY_FILE");
         if (!string.IsNullOrEmpty(logReadyFile)) await File.WriteAllTextAsync(logReadyFile, "");

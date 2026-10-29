@@ -18,6 +18,18 @@ public class FrameCacheTests
         Y4mHeader.Parse("YUV4MPEG2 W2 H2 F30:1 C420"), 0, 1.0 / 30, new byte[bytes]);
 
     [Fact]
+    public void ClearDropsFramesAndResetsMemoryAccounting()
+    {
+        var cache = new FrameCache();
+        var request = new PreviewRequest { EncoderPath = "encoder", InputFile = "input", Fps = 30 };
+        cache.Store(request, new[] { new Y4mFrame(new Y4mHeader { Width = 2, Height = 2 }, 0, 1.0 / 30, new byte[6]) });
+        cache.Clear();
+        Assert.Equal(0, cache.Count);
+        Assert.Equal(0, cache.SizeBytes);
+        Assert.False(cache.TryGet(request, out _));
+    }
+
+    [Fact]
     public void 同じ値の引数配列なら同じ区間を取得する()
     {
         var cache = new FrameCache();

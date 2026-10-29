@@ -27,7 +27,7 @@ public sealed class InputProbeTests
         Assert.Equal(8, first.BitDepth);
         Assert.Equal("420jpeg", first.ColorSpaceTag);
         var command = Assert.Single(commands);
-        Assert.Equal(new[] { "--avhw", "-i", "input.ts", "--frames", "300", "-c", "raw", "--y4m-timestamp", "-o", "-" }, command);
+        Assert.Equal(new[] { "--avhw", "--log-level", "input=debug", "-i", "input.ts", "--frames", "300", "-c", "raw", "--y4m-timestamp", "-o", "-" }, command);
     }
 
     [Fact]
@@ -199,6 +199,61 @@ public sealed class InputProbeTests
     public void RejectsNonPositiveTimeout()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new InputProbe(timeout: TimeSpan.Zero));
+    }
+
+    [Theory]
+    [InlineData("  Duration: 00:00:10.00, start: 0", 10)]
+    [InlineData("  Duration: 01:52:30.25, start: 0", 6750.25)]
+    [InlineData("  Duration: 100:00:00.1234567, start: 0", 360000.1234567)]
+    [InlineData("  Duration: 00:00:00, start: 0", 0)]
+    [InlineData("\u001b[31m  Duration: \u001b[39m00:00:10.50\u001b[0m, start: 0", 10.5)]
+    public void DurationParserReadsInvariantTimeAndAnsiLogs(string log, double seconds)
+    {
+        TimeSpan? actual = InputProbe.ParseDuration(log);
+        Assert.NotNull(actual);
+        Assert.Equal(seconds, actual.Value.TotalSeconds, 7);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("fps: 30")]
+    [InlineData("  Duration: N/A, start: 0")]
+    [InlineData("  Duration: -01:00:00, start: 0")]
+    [InlineData("  Duration: 00:60:00, start: 0")]
+    [InlineData("  Duration: 00:00:60, start: 0")]
+    [InlineData("  Duration: 00:00:xx, start: 0")]
+    [InlineData("  Duration: 00:00:00.12345678, start: 0")]
+    [InlineData("  Duration: 999999999999999999999999:00:00, start: 0")]
+    [InlineData("  Duration: 999999999999:00:00, start: 0")]
+    public void DurationParserLeavesUnavailableOrInvalidDurationUnknown(string log)
+    {
+        Assert.Null(InputProbe.ParseDuration(log));
+    }
+
+    [Theory]
+    [InlineData("00:00:10.25", 10.25)]
+    [InlineData("100:00:00.00", 360000.0)]
+    [InlineData("N/A", null)]
+    [InlineData("invalid", null)]
+    public async Task ReadsDurationFromDrainedStandardError(string value, double? seconds)
+    {
+        await using var probe = new InputProbe();
+        var info = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts",
+            new[] { "--avhw", "--fake-duration", value, "--fake-hang-after", "1" }).WaitAsync(SafetyTimeout);
+        if (seconds.HasValue) Assert.Equal(TimeSpan.FromSeconds(seconds.Value), info.Duration);
+        else Assert.Null(info.Duration);
+    }
+
+    [Fact]
+    public void DurationParserDoesNotUseCurrentCulture()
+    {
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("fr-FR");
+            Assert.Equal(TimeSpan.FromMilliseconds(1250), InputProbe.ParseDuration("  Duration: 00:00:01.25, start: 0"));
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = previous; }
     }
 
     private static async Task WaitForFileAsync(string path)

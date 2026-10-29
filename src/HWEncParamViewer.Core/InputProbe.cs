@@ -1,11 +1,13 @@
 ﻿using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace HWEncParamViewer.Core;
 
-/// <summary>1フレームの入力検査で得た画像形式。長さやフレーム総数は含まない。</summary>
+/// <summary>最初のフレームと入力ログから得た画像形式と長さ。長さ不明の場合はDurationがnull。</summary>
 public sealed record InputInfo(int Width, int Height, int FpsNum, int FpsDen, int SarNum, int SarDen,
-    Y4mChroma Chroma, int BitDepth, string ColorSpaceTag)
+    Y4mChroma Chroma, int BitDepth, string ColorSpaceTag, TimeSpan? Duration = null)
 {
     public double Fps => FpsDen > 0 ? (double)FpsNum / FpsDen : 0;
 }
@@ -83,7 +85,7 @@ public sealed class InputProbe : IAsyncDisposable
             // fps未取得なので仮に1を使い、計画を300フレームに固定する。先頭の復号待ちを許し、取得後は即座に止める。
             var request = new PreviewRequest
             {
-                EncoderPath = encoderPath, InputFile = inputFile, InputArgs = arguments,
+                EncoderPath = encoderPath, InputFile = inputFile, InputArgs = arguments.Concat(new[] { "--log-level", "input=debug" }).ToArray(),
                 TargetSeconds = 0, PreMarginSeconds = 0, PostMarginSeconds = ProbeFrameLimit - 1, Fps = 1,
             };
             using var stopAfterFrame = new CancellationTokenSource();
@@ -116,11 +118,37 @@ public sealed class InputProbe : IAsyncDisposable
             if (!sink.HasFrame || sink.Header is not { } header || header.Fps <= 0 || !double.IsFinite(header.Fps))
                 throw new InputProbeException("入力情報の取得で有効なfps付きヘッダとフレームを受信できませんでした", -1, result.StandardError);
             var info = new InputInfo(header.Width, header.Height, header.FpsNum, header.FpsDen,
-                header.SarNum, header.SarDen, header.Chroma, header.BitDepth, header.ColorSpaceTag);
+                header.SarNum, header.SarDen, header.Chroma, header.BitDepth, header.ColorSpaceTag, ParseDuration(result.StandardError));
             _cache.Add(key, info);
             return info;
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>入力ログのDuration行を読む。N/A、欠落、不正な値やTimeSpanの範囲外ならnull。</summary>
+    public static TimeSpan? ParseDuration(string standardError)
+    {
+        ArgumentNullException.ThrowIfNull(standardError);
+        // ログ色指定が数値の前後へ入っても同じ値として読めるようにする。
+        string plain = Regex.Replace(standardError, @"\x1B\[[0-?]*[ -/]*[@-~]", "");
+        var line = Regex.Match(plain, @"\bDuration:\s*(?<value>[^,\r\n]*)", RegexOptions.CultureInvariant);
+        if (!line.Success) return null;
+        var match = Regex.Match(line.Groups["value"].Value.Trim(),
+            @"^(?<hours>[0-9]+):(?<minutes>[0-9]{2}):(?<seconds>[0-9]{2})(?:\.(?<fraction>[0-9]{1,7}))?$",
+            RegexOptions.CultureInvariant);
+        if (!match.Success
+            || !long.TryParse(match.Groups["hours"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out long hours)
+            || !int.TryParse(match.Groups["minutes"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int minutes) || minutes >= 60
+            || !int.TryParse(match.Groups["seconds"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int seconds) || seconds >= 60)
+            return null;
+        string fractionText = match.Groups["fraction"].Value.PadRight(7, '0');
+        int fraction = int.Parse(fractionText, NumberStyles.None, CultureInfo.InvariantCulture);
+        try
+        {
+            return TimeSpan.FromTicks(checked(hours * TimeSpan.TicksPerHour
+                + minutes * TimeSpan.TicksPerMinute + seconds * TimeSpan.TicksPerSecond + fraction));
+        }
+        catch (OverflowException) { return null; }
     }
 
     private static async Task<string> ReadDiagnosticsAsync(Task<PreviewRunResult> task)
