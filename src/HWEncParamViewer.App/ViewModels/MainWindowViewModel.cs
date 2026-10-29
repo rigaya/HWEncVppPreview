@@ -18,7 +18,7 @@ namespace HWEncParamViewer.App.ViewModels;
 
 /// <summary>画面の操作をCoreへ接続する。Viewと合意したプロパティ名・コマンド名を維持する。</summary>
 /// <remarks>Coreの通知ではUIの完了を待たず、PostでUIスレッドへ戻す。利用終了時はDisposeAsyncを呼ぶ。</remarks>
-public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
+public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 {
     private string _encoderPath = "", _inputPath = "", _encoderDescription = "", _inputArgsText = "--avhw";
     private FilterLineViewModel? _selectedFilterLine;
@@ -82,6 +82,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         LoadFiltersCommand = new RelayCommand(() => RunCommand(LoadFiltersAsync));
         CopyCommandLineCommand = new RelayCommand(() => RunCommand(() => _services.CopyTextAsync(EnabledOptionsText())));
         ToggleLogCommand = new RelayCommand(() => IsLogOpen = !IsLogOpen);
+        SetCompareModeCommand = new RelayCommand(parameter =>
+        {
+            if (parameter is PreviewCompareMode mode) CompareMode = mode;
+        });
     }
 
     public double WindowWidth { get; set; } = 1440;
