@@ -127,6 +127,32 @@
     <Setter Property="FontSize" Value="11" />
   </Style>
 
+  <!-- フィルタ行の補完の一覧 (設計書 21.7) -->
+  <Style Selector="Border.completion">
+    <Setter Property="Background" Value="{DynamicResource PaneBackgroundBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="BoxShadow" Value="0 4 12 0 #40000000" />
+    <Setter Property="Width" Value="460" />
+  </Style>
+  <Style Selector="ListBox.completion">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="MaxHeight" Value="320" />
+    <Setter Property="Padding" Value="0,0,0,4" />
+  </Style>
+  <Style Selector="ListBox.completion ListBoxItem">
+    <Setter Property="Padding" Value="10,3" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Focusable" Value="False" />
+  </Style>
+  <Style Selector="TextBlock.completionHeader">
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{DynamicResource SystemAccentColor}" />
+    <Setter Property="Margin" Value="0,4,0,0" />
+  </Style>
+
   <Style Selector="GridSplitter">
     <Setter Property="Background" Value="{DynamicResource DividerBrush}" />
   </Style>

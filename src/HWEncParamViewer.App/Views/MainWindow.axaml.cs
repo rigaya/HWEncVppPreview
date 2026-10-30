@@ -62,6 +62,9 @@ public partial class MainWindow : Window
             target.AddHandler(DragDrop.DragOverEvent, File_DragOver, handledEventsToo: true);
             target.AddHandler(DragDrop.DropEvent, File_Drop, handledEventsToo: true);
         }
+
+        // フィルタ行の補完と、数値の上下ドラッグ (設計書 21.7、MainWindow.Completion.cs)
+        InitializeCompletion();
     }
 
     private void StepFrames(int frames)
@@ -108,6 +111,7 @@ public partial class MainWindow : Window
         {
             ViewModel.SelectedFilterLine = line;
         }
+        if (sender is TextBox box) OpenCompletionIfEmpty(box);
     }
 
     private void FilterLine_PointerWheelChanged(object? sender, PointerWheelEventArgs e)

@@ -7,6 +7,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using HWEncParamViewer.App.ViewModels;
 using HWEncParamViewer.App.Views;
 
@@ -84,6 +85,50 @@ Capture("dark_zoom_toggle_before", ThemeVariant.Dark, vm =>
     var viewer = window.FindControl<HWEncParamViewer.App.Controls.ZoomPanViewer>("MainViewer")!;
     viewer.Zoom = new HWEncParamViewer.App.Controls.ZoomState(false, 8.0, new Point(275, 720));
 });
+
+// V6: フィルタ行の補完
+CaptureCompletion("dark_completion_option_category", ThemeVariant.Dark, "", category: true);
+CaptureCompletion("dark_completion_option_typing", ThemeVariant.Dark, "--vpp-n");
+CaptureCompletion("dark_completion_parameter", ThemeVariant.Dark, "--vpp-kfm ");
+CaptureCompletion("light_completion_value", ThemeVariant.Light, "--vpp-kfm mode=");
+
+void CaptureCompletion(string name, ThemeVariant theme, string text, bool category = false)
+{
+    Application.Current!.RequestedThemeVariant = theme;
+    var vm = MainWindowViewModel.CreateDesignSample();
+    vm.PreviewImage = CreateTestImage(1440, 1080);
+    // デザイン用の ViewModel はエンコーダを実行しないので、H1 の書式の実 help を直接与える (開発用ツールなのでリフレクションで足りる)
+    typeof(MainWindowViewModel).GetProperty(nameof(MainWindowViewModel.HelpSchema))!
+        .SetValue(vm, new HWEncParamViewer.Core.HelpSchema(File.ReadAllText(HelpDataPath("qsvenc-h1.txt"))));
+    var line = new FilterLineViewModel { Text = text };
+    vm.FilterLines.Add(line);
+    var window = new MainWindow { DataContext = vm, Width = 1440, Height = 900 };
+    window.Show();
+    Dispatcher.UIThread.RunJobs();
+    var box = window.GetVisualDescendants().OfType<TextBox>().First(t => t.Classes.Contains("filterLine") && ReferenceEquals(t.DataContext, line));
+    window.Activate();
+    box.Focus();
+    box.CaretIndex = text.Length;
+    Dispatcher.UIThread.RunJobs();
+    if (category) window.FindControl<Button>("OrderCategoryButton")!.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+    window.KeyPress(Avalonia.Input.Key.Space, Avalonia.Input.RawInputModifiers.Control, Avalonia.Input.PhysicalKey.Space, null);
+    Dispatcher.UIThread.RunJobs();
+    // Headless ではポップアップがウィンドウ内に重ねて描かれるので、ウィンドウの撮影だけで一覧も写る
+    bool popupOpen = window.FindControl<Avalonia.Controls.Primitives.Popup>("CompletionPopup")!.IsOpen;
+#pragma warning disable CS0618 // 開発用ツールなので、PNG 保存は簡単な旧 API で十分
+    using (var frame = window.CaptureRenderedFrame()) frame!.Save(Path.Combine(outDir, name + ".png"));
+#pragma warning restore CS0618
+    window.Close();
+    Pump(vm.DisposeAsync().AsTask());
+    Console.WriteLine(name + (popupOpen ? "" : " (補完の一覧が開いていない)"));
+}
+
+static string HelpDataPath(string file)
+{
+    var directory = new DirectoryInfo(AppContext.BaseDirectory);
+    while (directory != null && !Directory.Exists(Path.Combine(directory.FullName, "tests", "Data", "help"))) directory = directory.Parent;
+    return Path.Combine(directory?.FullName ?? throw new DirectoryNotFoundException("tests/Data/help"), "tests", "Data", "help", file);
+}
 
 // 実行入口と同じViewModel経路で取得した画像を、デザイン用の生成画像とは別名で保存する。
 string? encoder = Option(args, "--encoder");
