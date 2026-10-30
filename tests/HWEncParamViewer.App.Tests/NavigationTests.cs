@@ -62,14 +62,16 @@ public sealed class NavigationTests(ITestOutputHelper output)
         }
         output.WriteLine($"押下中3003ms: 画像変化={imageChanges}, backend開始={backend.Starts - initialStarts}, cancel={backend.Cancels - initialCancels}, 目標={vm.CurrentSeconds:F6}, 単調={targets.Zip(targets.Skip(1)).All(pair => pair.First <= pair.Second)}");
         Assert.True(imageChanges >= 2, $"押下中の画像変化は{imageChanges}回、backend開始は{backend.Starts - initialStarts}回。期待は2回以上。");
-        Assert.True(targets.Zip(targets.Skip(1)).All(pair => pair.First < pair.Second));
+        Assert.True(targets.Zip(targets.Skip(1)).All(pair => pair.First <= pair.Second));
+        Assert.True(targets[^1] > targets[0]);
         Assert.True(displayedLevels.Zip(displayedLevels.Skip(1)).All(pair => pair.First <= pair.Second));
-        await DrainToImageAsync(vm, clock, backend, ExpectedHash(91));
-        Assert.Equal(91.0 / 30, vm.CurrentSeconds, 7);
+        // 区間外の隣を取り直す間の反復は加算せず、最後に確定した最新目標へ追い付く。
+        await DrainNavigationAsync(vm, clock);
+        Assert.Equal(ExpectedHash((int)Math.Round(vm.CurrentSeconds * 30)), ImageHash(vm));
     }
 
     [AvaloniaFact]
-    public async Task FrameStepTargetAdvancesBeyondTheDisplayedCachedFrameWhileEncodingIsPending()
+    public async Task FrameStepTargetDoesNotRegressWhileANeighborRefetchIsPending()
     {
         var clock = new FakeTimeProvider();
         await using var backend = new TimedBackend(clock);
@@ -87,8 +89,10 @@ public sealed class NavigationTests(ITestOutputHelper output)
             await vm.WaitForPreparationAsync().WaitAsync(Safety);
             await UiBarrierAsync();
         }
-        Assert.True(targets.Zip(targets.Skip(1)).All(pair => pair.First < pair.Second));
-        Assert.Equal(10.0 / 30, vm.CurrentSeconds, 7);
+        Assert.True(targets.Zip(targets.Skip(1)).All(pair => pair.First <= pair.Second));
+        Assert.Equal(1.0 / 30, vm.CurrentSeconds, 7);
+        await DrainNavigationAsync(vm, clock);
+        Assert.Equal(2.0 / 30, vm.CurrentSeconds, 7);
     }
 
     [AvaloniaFact]
@@ -245,7 +249,9 @@ public sealed class NavigationTests(ITestOutputHelper output)
         await vm.WaitForPreparationAsync().WaitAsync(Safety);
         await backend.NextStartAsync();
         Assert.Equal(cancels + 1, backend.Cancels);
-        Assert.Equal(original, ImageHash(vm));
+        // LRU容量0でも現在の完了区間を保持するので、既知の隣は即座に表示できる。
+        Assert.NotEqual(original, ImageHash(vm));
+        Assert.Equal(ExpectedHash(1), ImageHash(vm));
         clock.Advance(TimeSpan.FromMilliseconds(400));
         await WaitUntilAsync(() => ImageHash(vm) == ExpectedHash(1));
         Assert.Equal(1.0 / 30, vm.CurrentSeconds, 7);
@@ -316,7 +322,8 @@ public sealed class NavigationTests(ITestOutputHelper output)
             Assert.Equal("エラー", vm.StatusText);
             Assert.NotNull(vm.ErrorText);
             Assert.Contains("23", vm.LogText);
-            Assert.Equal(1.0 / 30, vm.CurrentSeconds, 7);
+            // 未取得の隣の時刻は推測せず、入力検査の失敗を最新意図へ返す。
+            Assert.Equal(0, vm.CurrentSeconds, 7);
             Assert.Equal(0, backend.Starts);
         }
         finally { Directory.Delete(directory, recursive: true); }
@@ -331,6 +338,22 @@ public sealed class NavigationTests(ITestOutputHelper output)
         byte value = (byte)(16 + index % 200);
         var frame = new Y4mFrame(header, 0, 1.0 / 30, new byte[] { value, value, value, value, 128, 128 });
         return Convert.ToHexString(SHA256.HashData(YuvToBgra.Convert(frame)));
+    }
+
+    private static async Task DrainNavigationAsync(MainWindowViewModel vm, FakeTimeProvider clock)
+    {
+        Task idle = vm.WaitForIdleAsync();
+        async Task DrainAsync()
+        {
+            while (!idle.IsCompleted)
+            {
+                clock.Advance(TimeSpan.FromMilliseconds(400));
+                await UiBarrierAsync();
+                await UiBarrierAsync();
+            }
+            await idle;
+        }
+        await DrainAsync().WaitAsync(Safety);
     }
 
     private static async Task DrainToImageAsync(MainWindowViewModel vm, FakeTimeProvider clock, TimedBackend backend, string expected)

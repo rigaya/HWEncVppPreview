@@ -164,10 +164,10 @@ public sealed partial class MainWindowViewModel
     {
         if (frames.Count == 0) return null;
         double target = CommandBuilder.Plan(request).ActualPreMargin;
-        int index = FrameSelector.Select(frames.Select(frame => new FrameTiming(frame.Xts, frame.Xdur)).ToArray(), target, request.Fps);
+        int index = FrameSelector.Select(frames, target, request.Fps);
         var last = frames.LastOrDefault(frame => frame.Xts.HasValue) ?? frames[^1];
-        double lastTime = last.Xts ?? (frames.Count - 1) / request.Fps;
-        if (lastTime + (last.Xdur ?? 1 / request.Fps) / 2 < target) index = frames.Count - 1;
+        double lastTime = last.Xts ?? (frames.Count - 1) / FrameSelector.FrameRate(last, request.Fps);
+        if (lastTime + FrameSelector.Duration(last, request.Fps) / 2 < target) index = frames.Count - 1;
         return index < 0 ? null : frames[index];
     }
 

@@ -270,7 +270,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private void OnFrameReady(PreviewFrameResult value)
     {
         var context = ContextFor(value.Request);
-        if (context == null) return;
+        if (context == null || context.NeighborDirection != 0) return;
         Dispatcher.UIThread.Post(() =>
         {
             if (!IsCurrent(context)) return;
@@ -282,7 +282,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         var context = ContextFor(value.Request);
         if (context == null) return;
-        _cache.TryGet(value.Request, out var frames);
+        IReadOnlyList<Y4mFrame> frames = value.Frames;
+        if (frames.Count == 0) _cache.TryGet(value.Request, out frames);
         if (context.Kind == RequestKind.After) _afterRequests.TryRemove(context.Generation, out _);
         Dispatcher.UIThread.Post(() =>
         {
@@ -298,6 +299,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             _intervalRequest = value.Request;
             _intervalFrames = frames;
             _lastCompletedAfter = Math.Max(_lastCompletedAfter, context.Generation);
+            var afterRequest = context.NeighborDirection != 0 ? CompleteNeighbor(context, frames) : value.Request;
             if (frames.Count == 0 && context.Generation == Volatile.Read(ref _generation) && _lastQueuedAfter < context.Generation)
             { _lastFailedAfter = context.Generation; ShowError("表示できるフレームがありません", value.Result.StandardError); return; }
             ErrorText = null;
@@ -306,8 +308,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             ElapsedText = $"{_clock.GetElapsedTime(context.Started).TotalSeconds:0.00}秒";
             if (context.Generation == Volatile.Read(ref _generation))
             {
-                _completedAfterStatus = value.TargetNotReached ? "完了（目標時刻に届かなかったため最終フレームを表示）" : value.FromCache ? "完了（キャッシュ）" : "完了";
-                QueueBefore(value.Request, context.Generation);
+                if (afterRequest != null)
+                    _completedAfterStatus = value.TargetNotReached ? "完了（目標時刻に届かなかったため最終フレームを表示）" : value.FromCache ? "完了（キャッシュ）" : "完了";
+                QueueBefore(afterRequest ?? value.Request, context.Generation);
             }
             UpdateNavigationStatus();
         });
@@ -330,6 +333,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                 return;
             }
             if (context.Generation != Volatile.Read(ref _generation)) return;
+            if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
             _lastFailedAfter = context.Generation;
             if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = context.Mode;
             ElapsedText = $"{_clock.GetElapsedTime(context.Started).TotalSeconds:0.00}秒";
@@ -353,7 +357,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     private void StepFrame(int direction)
     {
-        if (direction == 0) return;
+        if (direction == 0 || _pendingNeighbor != null) return;
         direction = Math.Sign(direction);
         if (_intervalRequest is { } interval && _intervalFrames.Count > 0)
         {
@@ -363,23 +367,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             var first = _intervalFrames[0];
             var last = _intervalFrames[^1];
             double firstTime = first.Xts ?? 0;
-            double lastTime = last.Xts ?? (_intervalFrames.Count - 1) / interval.Fps;
-            double tolerance = (last.Xdur ?? 1 / interval.Fps) / 2;
+            double lastTime = last.Xts ?? (_intervalFrames.Count - 1) / FrameSelector.FrameRate(last, interval.Fps);
+            double tolerance = FrameSelector.Duration(last, interval.Fps) / 2;
             if (target >= firstTime - tolerance && target <= lastTime + tolerance)
             {
-                int current = FrameSelector.Select(_intervalFrames.Select(frame => new FrameTiming(frame.Xts, frame.Xdur)).ToArray(), target, interval.Fps);
+                int current = NeighborAnchorIndex(_intervalFrames, target, interval.Fps);
                 int next = current + direction;
                 if (current >= 0 && next >= 0 && next < _intervalFrames.Count)
                 {
                     var frame = _intervalFrames[next];
-                    double seconds = seek + (frame.Xts ?? next / interval.Fps);
+                    double seconds = FrameSeconds(interval, frame, next);
                     if ((seconds - CurrentSeconds) * direction > 1e-9)
                     { DisplayCached(frame, seconds); return; }
                 }
             }
         }
-        double fps = _displayedFrame?.Header.Fps > 0 ? _displayedFrame.Header.Fps : _inputInfo?.Fps ?? 30;
-        SeekTo(CurrentSeconds + direction / fps);
+        // 取り直し中のキー反復は加算せず、実際の隣が届くまで目標を保つ。
+        if (!_initialized)
+        {
+            // 入力を開く前の操作は、表示位置だけを仮に動かす。
+            SeekTo(CurrentSeconds + direction / (_inputInfo?.Fps ?? 30));
+            return;
+        }
+        _ = QueuePreview(navigation: true, neighborDirection: direction);
     }
     private void DisplayCached(Y4mFrame frame, double seconds)
     {
@@ -590,13 +600,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     }
     private enum RequestKind { After, Before }
     private sealed class RequestContext(long generation, PreviewRequest request, long started, RequestKind kind = RequestKind.After,
-        CancellationTokenSource? beforeCancellation = null, long editEpoch = 0)
+        CancellationTokenSource? beforeCancellation = null, long editEpoch = 0, int neighborDirection = 0)
     {
         public long Generation { get; } = generation;
         public PreviewRequest Request { get; } = request;
         public long Started { get; } = started;
         public RequestKind Kind { get; } = kind;
         public long EditEpoch { get; } = editEpoch;
+        public int NeighborDirection { get; } = neighborDirection;
         public CancellationTokenSource? BeforeCancellation { get; } = beforeCancellation;
         public string Mode { get; set; } = "";
         public string Diagnostics { get; set; } = "";

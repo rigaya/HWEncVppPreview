@@ -76,6 +76,7 @@ public static class Program
         var plan = CommandBuilder.Plan(request);
         if (plan.FrameCount <= 0 || (plan.ActualPreMargin + options.PostMargin) * input.Fps > int.MaxValue - 1)
             throw new ArgumentException("要求区間のフレーム数が大きすぎます");
+        result.InputFps = input.Fps;
         result.SeekSeconds = plan.SeekSeconds;
         result.Frames = plan.FrameCount;
         var recording = new Recording();
@@ -129,7 +130,7 @@ public static class Program
         result.Rc = completion.Result.ExitCode;
         result.Sha256 = Convert.ToHexStringLower(SHA256.HashData(selected.Frame.Data));
         if (options.Dump != null) await File.WriteAllBytesAsync(options.Dump, selected.Frame.Data, cancellationToken).ConfigureAwait(false);
-        if (options.DumpY4m != null) await DumpY4mAsync(options.DumpY4m, recording.Frames, cancellationToken).ConfigureAwait(false);
+        if (options.DumpY4m != null) await DumpY4mAsync(options.DumpY4m, recording.Frames, input.Fps, cancellationToken).ConfigureAwait(false);
     }
 
     private static string Tail(string text) => text.Length <= 8192 ? text : text[^8192..];
@@ -138,7 +139,7 @@ public static class Program
         Y4mChroma.C420 => "420", Y4mChroma.C422 => "422", Y4mChroma.C444 => "444", _ => "mono",
     };
 
-    private static async Task DumpY4mAsync(string path, IReadOnlyList<Y4mFrame> frames, CancellationToken token)
+    private static async Task DumpY4mAsync(string path, IReadOnlyList<Y4mFrame> frames, double requestedFps, CancellationToken token)
     {
         await using var output = File.Create(path);
         if (frames.Count == 0) return;
@@ -150,8 +151,8 @@ public static class Program
         for (int i = 0; i < frames.Count; ++i)
         {
             var frame = frames[i];
-            double timestamp = frame.Xts ?? i / header.Fps;
-            double duration = frame.Xdur ?? 1.0 / header.Fps;
+            double timestamp = frame.Xts ?? i / FrameSelector.FrameRate(frame, requestedFps);
+            double duration = FrameSelector.Duration(frame, requestedFps);
             line = string.Create(CultureInfo.InvariantCulture, $"FRAME Xts={timestamp:R} Xdur={duration:R}\n");
             await output.WriteAsync(Encoding.ASCII.GetBytes(line), token).ConfigureAwait(false);
             await output.WriteAsync(frame.Data, token).ConfigureAwait(false);
@@ -273,6 +274,7 @@ public static class Program
         public int? BitDepth { get; set; }
         public string? Sha256 { get; set; }
         public double? SeekSeconds { get; set; }
+        public double? InputFps { get; set; }
         public int? Frames { get; set; }
         public double ElapsedMs { get; set; }
         public string? Error { get; set; }

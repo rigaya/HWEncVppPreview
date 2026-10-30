@@ -118,6 +118,14 @@ internal static class Program
     {
         int count = Number(args, "--frames", 1);
         int step = Math.Max(1, Number(args, "--fake-step", args.Contains("--vpp-decimate", StringComparer.Ordinal) ? 2 : 1));
+        string? outputRate = Value(args, "--fake-output-rate");
+        if (outputRate is not (null or "double" or "film" or "vfr"))
+        {
+            await Console.Error.WriteLineAsync("FAKE invalid output rate");
+            return -24;
+        }
+        bool noDuration = args.Contains("--fake-no-xdur", StringComparer.Ordinal);
+        int outputFps = outputRate is "double" or "vfr" ? 60 : outputRate == "film" ? 24 : 30;
         int width = 64, height = 36;
         string? outputSize = Value(args, "--output-res");
         if (outputSize != null)
@@ -163,10 +171,11 @@ internal static class Program
         {
             if (count > 0)
             {
-                await WriteLineAsync($"YUV4MPEG2 W{width} H{height} F30:1 Ip A{sar} C420jpeg XTIMEBASE=1:30 XPID={Environment.ProcessId} XSEEK={seek.ToString(CultureInfo.InvariantCulture)}");
+                await WriteLineAsync($"YUV4MPEG2 W{width} H{height} F{outputFps}:1 Ip A{sar} C420jpeg XTIMEBASE=1:{outputFps} XPID={Environment.ProcessId} XSEEK={seek.ToString(CultureInfo.InvariantCulture)}");
             }
-            for (int i = 0; i < count; i += step)
+            foreach (var frame in OutputFrames(count, step, seek, outputRate, outputFps))
             {
+                int i = frame.Index;
                 effectiveToken.ThrowIfCancellationRequested();
                 if (badControlAt == i)
                 {
@@ -176,7 +185,9 @@ internal static class Program
                 if (hangAfter >= 0 && i >= hangAfter) await Task.Delay(Timeout.Infinite, effectiveToken);
                 if (gate != null && i >= gateAfter) await WaitForFileAsync(gate, effectiveToken);
                 if (delayMs > 0) await Task.Delay(delayMs, effectiveToken);
-                await WriteLineAsync(string.Create(CultureInfo.InvariantCulture, $"FRAME Xts={i / 30.0:F9} Xdur={step / 30.0:F9}"));
+                string timestamp = frame.Time.ToString(outputRate == null ? "F9" : "R", CultureInfo.InvariantCulture);
+                string durationTag = noDuration ? "" : string.Create(CultureInfo.InvariantCulture, $" Xdur={frame.Duration:F9}");
+                await WriteLineAsync($"FRAME Xts={timestamp}{durationTag}");
                 var data = new byte[width * height + 2 * ((width + 1) / 2) * ((height + 1) / 2)];
                 for (int j = 0; j < data.Length; j++) data[j] = (byte)(hash[j % hash.Length] + i);
                 if (crashAt == i)
@@ -203,6 +214,29 @@ internal static class Program
         {
             return -12;
         }
+    }
+
+    // レート変更時も--framesは入力枚数で数え、seekをまたいだ時刻と画素の対応を保つ。
+    private static IEnumerable<(int Index, double Time, double Duration)> OutputFrames(int count, int step,
+        double seek, string? rate, int fps)
+    {
+        if (rate == null)
+        {
+            for (int i = 0; i < count; i += step) yield return (i, i / 30.0, step / 30.0);
+            yield break;
+        }
+        double Timestamp(int index)
+        {
+            if (rate != "vfr") return index / (double)fps;
+            // 最短間隔は1/60秒。1周期に2・3・1・4tickを並べた不規則な時刻列。
+            int[] offsets = [0, 2, 5, 6];
+            return (index / 4 * 10 + offsets[index % 4]) / 60.0;
+        }
+        int first = rate == "vfr" ? (int)Math.Floor(seek * 6) * 4 : (int)Math.Floor(seek * fps);
+        while (Timestamp(first) < seek - 1e-9) ++first;
+        double end = seek + count / 30.0;
+        for (int i = first; Timestamp(i) < end - 1e-9; i += step)
+            yield return (i, Timestamp(i) - seek, Timestamp(i + step) - Timestamp(i));
     }
 
     private static async Task WaitForFileAsync(string path, CancellationToken token)

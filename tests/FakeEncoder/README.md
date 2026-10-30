@@ -40,3 +40,5 @@ BackendTestsは実時間のsleepを使わず、出力イベント・パイプの
 V5の比較用に`--fake-sar 4:3`でSARを指定できる。`--output-res WxH`は実際のヘッダとフレームデータの大きさを変更する。`--vpp-decimate`を指定した要求は既定で2枚ごとの出力にし、VPP引数が空の要求とのフレーム数・時刻選択の差を再現する。`--fake-step`を明示した場合はそちらを優先する。
 
 `--fake-duration-at-exit`は`--fake-duration`の行を正常終了・非0終了の直前まで遅らせる。最初のフレーム受信で強制停止すると、この行は出ない。`--fake-duration-exit-gate <ファイル>`を併用すると、終了ログの直前でファイル作成を待つ。`FAKE_ENCODER_DURATION_EXIT_READY_FILE`を指定すると、その待機点へ到達したことを空ファイルで通知する。
+
+V5.2のレート変更用に`--fake-output-rate double|film|vfr`を指定できる。入力は30fpsとして`--frames`を数え、doubleは60fps、filmは24fps、vfrはヘッダ60fpsで間隔2・3・1・4tick（1tick=1/60秒）を繰り返す。変更時の画素番号と時刻列はseek前後で同じ入力位置を表す。`--fake-no-xdur`は全フレームのXdurを省略する。VPP引数側に指定すると入力検査は30fpsのままで、フィルタ後だけ出力レートを変える条件を再現できる。

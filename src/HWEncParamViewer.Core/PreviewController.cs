@@ -1,7 +1,11 @@
 ﻿namespace HWEncParamViewer.Core;
 
 public sealed record PreviewFrameResult(PreviewRequest Request, Y4mFrame Frame, bool TargetNotReached);
-public sealed record PreviewCompletion(PreviewRequest Request, PreviewRunResult Result, bool FromCache, bool TargetNotReached);
+public sealed record PreviewCompletion(PreviewRequest Request, PreviewRunResult Result, bool FromCache, bool TargetNotReached)
+{
+    /// <summary>成功した区間の全フレーム。LRUに保存されない区間でも、現在位置の前後を選べるようにする。</summary>
+    public IReadOnlyList<Y4mFrame> Frames { get; init; } = Array.Empty<Y4mFrame>();
+}
 public sealed record PreviewFailure(PreviewRequest Request, string Reason, PreviewRunResult? Result = null, Exception? Exception = null);
 
 /// <summary>最新要求の実行、画像選択、キャッシュを管理する。イベントは処理中のスレッドで通知するため、GUI側でディスパッチする。</summary>
@@ -138,7 +142,7 @@ public sealed class PreviewController : IAsyncDisposable
             {
                 foreach (var frame in frames) sink.OnFrame(frame);
                 sink.Finish();
-                Notify(version, navigation, () => Completed?.Invoke(new(request, new(0, ""), true, sink.TargetNotReached)));
+                Notify(version, navigation, () => Completed?.Invoke(new(request, new(0, ""), true, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly() }));
                 return;
             }
             IPreviewBackend backend = _unsupported.Contains(request.EncoderPath) ? _fallback : _preferred;
@@ -164,7 +168,7 @@ public sealed class PreviewController : IAsyncDisposable
             }
             sink.Finish();
             _cache.Store(request, sink.Frames);
-            Notify(version, navigation, () => Completed?.Invoke(new(request, result, false, sink.TargetNotReached)));
+            Notify(version, navigation, () => Completed?.Invoke(new(request, result, false, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly() }));
 
             async Task<PreviewRunResult> RunWithFallbackAsync()
             {
@@ -242,7 +246,7 @@ public sealed class PreviewController : IAsyncDisposable
             // 一部だけ時刻が欠ける場合、V1と同じく欠落フレームを選択対象にしない。
             if (frame.Xts is not double ts) return;
             _hasTimestamp = true;
-            double tolerance = (frame.Xdur ?? 1.0 / request.Fps) / 2.0;
+            double tolerance = FrameSelector.Duration(frame, request.Fps) / 2.0;
             _lastTime = Math.Max(_lastTime, ts);
             if (ts <= _target + tolerance && ts > _candidateTime)
             {
@@ -257,11 +261,11 @@ public sealed class PreviewController : IAsyncDisposable
             if (!_hasTimestamp)
             {
                 // 全フレームが時刻なしと判明するのは終端なので、fpsによる代替選択はここで行う。
-                _candidate = FrameSelector.Select(Frames.Select(f => new FrameTiming(f.Xts, f.Xdur)).ToArray(), _target, request.Fps);
-                _lastTime = (Frames.Count - 1) / request.Fps;
+                _candidate = FrameSelector.Select(Frames, _target, request.Fps);
+                _lastTime = (Frames.Count - 1) / FrameSelector.FrameRate(Frames[^1], request.Fps);
             }
             var lastTimed = Frames.LastOrDefault(f => f.Xts.HasValue) ?? Frames[^1];
-            double tolerance = (lastTimed.Xdur ?? 1.0 / request.Fps) / 2.0;
+            double tolerance = FrameSelector.Duration(lastTimed, request.Fps) / 2.0;
             TargetNotReached = _lastTime + tolerance < _target;
             if (TargetNotReached) _candidate = Frames.Count - 1;
             Confirm(TargetNotReached);

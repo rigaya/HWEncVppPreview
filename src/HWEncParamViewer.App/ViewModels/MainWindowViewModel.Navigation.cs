@@ -12,11 +12,13 @@ public sealed partial class MainWindowViewModel
     private string _completedAfterStatus = "完了";
     private ImageWork? _pendingAfterImage, _pendingBeforeImage;
     private bool _conversionActive;
+    private NeighborIntent? _pendingNeighbor;
 
     private long BeginIntent(bool navigation)
     {
         long generation = Interlocked.Increment(ref _generation);
         _latestIntentNavigation = navigation;
+        _pendingNeighbor = null;
         Volatile.Write(ref _context, null);
         CancelBefore();
         if (!navigation)
@@ -34,11 +36,12 @@ public sealed partial class MainWindowViewModel
         Volatile.Write(ref _context, context);
     }
 
-    private Task QueuePreview(bool bypassCache = false, bool navigation = false)
+    private Task QueuePreview(bool bypassCache = false, bool navigation = false, int neighborDirection = 0)
     {
         if (!_initialized || _suspendChanges || _disposed) return Task.CompletedTask;
         long generation = BeginIntent(navigation);
         long editEpoch = Volatile.Read(ref _editEpoch);
+        if (neighborDirection != 0) _pendingNeighbor = new NeighborIntent(generation, neighborDirection);
         // 入力検査中の移動連打では検査そのものを止めず、取得後の最新位置だけを使う。
         if (navigation && _inputInfo == null && _preparationCancellation != null)
         { IsBusy = true; StatusText = "処理中…"; return _preparation; }
@@ -57,6 +60,7 @@ public sealed partial class MainWindowViewModel
         }
         if (string.IsNullOrWhiteSpace(encoder) || string.IsNullOrWhiteSpace(input))
         {
+            _pendingNeighbor = null;
             IsBusy = false;
             ErrorText = null;
             StatusText = "エンコーダと入力ファイルを選択してください";
@@ -108,8 +112,9 @@ public sealed partial class MainWindowViewModel
                     bool squarePixel = info.SarNum <= 0 || info.SarDen <= 0 || info.SarNum == info.SarDen;
                     string sar = squarePixel ? "" : $" (SAR {info.SarNum}:{info.SarDen})";
                     InputInfoText = $"{info.Width}x{info.Height}{sar}  {info.Fps:0.###}fps";
+                    var neighbor = _pendingNeighbor?.Generation == actualGeneration ? _pendingNeighbor : null;
                     var context = new RequestContext(actualGeneration, request, _clock.GetTimestamp(),
-                        editEpoch: editEpoch);
+                        editEpoch: editEpoch, neighborDirection: neighbor?.Direction ?? 0);
                     RegisterContext(context);
                     StatusText = "処理中…";
                     _controller.Submit(request, bypassCache, navigation: actualNavigation);
@@ -129,6 +134,7 @@ public sealed partial class MainWindowViewModel
                 {
                     if (_disposed || editEpoch != Volatile.Read(ref _editEpoch) || cancellation.IsCancellationRequested) return;
                     if (!IsCurrent(generation) && !_latestIntentNavigation) return;
+                    _pendingNeighbor = null;
                     _lastFailedAfter = Volatile.Read(ref _generation);
                     ShowError(exception.Message, diagnostics);
                 }).ConfigureAwait(false);
@@ -256,6 +262,45 @@ public sealed partial class MainWindowViewModel
         PreviewImage = afterBitmap;
         UpdateNavigationStatus();
     }
+
+    // 入力fpsから時刻を推測せず、取り直した実フレーム列の隣へ1回だけ動かす。
+    private PreviewRequest? CompleteNeighbor(RequestContext context, IReadOnlyList<Y4mFrame> frames)
+    {
+        if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
+        var request = context.Request;
+        int index = NeighborAnchorIndex(frames, CommandBuilder.Plan(request).ActualPreMargin, request.Fps);
+        int next = index + context.NeighborDirection;
+        if (index >= 0 && next >= 0 && next < frames.Count)
+        {
+            var frame = frames[next];
+            double seconds = FrameSeconds(request, frame, next);
+            // 明示的なシークが後から来た場合は、途中画像を表示しても最新の目標は戻さない。
+            if (IsCurrent(context.Generation)) SetTimeOnly(seconds);
+            DisplayFrame(frame, context);
+            return RetargetInterval(request, seconds);
+        }
+        if (IsCurrent(context.Generation))
+        {
+            _lastDisplayedAfter = Math.Max(_lastDisplayedAfter, context.Generation);
+            _completedAfterStatus = context.NeighborDirection < 0 ? "先頭" : "終端";
+        }
+        return null;
+    }
+
+    private static int NeighborAnchorIndex(IReadOnlyList<Y4mFrame> frames, double target, double requestedFps)
+    {
+        // 既知フレームの隣は同じXtsを優先する。表示時間の許容幅で細かい間隔を飛ばさない。
+        // seekとF9形式のXtsを足し戻した丸め誤差だけを吸収する。
+        for (int i = 0; i < frames.Count; ++i)
+            if (frames[i].Xts is double ts && Math.Abs(ts - target) <= 1e-8) return i;
+        return FrameSelector.Select(frames, target, requestedFps);
+    }
+
+    private static double FrameSeconds(PreviewRequest request, Y4mFrame frame, int index) =>
+        (CommandBuilder.Plan(request).SeekSeconds ?? 0) +
+        (frame.Xts ?? index / FrameSelector.FrameRate(frame, request.Fps));
+
+    private sealed record NeighborIntent(long Generation, int Direction);
 
     private sealed record ImageWork(Y4mFrame Frame, long Generation, long EditEpoch,
         bool Before = false, long BeforeVersion = 0, bool FinishBeforeBusy = false);
