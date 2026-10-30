@@ -30,6 +30,12 @@ internal static class Program
         }
         if (args.Contains("--help", StringComparer.Ordinal))
         {
+            string? helpFile = Environment.GetEnvironmentVariable("FAKE_ENCODER_HELP_FILE");
+            if (!string.IsNullOrEmpty(helpFile))
+            {
+                await Console.Out.WriteAsync(await File.ReadAllTextAsync(helpFile));
+                return 0;
+            }
             await Console.Out.WriteLineAsync("  --vpp-nlmeans [params]\n    非局所平均によるノイズ除去。\n    sigma=<float> 強さ\n  --vpp-edgelevel [params]\n    エッジの調整。\n  --vpp-deband [params]\n    バンディングの低減。\n  --vpp-yadif [params]\n    インターレースの解除。");
             return 0;
         }

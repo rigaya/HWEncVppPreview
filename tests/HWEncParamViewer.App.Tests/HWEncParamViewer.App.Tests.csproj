@@ -21,4 +21,7 @@
     <ProjectReference Include="..\FakeEncoder\FakeEncoder.csproj" ReferenceOutputAssembly="false" />
     <Compile Include="..\HWEncParamViewer.Tests\FakeTimeProvider.cs" Link="Testing\FakeTimeProvider.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\Data\help\**" Link="Data\help\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

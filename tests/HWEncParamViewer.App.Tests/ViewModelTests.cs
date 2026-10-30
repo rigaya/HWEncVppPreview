@@ -239,6 +239,53 @@ public sealed class ViewModelTests
         Assert.False(vm.IsBusy);
     }
 
+    [AvaloniaFact]
+    public async Task HelpSchemaLoadsWithHelpAndIsRebuiltAfterEncoderChanges()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        await using var vm = Create(services, clock);
+        vm.InputPath = "";
+        var line = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.1" };
+        vm.FilterLines.Add(line);
+        vm.SelectedFilterLine = line;
+        Assert.Null(vm.HelpSchema);
+        await InitializeAsync(vm, clock);
+        var first = Assert.IsType<HelpSchema>(vm.HelpSchema);
+        Assert.NotNull(first.Lookup("--vpp-nlmeans"));
+        Assert.Contains("--vpp-nlmeans", vm.HelpText);
+        vm.EncoderPath = "";
+        Assert.Null(vm.HelpSchema);
+        vm.EncoderPath = FakeEncoderPath();
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.NotSame(first, vm.HelpSchema);
+        Assert.NotNull(vm.HelpSchema!.Lookup("--vpp-nlmeans"));
+        Assert.Contains("--vpp-nlmeans", vm.HelpText);
+    }
+
+    [AvaloniaFact]
+    public async Task HelpSchemaUsesActualHelpProvidedToFakeEncoder()
+    {
+        string? previous = Environment.GetEnvironmentVariable("FAKE_ENCODER_HELP_FILE");
+        try
+        {
+            Environment.SetEnvironmentVariable("FAKE_ENCODER_HELP_FILE", Path.Combine(AppContext.BaseDirectory, "Data", "help", "qsvenc-h1.txt"));
+            using var services = new TestServices();
+            var clock = new FakeTimeProvider();
+            await using var vm = Create(services, clock);
+            vm.InputPath = "";
+            await InitializeAsync(vm, clock);
+            var schema = Assert.IsType<HelpSchema>(vm.HelpSchema);
+            Assert.Equal(85, schema.Options.Count);
+            Assert.Equal(671, schema.Options.Sum(option => option.Parameters.Count));
+            var kfm = schema.Lookup("--vpp-kfm")!;
+            Assert.Equal("deinterlace", kfm.Category);
+            Assert.False(kfm.IsNameOnly);
+            Assert.Contains("60", kfm.Parameters.Single(parameter => parameter.Name == "mode").Values);
+        }
+        finally { Environment.SetEnvironmentVariable("FAKE_ENCODER_HELP_FILE", previous); }
+    }
+
     private static MainWindowViewModel Create(TestServices services, FakeTimeProvider clock, IPreviewBackend? backend = null) =>
         new(services, clock, preferred: backend)
         {

@@ -47,6 +47,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private RequestContext? _context;
     private InputInfo? _inputInfo;
     private HelpIndex _helpIndex = new("");
+    private HelpSchema? _helpSchema;
     private string _metadataEncoder = "";
     private PreviewRequest? _intervalRequest;
     private IReadOnlyList<Y4mFrame> _intervalFrames = Array.Empty<Y4mFrame>();
@@ -155,7 +156,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         catch (Exception exception) { await PostAsync(() => ShowError("設定を保存できませんでした", exception.Message)).ConfigureAwait(false); }
     }
 
-    public string EncoderPath { get => _encoderPath; set { if (SetProperty(ref _encoderPath, value ?? "")) { EncoderDescription = ""; _helpIndex = new HelpIndex(""); HelpText = ""; InputChanged(); } } }
+    public string EncoderPath { get => _encoderPath; set { if (SetProperty(ref _encoderPath, value ?? "")) { EncoderDescription = ""; _metadataEncoder = ""; _helpIndex = new HelpIndex(""); HelpSchema = null; HelpText = ""; InputChanged(); } } }
     public string InputPath { get => _inputPath; set { if (SetProperty(ref _inputPath, value ?? "")) InputChanged(); } }
     /// <summary>例: "QSVEnc 8.35"。</summary>
     public string EncoderDescription { get => _encoderDescription; set => SetProperty(ref _encoderDescription, value); }
@@ -164,6 +165,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     public ObservableCollection<FilterLineViewModel> FilterLines { get; } = new();
     /// <summary>フォーカスのある行。View の code-behind が設定する。ヘルプ表示の対象。</summary>
     public FilterLineViewModel? SelectedFilterLine { get => _selectedFilterLine; set { if (SetProperty(ref _selectedFilterLine, value)) UpdateHelp(); } }
+    public HelpSchema? HelpSchema { get => _helpSchema; private set => SetProperty(ref _helpSchema, value); }
     public string HelpText { get => _helpText; set => SetProperty(ref _helpText, value); }
 
     /// <summary>表示中の画像 (BGRA)。処理中も直前の画像を保持する。</summary>
@@ -503,6 +505,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                 if (_disposed || EncoderPath != encoder) return;
                 EncoderDescription = DescribeEncoder(version, encoder);
                 _helpIndex = new HelpIndex(help);
+                HelpSchema = new HelpSchema(help);
                 UpdateHelp();
             }).ConfigureAwait(false);
         }
