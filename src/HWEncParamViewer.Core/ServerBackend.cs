@@ -55,8 +55,10 @@ public sealed class ServerBackend : IPreviewBackend
             long id = Interlocked.Increment(ref _nextId);
             Task<string> logTask = session.RegisterLog(id);
             requestLog = logTask;
+            if (PerfTrace.Enabled) PerfTrace.Write("server.run_send", new { request.CorrelationId, id,
+                pid = session.Process.Id, request.TargetSeconds, frames = CommandBuilder.Plan(request).FrameCount });
             await session.SendAsync(new { cmd = "run", id, args = CommandBuilder.BuildServer(request) }).ConfigureAwait(false);
-            var readTask = Task.Run(() => ReadRequest(session, id, sink, execution.Token));
+            var readTask = Task.Run(() => ReadRequest(session, id, request.CorrelationId, sink, execution.Token));
             session.LastRead = readTask;
             var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             using var registration = execution.Token.Register(() => cancelled.TrySetResult());
@@ -67,11 +69,20 @@ public sealed class ServerBackend : IPreviewBackend
             {
                 try
                 {
+                    long cancelStart = 0;
+                    if (PerfTrace.Enabled)
+                    {
+                        cancelStart = Stopwatch.GetTimestamp();
+                        PerfTrace.Write("server.cancel_send", new { request.CorrelationId, id });
+                    }
                     await session.SendAsync(new { cmd = "cancel", id }).ConfigureAwait(false);
                     end = await readTask.WaitAsync(_cancelTimeout, _timeProvider).ConfigureAwait(false);
+                    if (PerfTrace.Enabled) PerfTrace.Write("server.cancel_end", new { request.CorrelationId, id, end.Rc,
+                        elapsedMs = Stopwatch.GetElapsedTime(cancelStart).TotalMilliseconds });
                 }
                 catch
                 {
+                    if (PerfTrace.Enabled) PerfTrace.Write("server.cancel_drop", new { request.CorrelationId, id });
                     await DropSessionAsync(session).ConfigureAwait(false);
                     return new PreviewRunResult(-12, await logTask.ConfigureAwait(false), true);
                 }
@@ -80,6 +91,8 @@ public sealed class ServerBackend : IPreviewBackend
 
             // stdoutとstderrは別パイプなので、stdoutのENDだけでは要求ログが揃うとは限らない。
             string log = await logTask.WaitAsync(_cancelTimeout, _timeProvider).ConfigureAwait(false);
+            if (PerfTrace.Enabled) PerfTrace.Write("server.request_complete", new { request.CorrelationId, id,
+                end.Rc, wasCancelled });
             session.CompletedRequests++;
             if (_restartPolicy.ShouldRestart(session.CompletedRequests, end.Rc, processExited: session.Process.HasExited))
                 await DropSessionAsync(session).ConfigureAwait(false);
@@ -106,9 +119,14 @@ public sealed class ServerBackend : IPreviewBackend
         }
     }
 
-    private static PreviewEnd ReadRequest(Session session, long id, IPreviewSink sink, CancellationToken token)
+    private static PreviewEnd ReadRequest(Session session, long id, long correlationId, IPreviewSink sink, CancellationToken token)
     {
         bool begun = false;
+        int frames = 0;
+        long bytes = 0;
+        double? firstFrameMs = null;
+        double? lastFrameMs = null;
+        long readStart = PerfTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
         while (session.Reader.ReadEvent() is { } item)
         {
             switch (item)
@@ -120,9 +138,25 @@ public sealed class ServerBackend : IPreviewBackend
                     if (!token.IsCancellationRequested) sink.OnHeader(header.Header);
                     break;
                 case PreviewFrame frame when begun:
+                    if (PerfTrace.Enabled)
+                    {
+                        frames++;
+                        bytes += frame.Frame.Data.LongLength;
+                        lastFrameMs = Stopwatch.GetElapsedTime(readStart).TotalMilliseconds;
+                        if (firstFrameMs == null)
+                        {
+                            firstFrameMs = lastFrameMs;
+                            PerfTrace.Write("server.first_frame", new { correlationId, id, frame.Frame.Xts,
+                                elapsedMs = firstFrameMs });
+                        }
+                    }
                     if (!token.IsCancellationRequested) sink.OnFrame(frame.Frame);
                     break;
                 case PreviewEnd end when begun && end.Id == id:
+                    if (PerfTrace.Enabled) PerfTrace.Write("server.end", new { correlationId, id, end.Rc,
+                        frames, bytes, firstFrameMs, lastFrameMs,
+                        elapsedMs = Stopwatch.GetElapsedTime(readStart).TotalMilliseconds,
+                        cancelled = token.IsCancellationRequested });
                     return end;
                 default:
                     throw new PreviewProtocolException("要求と一致しない常駐プロトコルのイベントを受信しました");
@@ -145,6 +179,7 @@ public sealed class ServerBackend : IPreviewBackend
             session.Sink = sink;
             return session;
         }
+        if (PerfTrace.Enabled) PerfTrace.Write("server.process_start", new { path });
         session = new Session(path, ProcessSupport.Start(path, ["--preview-server"], _configure));
         session.Sink = sink;
         lock (_sync) _session = session;
@@ -155,6 +190,7 @@ public sealed class ServerBackend : IPreviewBackend
             PreviewEvent? ready = await readyTask.WaitAsync(_readyTimeout, _timeProvider, token).ConfigureAwait(false);
             if (ready is not PreviewReady info || !info.Values.TryGetValue("version", out string? version) || version != "1")
                 throw new PreviewServerNotSupportedException("対応するREADYを受信できませんでした");
+            if (PerfTrace.Enabled) PerfTrace.Write("server.ready", new { pid = session.Process.Id });
             return session;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)

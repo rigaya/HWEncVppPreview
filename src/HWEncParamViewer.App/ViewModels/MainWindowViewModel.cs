@@ -63,7 +63,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         IPreviewBackend? preferred, IPreviewBackend? fallback, InputProbe? probe, FrameCache? cache,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter)
     {
-        _imageConverter = converter ?? ((frame, token) => Task.Run(() => YuvToBgra.Convert(frame), token));
+        _imageConverter = converter ?? ((frame, token) => Task.Run(() =>
+        {
+            // 外側のTask.Run待ちと、変換内の並列処理を含む待ちを計測時だけ区別する。
+            if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.worker.start", new { frame.Xts });
+            try { return YuvToBgra.Convert(frame); }
+            finally { if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.worker.end", new { frame.Xts }); }
+        }, token));
         _services = services ?? new AvaloniaViewModelServices();
         _clock = timeProvider ?? TimeProvider.System;
         _probe = probe ?? new InputProbe(_clock);
@@ -350,6 +356,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     }
     private void ShowError(string message, string diagnostics)
     {
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.error", new { message, diagnostics });
         IsBusy = false;
         StatusText = "エラー";
         LogText = diagnostics;
@@ -359,7 +366,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     private void StepFrame(int direction)
     {
-        if (direction == 0 || _pendingNeighbor != null) return;
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.step", new { direction, pending = _pendingNeighbor != null, target = CurrentSeconds });
+        if (direction == 0 || _pendingNeighbor != null)
+        {
+            if (PerfTrace.Enabled) PerfTrace.Write("vm.step.drop", new { direction, pending = _pendingNeighbor != null });
+            return;
+        }
         direction = Math.Sign(direction);
         if (_intervalRequest is { } interval && _intervalFrames.Count > 0)
         {
@@ -380,7 +392,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                     var frame = _intervalFrames[next];
                     double seconds = FrameSeconds(interval, frame, next);
                     if ((seconds - CurrentSeconds) * direction > 1e-9)
-                    { DisplayCached(frame, seconds); return; }
+                    {
+                        if (PerfTrace.Enabled) PerfTrace.Write("vm.step.cache", new { seconds, direction });
+                        DisplayCached(frame, seconds); return;
+                    }
                 }
             }
         }
@@ -391,6 +406,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             SeekTo(CurrentSeconds + direction / (_inputInfo?.Fps ?? 30));
             return;
         }
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.step.refetch", new { direction, target = CurrentSeconds });
         _ = QueuePreview(navigation: true, neighborDirection: direction);
     }
     private void DisplayCached(Y4mFrame frame, double seconds)

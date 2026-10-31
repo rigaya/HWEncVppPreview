@@ -64,6 +64,7 @@ public sealed partial class MainWindowViewModel
 
     private void CancelBefore(bool updatePresentation = true)
     {
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.cancel.before", new { active = _beforeCancellation != null });
         // キャンセルと破棄を同じ排他区間に置き、古い要求の後処理との競合を防ぐ。
         lock (_taskLock)
         {
@@ -87,6 +88,12 @@ public sealed partial class MainWindowViewModel
     private void QueueBefore(PreviewRequest afterRequest, long generation, double? cachedTarget = null)
     {
         if (!IsCurrent(generation)) return;
+        if (PerfTrace.Enabled && Environment.GetEnvironmentVariable("HWENC_VIEWER_BENCH_DISABLE_BEFORE") == "1")
+        {
+            PerfTrace.Write("vm.queue.before.disabled", new { generation });
+            return;
+        }
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.before", new { generation, cachedTarget });
         var before = afterRequest with { VppArgs = Array.Empty<string>(), CorrelationId = -generation };
         if (cachedTarget is double target)
         {
@@ -103,6 +110,7 @@ public sealed partial class MainWindowViewModel
         IsBeforeBusy = true;
         if (TryGetBeforeInterval(before, out var frames))
         {
+            if (PerfTrace.Enabled) PerfTrace.Write("vm.before.cache", new { generation });
             _beforeIntervalRequest = before;
             _beforeIntervalFrames = frames;
             var frame = SelectBeforeFrame(before, frames);
@@ -110,6 +118,7 @@ public sealed partial class MainWindowViewModel
             DisplayBeforeFrame(frame, generation, finishBusy: true);
             return;
         }
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.before.execute", new { generation });
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         var context = new RequestContext(generation, before, _clock.GetTimestamp(), RequestKind.Before, cancellation);
         lock (_taskLock) _beforeCancellation = cancellation;
@@ -196,12 +205,14 @@ public sealed partial class MainWindowViewModel
 
     private static WriteableBitmap CreateBitmap(Y4mFrame frame, byte[] data)
     {
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.bitmap.start", new { frame.Xts });
         var header = frame.Header;
         var bitmap = new WriteableBitmap(new PixelSize(header.Width, header.Height), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
         try
         {
             using var locked = bitmap.Lock();
             for (int y = 0; y < header.Height; y++) Marshal.Copy(data, y * header.Width * 4, locked.Address + y * locked.RowBytes, header.Width * 4);
+            if (PerfTrace.Enabled) PerfTrace.Write("vm.bitmap.end", new { frame.Xts });
             return bitmap;
         }
         catch { bitmap.Dispose(); throw; }

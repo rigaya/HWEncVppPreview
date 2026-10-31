@@ -76,6 +76,9 @@ public sealed class PreviewController : IAsyncDisposable
             var scheduled = new CancellationTokenSource();
             _scheduled = scheduled;
             long version = ++_version;
+            if (PerfTrace.Enabled) PerfTrace.Write("core.submit", new { request.CorrelationId, version, navigation,
+                bypassCache, bypassDebounce, request.TargetSeconds, request.PreMarginSeconds,
+                request.PostMarginSeconds, vppArgs = request.VppArgs });
             if (!navigation) _lastEditVersion = version;
             // 同期完了や通知からのDispose再入より先に、回収対象を登録する。
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -109,8 +112,20 @@ public sealed class PreviewController : IAsyncDisposable
         // 判定と通知を同じ排他区間に置き、通知からSubmitへ再入した場合も順序を守る。
         lock (_sync)
         {
-            if (_disposed || version < _lastNotifiedVersion) return;
-            if (!IsCurrent(version) && (currentOnly || !navigation || version < _lastEditVersion)) return;
+            if (_disposed || version < _lastNotifiedVersion)
+            {
+                if (PerfTrace.Enabled) PerfTrace.Write("core.notify_suppressed", new { version, navigation, currentOnly,
+                    currentVersion = _version, lastEditVersion = _lastEditVersion, lastNotifiedVersion = _lastNotifiedVersion,
+                    reason = _disposed ? "disposed" : "older_than_notified" });
+                return;
+            }
+            if (!IsCurrent(version) && (currentOnly || !navigation || version < _lastEditVersion))
+            {
+                if (PerfTrace.Enabled) PerfTrace.Write("core.notify_suppressed", new { version, navigation, currentOnly,
+                    currentVersion = _version, lastEditVersion = _lastEditVersion, lastNotifiedVersion = _lastNotifiedVersion,
+                    reason = currentOnly ? "current_only" : !navigation ? "edit_replaced" : "older_than_edit" });
+                return;
+            }
             _lastNotifiedVersion = version;
             notification();
         }
@@ -120,6 +135,9 @@ public sealed class PreviewController : IAsyncDisposable
         bool bypassCache, bool bypassDebounce, bool navigation)
     {
         bool entered = false;
+        long waitStart = 0;
+        long executionStart = 0;
+        long backendStart = 0;
         CancellationTokenSource? active = null;
         try
         {
@@ -127,19 +145,40 @@ public sealed class PreviewController : IAsyncDisposable
             lock (_sync)
             {
                 if (!IsCurrent(version)) return;
-                if (!navigation) _active?.Cancel();
+                if (!navigation)
+                {
+                    if (PerfTrace.Enabled && _active != null) PerfTrace.Write("core.cancel_active", new { request.CorrelationId, version });
+                    _active?.Cancel();
+                }
+            }
+            if (PerfTrace.Enabled)
+            {
+                waitStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                PerfTrace.Write("core.execution_wait", new { request.CorrelationId, version });
             }
             await _execution.WaitAsync(scheduled.Token).ConfigureAwait(false);
             entered = true;
+            if (PerfTrace.Enabled)
+            {
+                executionStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                PerfTrace.Write("core.execution_enter", new { request.CorrelationId, version,
+                    waitMs = System.Diagnostics.Stopwatch.GetElapsedTime(waitStart).TotalMilliseconds });
+            }
             lock (_sync)
             {
                 if (!IsCurrent(version)) return;
                 active = new CancellationTokenSource();
                 _active = active;
             }
-            var sink = new SelectionSink(request, frame => Notify(version, navigation, () => FrameReady?.Invoke(frame)));
+            var sink = new SelectionSink(request, frame =>
+            {
+                if (PerfTrace.Enabled) PerfTrace.Write("core.target_frame", new { request.CorrelationId, version,
+                    frame.Frame.Xts, frame.TargetNotReached });
+                Notify(version, navigation, () => FrameReady?.Invoke(frame));
+            });
             if (!bypassCache && _cache.TryGet(request, out var frames))
             {
+                if (PerfTrace.Enabled) PerfTrace.Write("core.cache_hit", new { request.CorrelationId, version, frames = frames.Count });
                 foreach (var frame in frames) sink.OnFrame(frame);
                 sink.Finish();
                 Notify(version, navigation, () => Completed?.Invoke(new(request, new(0, ""), true, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly() }));
@@ -149,10 +188,17 @@ public sealed class PreviewController : IAsyncDisposable
             PreviewRunResult result;
             using var progress = new OutputWatchdog(_clock, _watchdog);
             sink.Progress = progress.Touch;
+            if (PerfTrace.Enabled)
+            {
+                backendStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                PerfTrace.Write("core.backend_start", new { request.CorrelationId, version, backend = backend.GetType().Name });
+            }
             var run = RunWithFallbackAsync();
             var winner = await Task.WhenAny(run, progress.Expired).ConfigureAwait(false);
             if (winner == progress.Expired)
             {
+                if (PerfTrace.Enabled) PerfTrace.Write("core.watchdog", new { request.CorrelationId, version,
+                    frames = sink.Frames.Count, bytes = sink.ReceivedBytes });
                 active.Cancel();
                 await backend.AbortAsync().ConfigureAwait(false);
                 try { await run.ConfigureAwait(false); } catch (Exception) { /* タイムアウトを優先し、回収後に通知する。 */ }
@@ -160,6 +206,9 @@ public sealed class PreviewController : IAsyncDisposable
                 return;
             }
             result = await run.ConfigureAwait(false);
+            if (PerfTrace.Enabled) PerfTrace.Write("core.backend_end", new { request.CorrelationId, version,
+                result.ExitCode, result.IsCancelled, frames = sink.Frames.Count, bytes = sink.ReceivedBytes,
+                elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(backendStart).TotalMilliseconds });
             if (active.IsCancellationRequested || result.IsCancelled) return;
             if (result.ExitCode != 0)
             {
@@ -168,6 +217,9 @@ public sealed class PreviewController : IAsyncDisposable
             }
             sink.Finish();
             _cache.Store(request, sink.Frames);
+            if (PerfTrace.Enabled) PerfTrace.Write("core.cache_store", new { request.CorrelationId, version,
+                frames = sink.Frames.Count, bytes = sink.ReceivedBytes, cacheBytes = _cache.SizeBytes,
+                cacheEntries = _cache.Count });
             Notify(version, navigation, () => Completed?.Invoke(new(request, result, false, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly() }));
 
             async Task<PreviewRunResult> RunWithFallbackAsync()
@@ -182,9 +234,14 @@ public sealed class PreviewController : IAsyncDisposable
                 }
             }
         }
-        catch (OperationCanceledException) when (scheduled.IsCancellationRequested || active?.IsCancellationRequested == true) { }
+        catch (OperationCanceledException) when (scheduled.IsCancellationRequested || active?.IsCancellationRequested == true)
+        {
+            if (PerfTrace.Enabled) PerfTrace.Write("core.cancelled", new { request.CorrelationId, version, entered });
+        }
         catch (Exception ex)
         {
+            if (PerfTrace.Enabled) PerfTrace.Write("core.exception", new { request.CorrelationId, version,
+                type = ex.GetType().Name, ex.Message });
             Notify(version, navigation, () => Failed?.Invoke(new(request, ex.Message, Exception: ex)), currentOnly: true);
         }
         finally
@@ -196,7 +253,12 @@ public sealed class PreviewController : IAsyncDisposable
             }
             active?.Dispose();
             scheduled.Dispose();
-            if (entered) _execution.Release();
+            if (entered)
+            {
+                if (PerfTrace.Enabled) PerfTrace.Write("core.execution_leave", new { request.CorrelationId, version,
+                    elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(executionStart).TotalMilliseconds });
+                _execution.Release();
+            }
         }
     }
 
@@ -235,6 +297,7 @@ public sealed class PreviewController : IAsyncDisposable
         private bool _confirmed;
         private bool _hasTimestamp;
         public List<Y4mFrame> Frames { get; } = new();
+        public long ReceivedBytes { get; private set; }
         public Action? Progress { get; set; }
         public bool TargetNotReached { get; private set; }
         public void OnOutput() => Progress?.Invoke();
@@ -242,6 +305,12 @@ public sealed class PreviewController : IAsyncDisposable
         public void OnFrame(Y4mFrame frame)
         {
             int index = Frames.Count;
+            if (PerfTrace.Enabled)
+            {
+                ReceivedBytes += frame.Data.LongLength;
+                if (index == 0) PerfTrace.Write("core.first_frame", new { request.CorrelationId, frame.Xts,
+                    bytes = frame.Data.LongLength, frame.Header.Width, frame.Header.Height });
+            }
             Frames.Add(frame);
             // 一部だけ時刻が欠ける場合、V1と同じく欠落フレームを選択対象にしない。
             if (frame.Xts is not double ts) return;

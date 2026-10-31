@@ -40,6 +40,7 @@ public sealed partial class MainWindowViewModel
     {
         if (!_initialized || _suspendChanges || _disposed) return Task.CompletedTask;
         long generation = BeginIntent(navigation);
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.after", new { generation, navigation, neighborDirection, bypassCache, target = CurrentSeconds });
         long editEpoch = Volatile.Read(ref _editEpoch);
         if (neighborDirection != 0) _pendingNeighbor = new NeighborIntent(generation, neighborDirection);
         // 入力検査中の移動連打では検査そのものを止めず、取得後の最新位置だけを使う。
@@ -108,6 +109,8 @@ public sealed partial class MainWindowViewModel
                     {
                         EncoderPath = encoder, InputFile = input, InputArgs = inputArgs, VppArgs = vpp,
                         Fps = info.Fps, TargetSeconds = target, CorrelationId = actualGeneration,
+                        // 計測時だけ後マージンを切り替え、通常の要求値は維持する。
+                        PostMarginSeconds = BenchmarkPostMargin(),
                     };
                     bool squarePixel = info.SarNum <= 0 || info.SarDen <= 0 || info.SarNum == info.SarDen;
                     string sar = squarePixel ? "" : $" (SAR {info.SarNum}:{info.SarDen})";
@@ -215,7 +218,9 @@ public sealed partial class MainWindowViewModel
                 }
                 try
                 {
+                    if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.start", new { image.Generation, image.Before, image.Frame.Xts });
                     byte[] data = await _imageConverter(image.Frame, _lifetime.Token).ConfigureAwait(false);
+                    if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.end", new { image.Generation, image.Before, bytes = data.Length });
                     await PostAsync(() => ApplyImage(image, data)).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
@@ -250,6 +255,7 @@ public sealed partial class MainWindowViewModel
             _beforeDisplayedFrame = image.Frame;
             RecalculateDisplaySizes();
             BeforeImage = bitmap;
+            if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.Generation, image.Before, image.Frame.Xts, target = CurrentSeconds });
             if (image.FinishBeforeBusy) IsBeforeBusy = false;
             return;
         }
@@ -260,6 +266,7 @@ public sealed partial class MainWindowViewModel
         _lastDisplayedAfter = image.Generation;
         RecalculateDisplaySizes();
         PreviewImage = afterBitmap;
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.Generation, image.Before, image.Frame.Xts, target = CurrentSeconds });
         UpdateNavigationStatus();
     }
 
@@ -299,6 +306,12 @@ public sealed partial class MainWindowViewModel
     private static double FrameSeconds(PreviewRequest request, Y4mFrame frame, int index) =>
         (CommandBuilder.Plan(request).SeekSeconds ?? 0) +
         (frame.Xts ?? index / FrameSelector.FrameRate(frame, request.Fps));
+
+    // 比較計測を明示した場合だけ既定マージンを上書きする。
+    private static double BenchmarkPostMargin() => PerfTrace.Enabled &&
+        double.TryParse(Environment.GetEnvironmentVariable("HWENC_VIEWER_BENCH_POST_MARGIN"),
+            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double seconds)
+        && double.IsFinite(seconds) && seconds >= 0 ? seconds : 0.5;
 
     private sealed record NeighborIntent(long Generation, int Direction);
 
