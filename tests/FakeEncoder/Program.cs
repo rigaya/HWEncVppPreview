@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -21,6 +22,8 @@ internal static class Program
     {
         Console.InputEncoding = new UTF8Encoding(false);
         Console.OutputEncoding = new UTF8Encoding(false);
+        if (args.Contains("--fake-hold-output-child", StringComparer.Ordinal))
+            return await HoldOutputChildAsync();
         string? pidFile = Environment.GetEnvironmentVariable("FAKE_ENCODER_PID_FILE");
         if (!string.IsNullOrEmpty(pidFile)) await File.AppendAllTextAsync(pidFile, $"{Environment.ProcessId}\n");
         if (args.Contains("--version", StringComparer.Ordinal))
@@ -37,11 +40,18 @@ internal static class Program
                 return 0;
             }
             await Console.Out.WriteLineAsync("  --vpp-nlmeans [params]\n    非局所平均によるノイズ除去。\n    sigma=<float> 強さ\n  --vpp-edgelevel [params]\n    エッジの調整。\n  --vpp-deband [params]\n    バンディングの低減。\n  --vpp-yadif [params]\n    インターレースの解除。");
+            if (Environment.GetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES") == "1")
+            {
+                await Console.Out.WriteLineAsync("  --timestamp-passthrough  入力原点付きの時刻を出力する。\n  --opencl-task-threads <int>  テストでは受理するだけで画像を変えない。");
+            }
             return 0;
         }
         if (!args.Contains("--preview-server", StringComparer.Ordinal))
         {
-            return await EncodeAsync(args, CancellationToken.None);
+            int result = await EncodeAsync(args, CancellationToken.None);
+            // 指定時だけ、都度起動でも親終了後のpipe保持を再現する。
+            if (result == 0) await StartHoldOutputChildAsync();
+            return result;
         }
         if (Environment.GetEnvironmentVariable("FAKE_ENCODER_READY_NONE") != "1")
         {
@@ -54,6 +64,7 @@ internal static class Program
             FullMode = BoundedChannelFullMode.DropOldest,
         });
         var worker = RunServerAsync(channel.Reader);
+        bool receivedQuit = false;
         try
         {
             while (await Console.In.ReadLineAsync() is string line)
@@ -61,7 +72,14 @@ internal static class Program
                 using var json = JsonDocument.Parse(line);
                 var root = json.RootElement;
                 string? command = root.GetProperty("cmd").GetString();
-                if (command == "quit") break;
+                string? commandLog = Environment.GetEnvironmentVariable("FAKE_ENCODER_COMMAND_LOG_FILE");
+                if (!string.IsNullOrEmpty(commandLog)) await File.AppendAllTextAsync(commandLog, line + "\n");
+                if (command == "quit")
+                {
+                    if (Environment.GetEnvironmentVariable("FAKE_ENCODER_IGNORE_QUIT") == "1") continue;
+                    receivedQuit = true;
+                    break;
+                }
                 long id = root.GetProperty("id").GetInt64();
                 lock (Sync)
                 {
@@ -89,6 +107,58 @@ internal static class Program
             channel.Writer.Complete();
         }
         await worker;
+        if (receivedQuit) await StartHoldOutputChildAsync();
+        return 0;
+    }
+
+    // 親の正常終了後もパイプを保持し、回帰テストがEOF待ちを再現できるようにする。
+    private static async Task StartHoldOutputChildAsync()
+    {
+        string? ready = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_READY_FILE");
+        string? release = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_RELEASE_FILE");
+        if (string.IsNullOrEmpty(ready) || string.IsNullOrEmpty(release)) return;
+        var start = new ProcessStartInfo(Environment.ProcessPath ?? throw new InvalidOperationException("実行パスがありません"))
+        {
+            UseShellExecute = false,
+            // リダイレクトせず親の標準出力・標準エラーのパイプを継承する。
+            RedirectStandardInput = false, RedirectStandardOutput = false, RedirectStandardError = false,
+        };
+        if (string.Equals(Path.GetFileNameWithoutExtension(start.FileName), "dotnet", StringComparison.OrdinalIgnoreCase))
+            start.ArgumentList.Add(typeof(Program).Assembly.Location);
+        start.ArgumentList.Add("--fake-hold-output-child");
+        using var child = Process.Start(start) ?? throw new InvalidOperationException("パイプ保持用の子を起動できませんでした");
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await WaitForFileAsync(ready, timeout.Token);
+        }
+        catch
+        {
+            if (!child.HasExited) child.Kill(entireProcessTree: true);
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            throw;
+        }
+    }
+
+    private static async Task<int> HoldOutputChildAsync()
+    {
+        string? ready = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_READY_FILE");
+        string? release = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_RELEASE_FILE");
+        if (string.IsNullOrEmpty(ready) || string.IsNullOrEmpty(release)) return -24;
+        // テスト側が途中で失敗しても無期限の孤児にしない。通常はreleaseで直ちに終了する。
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        string temporaryReady = ready + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + ".tmp";
+        await File.WriteAllTextAsync(temporaryReady, Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        File.Move(temporaryReady, ready, overwrite: true);
+        try
+        {
+            await WaitForFileAsync(release, timeout.Token);
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+        }
+        string? exited = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_EXIT_FILE");
+        if (!string.IsNullOrEmpty(exited)) await File.WriteAllTextAsync(exited, "0");
         return 0;
     }
 
@@ -122,7 +192,36 @@ internal static class Program
 
     private static async Task<int> EncodeAsync(string[] args, CancellationToken cancellationToken)
     {
-        int count = Number(args, "--frames", 1);
+        // --framesを省いた要求だけを無限にし、既存の有限要求の意味は変えない。
+        int? count = Array.IndexOf(args, "--frames") >= 0 ? Number(args, "--frames", 1) : null;
+        bool passthrough = args.Contains("--timestamp-passthrough", StringComparer.Ordinal);
+        bool zeroOrigin = args.Contains("--fake-zero-origin", StringComparer.Ordinal)
+            || args.Contains("--fake-ignore-passthrough", StringComparer.Ordinal);
+        string? originText = Value(args, "--fake-origin-seconds");
+        double origin = 1000;
+        if (originText != null && (!double.TryParse(originText, NumberStyles.Float, CultureInfo.InvariantCulture, out origin)
+            || !double.IsFinite(origin)))
+        {
+            await Console.Error.WriteLineAsync("FAKE invalid timestamp origin");
+            return -24;
+        }
+        string? endText = Value(args, "--fake-input-end");
+        double? inputEnd = null;
+        if (endText != null)
+        {
+            if (!double.TryParse(endText, NumberStyles.Float, CultureInfo.InvariantCulture, out double end)
+                || !double.IsFinite(end) || end < 0)
+            {
+                await Console.Error.WriteLineAsync("FAKE invalid input end");
+                return -24;
+            }
+            inputEnd = end;
+        }
+        // 新しい時計モードでは画素番号も入力位置に合わせる。旧相対モードの期待値は維持する。
+        int clockBackstepAt = Number(args, "--fake-clock-backstep-at", -1);
+        int clockJumpAt = Number(args, "--fake-clock-jump-at", -1);
+        bool clockFaultConfigured = clockBackstepAt > 0 || clockJumpAt > 0;
+        bool globalMediaFrames = passthrough || zeroOrigin || originText != null || clockFaultConfigured;
         int step = Math.Max(1, Number(args, "--fake-step", args.Contains("--vpp-decimate", StringComparer.Ordinal) ? 2 : 1));
         string? outputRate = Value(args, "--fake-output-rate");
         if (outputRate is not (null or "double" or "film" or "vfr"))
@@ -175,13 +274,17 @@ internal static class Program
         if (rc != 0) await Console.Error.WriteLineAsync($"FAKE requested rc={rc}");
         try
         {
-            if (count > 0)
+            if (count == null || count > 0)
             {
                 await WriteLineAsync($"YUV4MPEG2 W{width} H{height} F{outputFps}:1 Ip A{sar} C420jpeg XTIMEBASE=1:{outputFps} XPID={Environment.ProcessId} XSEEK={seek.ToString(CultureInfo.InvariantCulture)}");
             }
-            foreach (var frame in OutputFrames(count, step, seek, outputRate, outputFps))
+            double? firstTime = null;
+            double? previousTimestamp = null;
+            long outputOrdinal = 0;
+            foreach (var frame in OutputFrames(count, step, seek, outputRate, outputFps, globalMediaFrames, inputEnd))
             {
-                int i = frame.Index;
+                long i = frame.Index;
+                firstTime ??= frame.Time;
                 effectiveToken.ThrowIfCancellationRequested();
                 if (badControlAt == i)
                 {
@@ -191,7 +294,20 @@ internal static class Program
                 if (hangAfter >= 0 && i >= hangAfter) await Task.Delay(Timeout.Infinite, effectiveToken);
                 if (gate != null && i >= gateAfter) await WaitForFileAsync(gate, effectiveToken);
                 if (delayMs > 0) await Task.Delay(delayMs, effectiveToken);
-                string timestamp = frame.Time.ToString(outputRate == null ? "F9" : "R", CultureInfo.InvariantCulture);
+                // 時計だけを変え、ゼロ起点の異常モードでも同じ入力位置の画素を返す。
+                double timestampValue = zeroOrigin ? frame.Time - firstTime.Value
+                    : passthrough ? origin + seek + frame.Time : frame.Time;
+                ++outputOrdinal;
+                // 枚数は入力indexではなく要求内の出力順。再取得時は画素を保ち時計だけ正常に戻す。
+                if (passthrough)
+                {
+                    if (clockJumpAt > 0 && outputOrdinal >= clockJumpAt) timestampValue += 10;
+                    if (outputOrdinal == clockBackstepAt && previousTimestamp is double previous)
+                        timestampValue = previous - 2 * frame.Duration;
+                }
+                else if (clockFaultConfigured) timestampValue = frame.Time - firstTime.Value;
+                previousTimestamp = timestampValue;
+                string timestamp = timestampValue.ToString(outputRate == null ? "F9" : "R", CultureInfo.InvariantCulture);
                 string durationTag = noDuration ? "" : string.Create(CultureInfo.InvariantCulture, $" Xdur={frame.Duration:F9}");
                 await WriteLineAsync($"FRAME Xts={timestamp}{durationTag}");
                 var data = new byte[width * height + 2 * ((width + 1) / 2) * ((height + 1) / 2)];
@@ -223,25 +339,32 @@ internal static class Program
     }
 
     // レート変更時も--framesは入力枚数で数え、seekをまたいだ時刻と画素の対応を保つ。
-    private static IEnumerable<(int Index, double Time, double Duration)> OutputFrames(int count, int step,
-        double seek, string? rate, int fps)
+    // 無限出力も1枚ずつ生成してawaitで書くため、未読の画像をメモリへ積み上げない。
+    private static IEnumerable<(long Index, double Time, double Duration)> OutputFrames(int? count, int step,
+        double seek, string? rate, int fps, bool globalMediaFrames, double? inputEnd)
     {
-        if (rate == null)
+        if (rate == null && !globalMediaFrames)
         {
-            for (int i = 0; i < count; i += step) yield return (i, i / 30.0, step / 30.0);
+            for (long i = 0; !count.HasValue || i < count.Value; i += step)
+            {
+                double timestamp = i / 30.0;
+                if (inputEnd is double end && seek + timestamp >= end - 1e-9) yield break;
+                yield return (i, timestamp, step / 30.0);
+            }
             yield break;
         }
-        double Timestamp(int index)
+        double Timestamp(long index)
         {
             if (rate != "vfr") return index / (double)fps;
             // 最短間隔は1/60秒。1周期に2・3・1・4tickを並べた不規則な時刻列。
             int[] offsets = [0, 2, 5, 6];
             return (index / 4 * 10 + offsets[index % 4]) / 60.0;
         }
-        int first = rate == "vfr" ? (int)Math.Floor(seek * 6) * 4 : (int)Math.Floor(seek * fps);
+        long first = rate == "vfr" ? (long)Math.Floor(seek * 6) * 4 : (long)Math.Floor(seek * fps);
         while (Timestamp(first) < seek - 1e-9) ++first;
-        double end = seek + count / 30.0;
-        for (int i = first; Timestamp(i) < end - 1e-9; i += step)
+        double limit = count.HasValue ? seek + count.Value / 30.0 : double.PositiveInfinity;
+        if (inputEnd is double endTime) limit = Math.Min(limit, endTime);
+        for (long i = first; Timestamp(i) < limit - 1e-9; i += step)
             yield return (i, Timestamp(i) - seek, Timestamp(i + step) - Timestamp(i));
     }
 

@@ -5,9 +5,9 @@ using System.Text.RegularExpressions;
 
 namespace HWEncParamViewer.Core;
 
-/// <summary>最初のフレームと入力ログから得た画像形式と長さ。長さ不明の場合はDurationがnull。</summary>
+/// <summary>最初のフレームと入力ログから得た画像形式と長さ。原点数値と信頼性は分離し、長さ不明ならDurationはnull。</summary>
 public sealed record InputInfo(int Width, int Height, int FpsNum, int FpsDen, int SarNum, int SarDen,
-    Y4mChroma Chroma, int BitDepth, string ColorSpaceTag, TimeSpan? Duration = null)
+    Y4mChroma Chroma, int BitDepth, string ColorSpaceTag, TimeSpan? Duration = null, double? TimestampOriginSeconds = null, bool TimestampOriginTrusted = true)
 {
     public double Fps => FpsDen > 0 ? (double)FpsNum / FpsDen : 0;
 }
@@ -49,7 +49,8 @@ public sealed class InputProbe : IAsyncDisposable
     private readonly Dictionary<ProbeKey, TimeSpan?> _durationCache = new();
     private readonly HashSet<Process> _durationProcesses = new();
     private readonly Action<ProcessStartInfo>? _configureStartInfo;
-    private readonly OneShotBackend _backend;
+    private readonly IPreviewBackend _backend;
+    private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
     private readonly TimeProvider _clock;
     private readonly TimeSpan _timeout;
     private readonly CancellationTokenSource _lifetime = new();
@@ -62,15 +63,19 @@ public sealed class InputProbe : IAsyncDisposable
         _clock = timeProvider ?? TimeProvider.System;
         _timeout = timeout ?? TimeSpan.FromSeconds(30);
         if (_timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
-        _backend = new OneShotBackend(configureStartInfo);
+        _backend = new OneShotBackend(configureStartInfo, _clock, StopTimeout);
         _configureStartInfo = configureStartInfo;
     }
+
+    // 終了要求を無視する検査backendの回帰を、GPUやOSの異常終了に頼らず再現する。
+    internal InputProbe(IPreviewBackend backend, TimeProvider timeProvider)
+        : this(timeProvider) => _backend = backend;
 
     /// <summary>追加引数の既定は--avhw。引数配列を複製し、値が同じ要求にはキャッシュを返す。</summary>
     /// <exception cref="InputProbeException">エンコーダがエラー終了した、または有効なヘッダがない。</exception>
     /// <exception cref="InputProbeTimeoutException">検査全体が指定時間内に完了しなかった。</exception>
     public async Task<InputInfo> ProbeAsync(string encoderPath, string inputFile,
-        IReadOnlyList<string>? inputArgs = null, CancellationToken cancellationToken = default)
+        IReadOnlyList<string>? inputArgs = null, CancellationToken cancellationToken = default, PreviewCapabilities? capabilities = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(encoderPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(inputFile);
@@ -81,7 +86,7 @@ public sealed class InputProbe : IAsyncDisposable
             lifetime = _lifetime.Token;
         }
         string[] arguments = inputArgs?.ToArray() ?? new[] { "--avhw" };
-        var key = new ProbeKey(encoderPath, inputFile, JsonSerializer.Serialize(arguments));
+        var key = new ProbeKey(encoderPath, inputFile, JsonSerializer.Serialize(arguments), capabilities ?? new());
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime);
         await _gate.WaitAsync(cancellation.Token).ConfigureAwait(false);
         try
@@ -93,6 +98,7 @@ public sealed class InputProbe : IAsyncDisposable
             {
                 EncoderPath = encoderPath, InputFile = inputFile, InputArgs = arguments.Concat(new[] { "--log-level", "input=debug" }).ToArray(),
                 TargetSeconds = 0, PreMarginSeconds = 0, PostMarginSeconds = ProbeFrameLimit - 1, Fps = 1,
+                Capabilities = capabilities ?? new(),
             };
             using var stopAfterFrame = new CancellationTokenSource();
             using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token, stopAfterFrame.Token);
@@ -105,16 +111,12 @@ public sealed class InputProbe : IAsyncDisposable
             }
             catch (TimeoutException exception)
             {
-                cancellation.Cancel();
-                await _backend.AbortAsync().ConfigureAwait(false);
-                string diagnostics = await ReadDiagnosticsAsync(run).ConfigureAwait(false);
+                string diagnostics = await StopProbeRunAsync(run, cancellation).ConfigureAwait(false);
                 throw new InputProbeTimeoutException("入力情報の取得がタイムアウトしました", diagnostics, exception);
             }
             catch (OperationCanceledException)
             {
-                cancellation.Cancel();
-                await _backend.AbortAsync().ConfigureAwait(false);
-                await ObserveAsync(run).ConfigureAwait(false);
+                await StopProbeRunAsync(run, cancellation).ConfigureAwait(false);
                 throw;
             }
             cancellation.Token.ThrowIfCancellationRequested();
@@ -123,11 +125,13 @@ public sealed class InputProbe : IAsyncDisposable
                 throw new InputProbeException($"入力情報の取得でエンコーダがエラー終了しました: {result.ExitCode}", result.ExitCode, result.StandardError);
             if (!sink.HasFrame || sink.Header is not { } header || header.Fps <= 0 || !double.IsFinite(header.Fps))
                 throw new InputProbeException("入力情報の取得で有効なfps付きヘッダとフレームを受信できませんでした", -1, result.StandardError);
+            double? origin = capabilities?.TimestampPassthrough == true && sink.FirstTimestamp is double timestamp && double.IsFinite(timestamp) ? timestamp : null;
             var info = new InputInfo(header.Width, header.Height, header.FpsNum, header.FpsDen,
-                header.SarNum, header.SarDen, header.Chroma, header.BitDepth, header.ColorSpaceTag, ParseDuration(result.StandardError));
+                header.SarNum, header.SarDen, header.Chroma, header.BitDepth, header.ColorSpaceTag, ParseDuration(result.StandardError),
+                origin, origin.HasValue && !PreviewClockMap.IsNearTimestampWrap(origin.Value));
             lock (_sync)
             {
-                if (info.Duration == null && _durationCache.TryGetValue(key, out var knownDuration))
+                if (info.Duration == null && _durationCache.TryGetValue(key with { Capabilities = new() }, out var knownDuration))
                     info = info with { Duration = knownDuration };
                 _cache.Add(key, info);
             }
@@ -151,7 +155,7 @@ public sealed class InputProbe : IAsyncDisposable
             lifetime = _lifetime.Token;
         }
         string[] arguments = inputArgs?.ToArray() ?? new[] { "--avhw" };
-        var key = new ProbeKey(encoderPath, inputFile, JsonSerializer.Serialize(arguments));
+        var key = new ProbeKey(encoderPath, inputFile, JsonSerializer.Serialize(arguments), new());
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime);
         await _durationGate.WaitAsync(cancellation.Token).ConfigureAwait(false);
         try
@@ -159,7 +163,8 @@ public sealed class InputProbe : IAsyncDisposable
             cancellation.Token.ThrowIfCancellationRequested();
             lock (_sync)
             {
-                if (_cache.TryGetValue(key, out var input) && input.Duration.HasValue) return input.Duration;
+                var known = _cache.FirstOrDefault(pair => SameInput(pair.Key, key) && pair.Value.Duration.HasValue).Value;
+                if (known != null) return known.Duration;
                 if (_durationCache.TryGetValue(key, out var cached)) return cached;
             }
             var command = arguments.Concat(new[]
@@ -176,7 +181,9 @@ public sealed class InputProbe : IAsyncDisposable
             Task? stdout = null;
             Task<string>? stderr = null;
             Task? completion = null;
-            using var registration = cancellation.Token.Register(() => ProcessSupport.Kill(process));
+            CleanupDeadline? cleanup = null;
+            TimeSpan Remaining() => (cleanup ??= new CleanupDeadline(_clock, StopTimeout)).Remaining;
+            using var registration = cancellation.Token.Register(() => ProcessSupport.Observe(Task.Run(() => ProcessSupport.Kill(process))));
             try
             {
                 // 失敗終了時はy4mでないこともある。stdoutは解析せず読み切り、stderrと並行して詰まりを防ぐ。
@@ -186,49 +193,43 @@ public sealed class InputProbe : IAsyncDisposable
                 try { await completion.WaitAsync(_timeout, _clock, cancellation.Token).ConfigureAwait(false); }
                 catch (TimeoutException exception)
                 {
-                    cancellation.Cancel();
-                    await ProcessSupport.ReapAsync(process).ConfigureAwait(false);
-                    await ObserveAsync(completion).ConfigureAwait(false);
+                    await ProcessSupport.JoinAsync(cancellation.CancelAsync(), _clock, Remaining(), "probe.duration_cancel", process.Id).ConfigureAwait(false);
+                    await ProcessSupport.ReapBoundedAsync(process, _clock, Remaining()).ConfigureAwait(false);
+                    await ProcessSupport.JoinAsync(completion, _clock, Remaining(), "probe.duration_timeout", process.Id).ConfigureAwait(false);
                     throw new InputProbeTimeoutException("入力の長さの取得がタイムアウトしました",
-                        await ReadStandardErrorAsync(stderr).ConfigureAwait(false), exception);
+                        stderr.IsCompletedSuccessfully ? stderr.Result : "", exception);
                 }
                 cancellation.Token.ThrowIfCancellationRequested();
                 TimeSpan? duration = ParseDuration(await stderr.ConfigureAwait(false));
                 lock (_sync)
                 {
                     _durationCache.Add(key, duration);
-                    if (_cache.TryGetValue(key, out var input) && duration.HasValue)
-                        _cache[key] = input with { Duration = duration };
+                    if (duration.HasValue)
+                        foreach (var imageKey in _cache.Keys.Where(candidate => SameInput(candidate, key)).ToArray())
+                            _cache[imageKey] = _cache[imageKey] with { Duration = duration };
                 }
                 return duration;
             }
             finally
             {
+                Task joined = completion ?? Task.WhenAll(new[] { stdout, stderr }.OfType<Task>());
+                bool complete = false;
                 try
                 {
-                    await ProcessSupport.ReapAsync(process).ConfigureAwait(false);
-                    if (completion != null) await ObserveAsync(completion).ConfigureAwait(false);
-                    else
-                    {
-                        if (stdout != null) await ObserveAsync(stdout).ConfigureAwait(false);
-                        if (stderr != null) await ObserveAsync(stderr).ConfigureAwait(false);
-                    }
+                    bool reaped = await ProcessSupport.ReapBoundedAsync(process, _clock, Remaining()).ConfigureAwait(false);
+                    try { complete = await ProcessSupport.JoinAsync(joined, _clock, Remaining(), "probe.duration_pipes", process.Id).ConfigureAwait(false) && reaped; }
+                    catch { complete = reaped && joined.IsCompleted; }
                 }
                 finally
                 {
                     registration.Dispose();
                     lock (_sync) _durationProcesses.Remove(process);
-                    process.Dispose();
+                    if (complete) process.Dispose();
+                    else ProcessSupport.DisposeAfter(process, joined);
                 }
             }
         }
         finally { _durationGate.Release(); }
-    }
-
-    private static async Task<string> ReadStandardErrorAsync(Task<string> task)
-    {
-        try { return await task.ConfigureAwait(false); }
-        catch { return ""; }
     }
 
     /// <summary>入力ログのDuration行を読む。N/A、欠落、不正な値やTimeSpanの範囲外ならnull。</summary>
@@ -257,25 +258,12 @@ public sealed class InputProbe : IAsyncDisposable
         catch (OverflowException) { return null; }
     }
 
-    private static async Task<string> ReadDiagnosticsAsync(Task<PreviewRunResult> task)
-    {
-        try { return (await task.ConfigureAwait(false)).StandardError; }
-        catch (PreviewBackendException exception) { return exception.StandardError; }
-        catch { return ""; }
-    }
-
-    private static async Task ObserveAsync(Task task)
-    {
-        try { await task.ConfigureAwait(false); } catch { /* 呼び出し元の中断・タイムアウトを優先する。 */ }
-    }
-
     public ValueTask DisposeAsync()
     {
         lock (_sync)
         {
             if (_disposeTask != null) return new(_disposeTask);
             _disposed = true;
-            _lifetime.Cancel();
             _disposeTask = DisposeCoreAsync();
             return new(_disposeTask);
         }
@@ -283,28 +271,64 @@ public sealed class InputProbe : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
+        await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+        var deadline = new CleanupDeadline(_clock, StopTimeout);
+        Task cancellation = Task.Run(async () => await _lifetime.CancelAsync().ConfigureAwait(false));
+        Task backend = Task.Run(async () => await _backend.DisposeAsync().ConfigureAwait(false));
         Process[] processes;
         lock (_sync) processes = _durationProcesses.ToArray();
-        foreach (var process in processes) ProcessSupport.Kill(process);
-        await _backend.DisposeAsync().ConfigureAwait(false);
-        await _gate.WaitAsync().ConfigureAwait(false);
-        try { lock (_sync) _cache.Clear(); }
-        finally { _gate.Release(); }
-        await _durationGate.WaitAsync().ConfigureAwait(false);
-        try { lock (_sync) _durationCache.Clear(); }
-        finally { _durationGate.Release(); }
-        _lifetime.Dispose();
+        Task[] reaps = processes.Select(process => ProcessSupport.ReapBoundedAsync(process, _clock, deadline.Remaining)).ToArray();
+        await JoinIgnoringFailureAsync(cancellation, deadline, "probe.cancel").ConfigureAwait(false);
+        await JoinIgnoringFailureAsync(backend, deadline, "probe.backend_dispose").ConfigureAwait(false);
+        await JoinIgnoringFailureAsync(Task.WhenAll(reaps), deadline, "probe.duration_reap").ConfigureAwait(false);
+        Task imageGate = ClearAfterGateAsync(_gate, () => _cache.Clear());
+        Task durationGate = ClearAfterGateAsync(_durationGate, () => _durationCache.Clear());
+        await JoinIgnoringFailureAsync(imageGate, deadline, "probe.image_gate").ConfigureAwait(false);
+        await JoinIgnoringFailureAsync(durationGate, deadline, "probe.duration_gate").ConfigureAwait(false);
+        Task resources = Task.WhenAll(new[] { cancellation, backend, imageGate, durationGate }.Concat(reaps));
+        ProcessSupport.Observe(resources);
+        if (resources.IsCompleted) _lifetime.Dispose();
+        else ProcessSupport.Observe(resources.ContinueWith(_ => _lifetime.Dispose(), CancellationToken.None,
+            TaskContinuationOptions.None, TaskScheduler.Default));
     }
 
-    private sealed record ProbeKey(string EncoderPath, string InputFile, string InputArgs);
+    private async Task ClearAfterGateAsync(SemaphoreSlim gate, Action clear)
+    {
+        await gate.WaitAsync().ConfigureAwait(false);
+        try { lock (_sync) clear(); }
+        finally { gate.Release(); }
+    }
+
+    private async Task JoinIgnoringFailureAsync(Task task, CleanupDeadline deadline, string stage)
+    {
+        try { await ProcessSupport.JoinAsync(task, _clock, deadline.Remaining, stage).ConfigureAwait(false); }
+        catch (Exception exception) { System.Diagnostics.Trace.TraceWarning("Input probe shutdown failure ({0}): {1}", stage, exception.Message); }
+    }
+
+    private async Task<string> StopProbeRunAsync(Task<PreviewRunResult> run, CancellationTokenSource cancellation)
+    {
+        var deadline = new CleanupDeadline(_clock, StopTimeout);
+        await JoinIgnoringFailureAsync(cancellation.CancelAsync(), deadline, "probe.run_cancel").ConfigureAwait(false);
+        Task abort = Task.Run(async () => await _backend.AbortAsync().ConfigureAwait(false));
+        await JoinIgnoringFailureAsync(abort, deadline, "probe.run_abort").ConfigureAwait(false);
+        await JoinIgnoringFailureAsync(run, deadline, "probe.run_join").ConfigureAwait(false);
+        return run.IsCompletedSuccessfully ? run.Result.StandardError : "";
+    }
+
+    private static bool SameInput(ProbeKey a, ProbeKey b) => a.EncoderPath == b.EncoderPath
+        && a.InputFile == b.InputFile && a.InputArgs == b.InputArgs;
+
+    private sealed record ProbeKey(string EncoderPath, string InputFile, string InputArgs, PreviewCapabilities? Capabilities = null);
 
     private sealed class ProbeSink(Action stop) : IPreviewSink
     {
         public Y4mHeader? Header { get; private set; }
         public bool HasFrame { get; private set; }
+        public double? FirstTimestamp { get; private set; }
         public void OnHeader(Y4mHeader header) => Header = header;
         public void OnFrame(Y4mFrame frame)
         {
+            FirstTimestamp ??= frame.Xts;
             HasFrame = true;
             stop();
         }

@@ -9,6 +9,10 @@ public interface IPreviewSink
     void OnFrame(Y4mFrame frame);
     /// <summary>stdoutのバイトを受信した。フレーム途中の進捗も含む。</summary>
     void OnOutput();
+    /// <summary>次の制御行またはフレームを読む許可を待つ。既存の有限要求は待機しない。</summary>
+    ValueTask BeforeReadAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+    /// <summary>意図した読取待機の前はfalse、読取再開の直前はtrueを通知する。</summary>
+    void OnReadStateChanged(bool reading) { }
 }
 
 public sealed record PreviewRunResult(int ExitCode, string StandardError, bool IsCancelled = false);
@@ -31,4 +35,23 @@ public sealed class PreviewBackendException : Exception
     public PreviewBackendException(string message, string standardError, Exception? innerException = null)
         : base(message, innerException) => StandardError = standardError;
     public string StandardError { get; }
+}
+
+/// <summary>需要待ちの通知と中断可能な待機を、両バックエンドでそろえる。</summary>
+internal static class PreviewReadGate
+{
+    public static async ValueTask WaitAsync(IPreviewSink sink, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ValueTask permission = sink.BeforeReadAsync(cancellationToken);
+        if (!permission.IsCompleted)
+        {
+            sink.OnReadStateChanged(false);
+            // sinkが中断を無視しても、Abort/Disposeで読取タスクを必ず回収できるようにする。
+            await permission.AsTask().WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else await permission.ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        sink.OnReadStateChanged(true);
+    }
 }

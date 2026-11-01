@@ -3,83 +3,138 @@
 namespace HWEncParamViewer.Core;
 
 /// <summary>要求ごとにプロセスを起動し、キャンセル時はツリー全体を停止する。</summary>
-public sealed class OneShotBackend(Action<ProcessStartInfo>? configureStartInfo = null) : IPreviewBackend
+public sealed class OneShotBackend : IPreviewBackend
 {
     private readonly object _sync = new();
-    private readonly Dictionary<Process, TaskCompletionSource> _processes = [];
+    private readonly Dictionary<Process, ActiveRun> _processes = [];
     private bool _disposed;
+    private readonly List<Task> _pendingCleanup = [];
+    private readonly Action<ProcessStartInfo>? _configure;
+    private readonly TimeProvider _clock;
+    private readonly TimeSpan _stopTimeout;
+
+    public OneShotBackend(Action<ProcessStartInfo>? configureStartInfo = null,
+        TimeProvider? timeProvider = null, TimeSpan? stopTimeout = null)
+    {
+        _configure = configureStartInfo;
+        _clock = timeProvider ?? TimeProvider.System;
+        _stopTimeout = stopTimeout ?? TimeSpan.FromSeconds(5);
+        if (_stopTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(stopTimeout));
+    }
 
     public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        CancellationToken token = execution.Token;
+        token.ThrowIfCancellationRequested();
         Process process;
-        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finished = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            process = ProcessSupport.Start(request.EncoderPath, CommandBuilder.BuildOneShot(request), configureStartInfo);
-            _processes.Add(process, finished);
+            process = ProcessSupport.Start(request.EncoderPath, CommandBuilder.BuildOneShot(request), _configure);
+            _processes.Add(process, new ActiveRun(execution, finished));
         }
-        using var registration = cancellationToken.Register(() => ProcessSupport.Kill(process));
+        using var registration = token.Register(() => ProcessSupport.Observe(Task.Run(() => ProcessSupport.Kill(process))));
         var errorTask = process.StandardError.ReadToEndAsync();
-        var readTask = Task.Run(() =>
+        var readTask = Task.Run(async () =>
         {
+            await PreviewReadGate.WaitAsync(sink, token).ConfigureAwait(false);
             using var stream = new BufferedStream(new ProgressReadStream(process.StandardOutput.BaseStream, sink.OnOutput), 1 << 16);
             string? line = Y4mReader.ReadLine(stream);
             if (line == null) return;
             var header = Y4mHeader.Parse(line);
-            if (!cancellationToken.IsCancellationRequested) sink.OnHeader(header);
+            if (!token.IsCancellationRequested) sink.OnHeader(header);
             var reader = new Y4mReader(stream, header);
-            while (reader.ReadFrame() is { } frame)
+            while (true)
             {
-                if (!cancellationToken.IsCancellationRequested) sink.OnFrame(frame);
+                await PreviewReadGate.WaitAsync(sink, token).ConfigureAwait(false);
+                if (reader.ReadFrame() is not { } frame) break;
+                if (!token.IsCancellationRequested) sink.OnFrame(frame);
             }
         });
+        CleanupDeadline? cleanup = null;
+        TimeSpan Remaining() => (cleanup ??= new CleanupDeadline(_clock, _stopTimeout)).Remaining;
         try
         {
-            try { await readTask.ConfigureAwait(false); }
-            catch when (cancellationToken.IsCancellationRequested) { }
+            try { await readTask.WaitAsync(token).ConfigureAwait(false); }
+            catch when (token.IsCancellationRequested) { }
             catch (Exception exception)
             {
-                await ProcessSupport.ReapAsync(process).ConfigureAwait(false);
-                string diagnostics = await errorTask.ConfigureAwait(false);
+                await ProcessSupport.ReapBoundedAsync(process, _clock, Remaining()).ConfigureAwait(false);
+                string diagnostics = await ReadErrorAsync(errorTask, Remaining()).ConfigureAwait(false);
                 throw new PreviewBackendException("都度起動の出力を読み取れませんでした", diagnostics, exception);
             }
-            await process.WaitForExitAsync().ConfigureAwait(false);
-            string error = await errorTask.ConfigureAwait(false);
-            return new PreviewRunResult(process.ExitCode, error, cancellationToken.IsCancellationRequested);
+            bool exited = await ProcessSupport.JoinAsync(process.WaitForExitAsync(), _clock, Remaining(),
+                "oneshot.exit", process.Id).ConfigureAwait(false);
+            string error = await ReadErrorAsync(errorTask, Remaining()).ConfigureAwait(false);
+            if (!exited && !token.IsCancellationRequested)
+                throw new PreviewBackendException("都度起動プロセスの終了待機が期限切れになりました", error, new TimeoutException());
+            return new PreviewRunResult(exited ? process.ExitCode : -12, error, token.IsCancellationRequested);
         }
         finally
         {
-            // 例外経路も含めてプロセス終了とパイプ読み取り完了を待ち、孤児を残さない。
+            bool complete = true;
+            // pipeがEOFを返さない場合も、各段階の期限で打ち切り未回収を記録する。
             try
             {
-                await ProcessSupport.ReapAsync(process).ConfigureAwait(false);
-                try { await readTask.ConfigureAwait(false); } catch { }
-                await errorTask.ConfigureAwait(false);
+                complete &= await ProcessSupport.ReapBoundedAsync(process, _clock, Remaining()).ConfigureAwait(false);
+                try { complete &= await ProcessSupport.JoinAsync(readTask, _clock, Remaining(), "oneshot.read", process.Id).ConfigureAwait(false); }
+                catch { }
+                try { complete &= await ProcessSupport.JoinAsync(errorTask, _clock, Remaining(), "oneshot.stderr", process.Id).ConfigureAwait(false); }
+                catch { }
             }
             finally
             {
-                lock (_sync) _processes.Remove(process);
-                process.Dispose();
-                finished.TrySetResult();
+                Task resources = ProcessSupport.DisposeAfterAsync(process, readTask, errorTask, process.WaitForExitAsync());
+                lock (_sync)
+                {
+                    _processes.Remove(process);
+                    _pendingCleanup.Add(resources);
+                }
+                finished.TrySetResult(complete);
             }
         }
     }
 
+    private async Task<string> ReadErrorAsync(Task<string> error, TimeSpan timeout) =>
+        await ProcessSupport.JoinAsync(error, _clock, timeout, "oneshot.diagnostics").ConfigureAwait(false)
+            ? await error.ConfigureAwait(false) : "stderrの完了待機が期限切れになりました";
+
     public async ValueTask AbortAsync()
     {
-        KeyValuePair<Process, TaskCompletionSource>[] processes;
+        var deadline = new CleanupDeadline(_clock, _stopTimeout);
+        var cancellations = new List<Task>();
+        KeyValuePair<Process, ActiveRun>[] processes;
         lock (_sync) processes = _processes.ToArray();
         foreach (var entry in processes)
         {
-            try { ProcessSupport.Kill(entry.Key); }
-            catch (InvalidOperationException) { }
+            // プロセスを止めるだけでは、意図的に閉じたread gateから戻れない。
+            try { cancellations.Add(entry.Value.Cancellation.CancelAsync()); }
+            catch (ObjectDisposedException) { }
+            ProcessSupport.Observe(Task.Run(() => ProcessSupport.Kill(entry.Key)));
         }
+        bool cancelled = await ProcessSupport.JoinAsync(Task.WhenAll(cancellations), _clock,
+            deadline.Remaining, "oneshot.abort_cancel").ConfigureAwait(false);
         // 終了通知はRunAsyncのfinallyがパイプを回収してから出す。
-        await Task.WhenAll(processes.Select(entry => entry.Value.Task)).ConfigureAwait(false);
+        bool joined = await ProcessSupport.JoinAsync(Task.WhenAll(processes.Select(entry => entry.Value.Finished.Task)),
+            _clock, deadline.Remaining, "oneshot.abort").ConfigureAwait(false);
+        Task[] pending;
+        lock (_sync)
+        {
+            _pendingCleanup.RemoveAll(task => task.IsCompletedSuccessfully);
+            pending = _pendingCleanup.ToArray();
+        }
+        // 終了待機の過去の期限切れではなく、実際のexit/read/stderrとDisposeの完了を確認する。
+        bool recovered = await ProcessSupport.JoinAsync(Task.WhenAll(pending), _clock,
+            deadline.Remaining, "oneshot.pending_cleanup").ConfigureAwait(false);
+        if (recovered)
+            lock (_sync) _pendingCleanup.RemoveAll(task => task.IsCompletedSuccessfully);
+        if (!cancelled || !joined || !recovered) throw new TimeoutException("都度起動プロセスの回収が期限内に完了しませんでした");
     }
+
+    private sealed record ActiveRun(CancellationTokenSource Cancellation, TaskCompletionSource<bool> Finished);
 
     public async ValueTask DisposeAsync()
     {

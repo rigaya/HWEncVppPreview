@@ -127,13 +127,16 @@ public sealed class BackendTests
     public async Task IgnoredCancellationKillsThenRestartsServer()
     {
         var clock = new FakeTimeProvider();
-        await using var backend = new ServerBackend(timeProvider: clock);
+        var observedClock = new TimerSignalClock(clock, TimeSpan.FromSeconds(2));
+        await using var backend = new ServerBackend(timeProvider: observedClock, cancelTimeout: TimeSpan.FromSeconds(2));
         using var cancellation = new CancellationTokenSource();
         var sink = new RecordingSink();
         var run = backend.RunAsync(Request("--fake-hang-after", "1", "--fake-ignore-cancel"), sink, cancellation.Token);
         await sink.FirstFrame.Task.WaitAsync(SafetyTimeout);
         cancellation.Cancel();
-        await AdvanceUntilCompletedAsync(run, clock);
+        await observedClock.TimerArmed.Task.WaitAsync(SafetyTimeout);
+        clock.Advance(TimeSpan.FromSeconds(2));
+        await run.WaitAsync(SafetyTimeout);
         Assert.True((await run).IsCancelled);
         AssertStopped(sink.ProcessId);
         var next = new RecordingSink();
@@ -146,7 +149,8 @@ public sealed class BackendTests
     {
         string pidFile = Path.Combine(Path.GetTempPath(), $"viewer-ready-{Guid.NewGuid():N}.txt");
         var clock = new FakeTimeProvider();
-        await using var backend = new ServerBackend(timeProvider: clock, configureStartInfo: info =>
+        var observedClock = new TimerSignalClock(clock, TimeSpan.FromSeconds(3));
+        await using var backend = new ServerBackend(timeProvider: observedClock, configureStartInfo: info =>
         {
             info.Environment["FAKE_ENCODER_READY_NONE"] = "1";
             info.Environment["FAKE_ENCODER_PID_FILE"] = pidFile;
@@ -154,8 +158,9 @@ public sealed class BackendTests
         try
         {
             var run = backend.RunAsync(Request(), new RecordingSink());
-            await AdvanceUntilCompletedAsync(run, clock);
-            await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => run);
+            await observedClock.TimerArmed.Task.WaitAsync(SafetyTimeout);
+            clock.Advance(TimeSpan.FromSeconds(3));
+            await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => run.WaitAsync(SafetyTimeout));
             if (File.Exists(pidFile))
             {
                 foreach (string pid in File.ReadAllLines(pidFile)) AssertStopped(int.Parse(pid));
@@ -380,18 +385,19 @@ public sealed class BackendTests
         return path;
     }
 
-    private static async Task AdvanceUntilCompletedAsync(Task task, FakeTimeProvider clock)
+    private sealed class TimerSignalClock(FakeTimeProvider inner, TimeSpan timeout) : TimeProvider
     {
-        // OSのパイプ受信とは同期し、判定対象のタイマーだけを偽時計で進める。
-        var advancing = Task.Run(async () =>
+        public TaskCompletionSource TimerArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            while (!task.IsCompleted)
-            {
-                clock.Advance(TimeSpan.FromSeconds(1));
-                await Task.Yield();
-            }
-        });
-        await advancing.WaitAsync(SafetyTimeout);
+            ITimer timer = inner.CreateTimer(callback, state, dueTime, period);
+            // 応答待ちの期限だけを進め、続くOSのkill/pipe回収には偽時計を進めない。
+            if (dueTime == timeout) TimerArmed.TrySetResult();
+            return timer;
+        }
     }
 
     private static void AssertStopped(int pid)

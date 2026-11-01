@@ -7,6 +7,18 @@ public sealed record PreviewRequest
 {
     /// <summary>呼び出し側の要求識別子。通知へ引き継ぐが、エンコード引数と画像キャッシュのキーには含めない。</summary>
     public long CorrelationId { get; init; }
+    /// <summary>helpで確認できた、プレビュー時に付加するオプション。</summary>
+    public PreviewCapabilities Capabilities { get; init; } = new();
+    /// <summary>フィルタなし・seekなしの先頭Xts。未取得なら要求を跨ぐ時計として使わない。</summary>
+    public double? TimestampOriginSeconds { get; init; }
+    /// <summary>原点がwrap近傍ならfalse。数値を保持したまま要求単位の相対時計へ戻す。</summary>
+    public bool TimestampOriginTrusted { get; init; } = true;
+    /// <summary>既知の入力長。有限取得が入力末尾へ届いたかの判定だけに使う。</summary>
+    public double? InputDurationSeconds { get; init; }
+    /// <summary>trueなら--framesを付けず、読み取り側の需要で出力を止める。</summary>
+    public bool Continuous { get; init; }
+    /// <summary>物理要求のseekを固定する。nullは通常計画、0は明示的な先頭取得。</summary>
+    public double? SeekSecondsOverride { get; init; }
 
     /// <summary>エンコーダのexeパス。引数配列には含めない（起動側が使う）。</summary>
     public string EncoderPath { get; init; } = "";
@@ -33,6 +45,10 @@ public sealed record PreviewPlan(double? SeekSeconds, double ActualPreMargin, in
 
 public static class CommandBuilder
 {
+    /// <summary>正常に取得したhelpの索引だけから、追加引数の対応を判定する。</summary>
+    public static PreviewCapabilities CapabilitiesFromHelp(HelpIndex? help) => help == null ? new() : new(
+        help.OptionNames.Contains("--timestamp-passthrough", StringComparer.Ordinal),
+        help.OptionNames.Contains("--opencl-task-threads", StringComparer.Ordinal));
     public static PreviewPlan Plan(PreviewRequest req)
     {
         if (req.Fps <= 0) throw new ArgumentException("Fps は正の値が必要です", nameof(req));
@@ -44,6 +60,11 @@ public static class CommandBuilder
         double mb = Math.Min(req.PreMarginSeconds, req.TargetSeconds);
         // ms に丸めてから前マージンを逆算する (実際に --seek へ渡す値と整合させる)
         long seekMs = (long)Math.Round((req.TargetSeconds - mb) * 1000.0, MidpointRounding.AwayFromZero);
+        if (req.SeekSecondsOverride is double forced)
+        {
+            if (!double.IsFinite(forced) || forced < 0) throw new ArgumentException("seekは有限の0以上が必要です", nameof(req));
+            seekMs = (long)Math.Round(forced * 1000.0, MidpointRounding.AwayFromZero);
+        }
         double? seek = seekMs > 0 ? seekMs / 1000.0 : null;
         double actualMb = req.TargetSeconds - (seek ?? 0.0);
         // 1e-9 は (0.7+0.1)*30=24.000000000000004 のような浮動小数の誤差で ceil が1つ増えるのを防ぐ
@@ -69,13 +90,19 @@ public static class CommandBuilder
             args.Add("--seek");
             args.Add(FormatSeek(s));
         }
-        args.Add("--frames");
-        args.Add(plan.FrameCount.ToString(CultureInfo.InvariantCulture));
+        if (!req.Continuous)
+        {
+            args.Add("--frames");
+            args.Add(plan.FrameCount.ToString(CultureInfo.InvariantCulture));
+        }
         if (includeOutput)
         {
             args.AddRange(new[] { "-c", "raw", "--y4m-timestamp", "-o", "-" });
         }
         args.AddRange(req.VppArgs);
+        // 入力/VPP引数より後に置き、Viewerが確認したプレビュー用設定を適用する。
+        if (req.Capabilities.TimestampPassthrough) args.Add("--timestamp-passthrough");
+        if (req.Capabilities.OpenClTaskThreads) args.AddRange(new[] { "--opencl-task-threads", "0" });
         return args.ToArray();
     }
 

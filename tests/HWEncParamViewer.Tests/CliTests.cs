@@ -119,10 +119,11 @@ public sealed class CliTests
     [Fact]
     public async Task ProbeTimeoutUsesFakeClockAndReturnsExitThree()
     {
-        var clock = new FakeTimeProvider();
+        var clock = new ProbeStartClock();
         using var output = new StringWriter(CultureInfo.InvariantCulture);
         var run = CliProgram.RunAsync(Args("--mode", "oneshot", "--input-args", "--fake-hang-after 0"), output, clock);
-        // RunAsyncが戻った時点で、終わらない入力検査のタイマーが登録されている。
+        // help取得後に入力検査のタイマーが登録されるまで待ち、登録前Advanceとの競合を避ける。
+        await clock.ProbeTimerRegistered.Task.WaitAsync(SafetyTimeout);
         clock.Advance(TimeSpan.FromSeconds(31));
         Assert.Equal(3, await run.WaitAsync(SafetyTimeout));
         using var json = ParseSingleLine(output.ToString());
@@ -146,6 +147,61 @@ public sealed class CliTests
         Assert.Equal(0, fallback.Calls);
     }
 
+    [Fact]
+    public async Task AbsoluteClockReportsActualPhysicalWindowAndDumpsRawTimestamps()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"viewer-cli-physical-{Guid.NewGuid():N}.y4m");
+        try
+        {
+            var run = await RunProcessAsync(Args("--mode", "oneshot", "--time", "10", "--pre-margin", "2",
+                "--post-margin", "1", "--dump-y4m", path), capabilities: true);
+            Assert.Equal(0, run.ExitCode);
+            using var json = ParseSingleLine(run.Output);
+            Assert.Equal(7, json.RootElement.GetProperty("seekSeconds").GetDouble());
+            Assert.Equal(121, json.RootElement.GetProperty("frames").GetInt32());
+            Assert.Equal(1010, json.RootElement.GetProperty("selectedXts").GetDouble(), 6);
+            using var stream = File.OpenRead(path);
+            var reader = new Y4mReader(stream);
+            var first = reader.ReadFrame();
+            Assert.NotNull(first);
+            Assert.Equal("7", first.Header.ExtTags["XSEEK"]);
+            Assert.Equal(1007, first.Xts!.Value, 6);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Theory]
+    [InlineData("--fake-clock-backstep-at", 1000)]
+    [InlineData("--fake-clock-jump-at", 1000)]
+    [InlineData("--fake-clock-backstep-at", 0)]
+    public async Task ReplayReportsPhysicalClockAndDumpsOnlyTheWinningFiniteFrames(string anomaly, double origin)
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"viewer-cli-replay-{Guid.NewGuid():N}.y4m");
+        try
+        {
+            var run = await RunProcessAsync(Args("--mode", "oneshot", "--time", "10", "--pre-margin", "2",
+                "--post-margin", "1", "--input-args", "--avhw " + anomaly + " 95 --fake-origin-seconds "
+                    + origin.ToString(CultureInfo.InvariantCulture), "--dump-y4m", path), capabilities: true);
+            Assert.Equal(0, run.ExitCode);
+            using var json = ParseSingleLine(run.Output);
+            Assert.False(json.RootElement.GetProperty("timestampPassthrough").GetBoolean());
+            Assert.False(json.RootElement.GetProperty("trustedAbsolute").GetBoolean());
+            Assert.Equal(origin, json.RootElement.GetProperty("timestampOriginSeconds").GetDouble());
+            using var stream = File.OpenRead(path);
+            var reader = new Y4mReader(stream);
+            int count = 0;
+            while (reader.ReadFrame() is { } frame)
+            {
+                Assert.InRange(frame.Xts!.Value, 0, 5);
+                ++count;
+            }
+            Assert.Equal(json.RootElement.GetProperty("frameCount").GetInt32(), count);
+            Assert.Equal(json.RootElement.GetProperty("frames").GetInt32(), count);
+            Assert.InRange(json.RootElement.GetProperty("selectedXts").GetDouble(), 0, 3);
+        }
+        finally { File.Delete(path); }
+    }
+
     private static string[] Args(params string[] extra) => new[]
     {
         "--enc", BackendTests.FakeEncoderPath(), "--input", "fake input.ts", "--time", "0:00:00.300",
@@ -159,7 +215,7 @@ public sealed class CliTests
         return JsonDocument.Parse(lines[0]);
     }
 
-    private static async Task<ProcessResult> RunProcessAsync(string[] args)
+    private static async Task<ProcessResult> RunProcessAsync(string[] args, bool capabilities = false)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         string configuration = directory.Parent!.Name;
@@ -168,6 +224,7 @@ public sealed class CliTests
         string executable = Path.Combine(directory.FullName, "src", "HWEncParamViewer.Cli", "bin", configuration, "net10.0",
             OperatingSystem.IsWindows() ? "HWEncParamViewer.Cli.exe" : "HWEncParamViewer.Cli");
         var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        if (capabilities) start.Environment["FAKE_ENCODER_PREVIEW_CAPABILITIES"] = "1";
         foreach (string arg in args) start.ArgumentList.Add(arg);
         using var process = Process.Start(start)!;
         Task<string> output = process.StandardOutput.ReadToEndAsync();
@@ -197,4 +254,20 @@ public sealed class CliTests
         public ValueTask AbortAsync() => ValueTask.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
+    private sealed class ProbeStartClock : TimeProvider
+    {
+        private readonly FakeTimeProvider _inner = new();
+        public TaskCompletionSource ProbeTimerRegistered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override long TimestampFrequency => _inner.TimestampFrequency;
+        public override DateTimeOffset GetUtcNow() => _inner.GetUtcNow();
+        public override long GetTimestamp() => _inner.GetTimestamp();
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = _inner.CreateTimer(callback, state, dueTime, period);
+            if (dueTime == TimeSpan.FromSeconds(30)) ProbeTimerRegistered.TrySetResult();
+            return timer;
+        }
+        public void Advance(TimeSpan delta) => _inner.Advance(delta);
+    }
+
 }

@@ -14,7 +14,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     public async Task NewNavigationDoesNotCancelTheAlreadyRunningRequest()
     {
         var backend = new ControlledBackend();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         // 移動の追加でも実行中の要求が完了まで保持される。
         controller.Submit(Request(0), navigation: true);
         var first = await backend.NextAsync();
@@ -30,7 +32,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var backend = new ControlledBackend();
         var cache = new FrameCache();
         var images = new ConcurrentQueue<PreviewFrameResult>();
-        await using var controller = new PreviewController(backend, cache: cache, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, cache: cache, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.FrameReady += images.Enqueue;
         controller.Submit(Request(0), navigation: true);
         var first = await backend.NextAsync();
@@ -51,7 +55,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     public async Task NavigationKeepsOnlyTheLatestWaitingRequestWithoutAdvancingTheClock()
     {
         var backend = new ControlledBackend();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.Submit(Request(0), navigation: true);
         var first = await backend.NextAsync();
         controller.Submit(Request(1), navigation: true);
@@ -73,7 +79,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var backend = new ControlledBackend();
         var images = new ConcurrentQueue<PreviewFrameResult>();
         var completions = new ConcurrentQueue<PreviewCompletion>();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.FrameReady += images.Enqueue;
         controller.Completed += completions.Enqueue;
         controller.Submit(Request(0), navigation: true);
@@ -95,10 +103,11 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     public async Task EditingImmediatelySuppressesOldNavigationDuringItsDebounce()
     {
         var backend = new ControlledBackend();
-        var clock = new FakeTimeProvider();
+        var clock = new NavigationClock();
         var images = new ConcurrentQueue<PreviewFrameResult>();
         var completions = new ConcurrentQueue<PreviewCompletion>();
-        await using var controller = new PreviewController(backend, timeProvider: clock);
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.FrameReady += images.Enqueue;
         controller.Completed += completions.Enqueue;
         controller.Submit(Request(0), navigation: true);
@@ -121,7 +130,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     {
         var backend = new ControlledBackend();
         var failures = new ConcurrentQueue<PreviewFailure>();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.Failed += failures.Enqueue;
         controller.Submit(Request(0), navigation: true);
         var first = await backend.NextAsync();
@@ -139,7 +150,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     {
         var backend = new ControlledBackend();
         var notifications = new ConcurrentQueue<string>();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.FrameReady += frame => notifications.Enqueue($"frame:{frame.Request.TargetSeconds}");
         controller.Completed += result => notifications.Enqueue($"completed:{result.Request.TargetSeconds}");
         controller.Submit(Request(0), navigation: true);
@@ -157,7 +170,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     {
         var backend = new ControlledBackend();
         var notifications = new ConcurrentQueue<string>();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.FrameReady += frame =>
         {
             notifications.Enqueue($"frame:{frame.Request.TargetSeconds}");
@@ -179,7 +194,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var backend = new ControlledBackend();
         var frames = new ConcurrentQueue<PreviewFrameResult>();
         var completions = new ConcurrentQueue<PreviewCompletion>();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.FrameReady += frames.Enqueue;
         controller.Completed += completions.Enqueue;
         controller.Submit(Request(0), navigation: true);
@@ -201,7 +218,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     public async Task BackgroundKeepsPendingNavigationAndRunsAfterTheLatestForeground()
     {
         var backend = new ControlledBackend();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.Submit(Request(0), navigation: true);
         var first = await backend.NextAsync();
         controller.Submit(Request(1), navigation: true);
@@ -223,8 +242,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     public async Task BackgroundWaitsForForegroundDebounceWithoutReplacingIt()
     {
         var backend = new ControlledBackend();
-        var clock = new FakeTimeProvider();
-        await using var controller = new PreviewController(backend, timeProvider: clock);
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.Submit(Request(0));
         controller.Submit(Request(10), background: true);
         Assert.Equal(0, backend.Starts);
@@ -245,7 +265,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     {
         var backend = new ControlledBackend();
         var completions = new ConcurrentQueue<PreviewCompletion>();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.Completed += completions.Enqueue;
         controller.Submit(Request(0), background: true);
         var background = await backend.NextAsync();
@@ -265,7 +287,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var backend = new ControlledBackend();
         var frames = new ConcurrentQueue<PreviewFrameResult>();
         var completions = new ConcurrentQueue<PreviewCompletion>();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.FrameReady += frames.Enqueue;
         controller.Completed += completions.Enqueue;
         controller.Submit(Request(0), background: true);
@@ -285,7 +309,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     {
         var backend = new ControlledBackend();
         using var cancellation = new CancellationTokenSource();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.Submit(Request(0), navigation: true);
         var foreground = await backend.NextAsync();
         controller.Submit(Request(10), background: true, cancellationToken: cancellation.Token);
@@ -302,7 +328,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var backend = new ControlledBackend();
         var frames = new ConcurrentQueue<PreviewFrameResult>();
         using var cancellation = new CancellationTokenSource();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.FrameReady += frames.Enqueue;
         controller.Submit(Request(0), background: true, cancellationToken: cancellation.Token);
         var background = await backend.NextAsync();
@@ -317,11 +345,42 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     public async Task DisposeCollectsForegroundAndBackgroundWaitersWithoutAdvancingFakeTime()
     {
         var backend = new ControlledBackend();
-        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        var clock = new NavigationClock();
+        var controller = new PreviewController(backend, timeProvider: clock);
+        await using var teardown = new ControllerLifetime(controller, clock);
         controller.Submit(Request(0));
         controller.Submit(Request(10), background: true);
         await controller.DisposeAsync().AsTask().WaitAsync(Safety);
         Assert.Equal(0, backend.Starts);
+    }
+
+    private sealed class ControllerLifetime(PreviewController controller, NavigationClock clock) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            Task dispose = controller.DisposeAsync().AsTask();
+            // このstubはcancelを観測するだけで終了しない。既定の協調猶予を時計で進めてAbort回収する。
+            Task winner = await Task.WhenAny(dispose, clock.GraceArmed.Task).WaitAsync(Safety);
+            if (ReferenceEquals(winner, clock.GraceArmed.Task)) clock.Advance(TimeSpan.FromSeconds(2));
+            await dispose.WaitAsync(Safety);
+            Assert.False(controller.ShutdownIncomplete);
+        }
+    }
+
+    private sealed class NavigationClock : TimeProvider
+    {
+        private readonly FakeTimeProvider _clock = new();
+        public TaskCompletionSource GraceArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override long TimestampFrequency => _clock.TimestampFrequency;
+        public override long GetTimestamp() => _clock.GetTimestamp();
+        public override DateTimeOffset GetUtcNow() => _clock.GetUtcNow();
+        public void Advance(TimeSpan delta) => _clock.Advance(delta);
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            ITimer timer = _clock.CreateTimer(callback, state, dueTime, period);
+            if (dueTime == TimeSpan.FromSeconds(2)) GraceArmed.TrySetResult();
+            return timer;
+        }
     }
 
     private static PreviewRequest Request(double time) => new()

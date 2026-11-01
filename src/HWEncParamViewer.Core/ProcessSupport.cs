@@ -29,10 +29,82 @@ internal static class ProcessSupport
         catch (System.ComponentModel.Win32Exception) when (process.HasExited) { }
     }
 
-    public static async Task ReapAsync(Process process)
+    public static Task ReapAsync(Process process) =>
+        ReapBoundedAsync(process, TimeProvider.System, TimeSpan.FromSeconds(5));
+
+    public static async Task<bool> ReapBoundedAsync(Process process, TimeProvider clock, TimeSpan timeout)
     {
-        Kill(process);
-        await process.WaitForExitAsync().ConfigureAwait(false);
+        int? pid = null;
+        try { pid = process.Id; } catch (InvalidOperationException) { }
+        void Stage(string stage)
+        {
+            if (!PerfTrace.Enabled) return;
+            PerfTrace.Write("process.reap.stage", new { stage, pid });
+            PerfTrace.Flush();
+        }
+        var deadline = new CleanupDeadline(clock, timeout);
+        Stage("kill_begin");
+        // OSのプロセス操作自体が戻らない場合も、呼出し元を無期限に拘束しない。
+        if (!await JoinAsync(Task.Run(() => Kill(process)), clock, deadline.Remaining, "process.kill", pid).ConfigureAwait(false))
+            return false;
+        Stage("kill_end");
+        bool exited = await JoinAsync(process.WaitForExitAsync(), clock, deadline.Remaining, "process.exit", pid).ConfigureAwait(false);
+        if (exited) Stage("wait_exit_end");
+        return exited;
+    }
+
+    public static async Task<bool> JoinAsync(Task task, TimeProvider clock, TimeSpan timeout, string stage, int? pid = null)
+    {
+        try
+        {
+            await task.WaitAsync(timeout, clock).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            WarnTimeout(stage, pid);
+            Observe(task);
+            return false;
+        }
+    }
+
+    public static void WarnTimeout(string stage, int? pid = null)
+    {
+        Trace.TraceWarning($"Process cleanup timed out: stage={stage}, pid={pid}");
+        if (!PerfTrace.Enabled) return;
+        PerfTrace.Write("process.cleanup_timeout", new { stage, pid, unreaped = true });
+        PerfTrace.Flush();
+    }
+
+    public static void Observe(Task task) => _ = task.ContinueWith(completed => _ = completed.Exception,
+        CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+        TaskScheduler.Default);
+
+    public static void DisposeAfter(Process process, params Task[] tasks) => _ = DisposeAfterAsync(process, tasks);
+
+    public static Task DisposeAfterAsync(Process process, params Task[] tasks)
+    {
+        // 未完了のpipe操作とDisposeを競合させず、遅れて完了した場合にも資源を解放する。
+        Task cleanup = Task.WhenAll(tasks).ContinueWith(_ => process.Dispose(), CancellationToken.None,
+            TaskContinuationOptions.None, TaskScheduler.Default);
+        Observe(Task.WhenAll(tasks));
+        Observe(cleanup);
+        return cleanup;
+    }
+
+}
+
+/// <summary>終了処理の各段階で共用する、注入時計による残り時間。</summary>
+internal sealed class CleanupDeadline(TimeProvider clock, TimeSpan timeout)
+{
+    private readonly long _started = clock.GetTimestamp();
+    public TimeSpan Remaining
+    {
+        get
+        {
+            TimeSpan remaining = timeout - clock.GetElapsedTime(_started);
+            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        }
     }
 }
 

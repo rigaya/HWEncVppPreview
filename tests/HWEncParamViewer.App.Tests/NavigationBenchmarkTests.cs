@@ -64,6 +64,21 @@ public sealed class NavigationBenchmarkTests
             await vm.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(60));
             PerfTrace.Write("bench.settled", new { vm.CurrentSeconds, vm.StatusText, vm.ErrorText });
             Assert.Null(vm.ErrorText);
+            // 実測時だけ、需要が満たされた後の常駐プロセスを観測できる期間を設ける。
+            // 連続取得の意図的なpauseは正常で、ここでは物理ENDを待たない。
+            string? holdText = Environment.GetEnvironmentVariable("HWENC_VIEWER_BENCH_IDLE_HOLD_MS");
+            if (!string.IsNullOrWhiteSpace(holdText))
+            {
+                Assert.True(int.TryParse(holdText, out int holdMs) && holdMs is >= 0 and <= 30000,
+                    "idle計測の保持時間は0〜30000msで指定する");
+                if (holdMs > 0)
+                {
+                    PerfTrace.Write("bench.idle.begin", new { utc = DateTimeOffset.UtcNow, holdMs, vm.CurrentSeconds, vm.StatusText, vm.IsBeforeBusy });
+                    PerfTrace.Flush();
+                    await Task.Delay(holdMs);
+                    PerfTrace.Write("bench.idle.end", new { utc = DateTimeOffset.UtcNow, vm.CurrentSeconds, vm.StatusText, vm.IsBeforeBusy });
+                }
+            }
         }
         catch (Exception exception)
         {
@@ -72,6 +87,7 @@ public sealed class NavigationBenchmarkTests
         }
         finally
         {
+            PerfTrace.Write("bench.teardown.begin", new { utc = DateTimeOffset.UtcNow });
             window.Close();
             process.Refresh();
             PerfTrace.Write("bench.metrics", new

@@ -11,6 +11,7 @@ public sealed class ServerBackend : IPreviewBackend
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _readyTimeout;
     private readonly TimeSpan _cancelTimeout;
+    private readonly TimeSpan _stopTimeout;
     private readonly ServerRestartPolicy _restartPolicy;
     private readonly Action<ProcessStartInfo>? _configure;
     private readonly object _sync = new();
@@ -18,15 +19,19 @@ public sealed class ServerBackend : IPreviewBackend
     private Session? _session;
     private CancellationTokenSource? _latest;
     private bool _disposed;
+    private Task? _disposeTask;
+    private readonly List<Task> _pendingCleanup = [];
     private long _nextId;
 
     public ServerBackend(TimeProvider? timeProvider = null, TimeSpan? readyTimeout = null,
         TimeSpan? cancelTimeout = null, ServerRestartPolicy? restartPolicy = null,
-        Action<ProcessStartInfo>? configureStartInfo = null)
+        Action<ProcessStartInfo>? configureStartInfo = null, TimeSpan? stopTimeout = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
         _readyTimeout = readyTimeout ?? TimeSpan.FromSeconds(3);
         _cancelTimeout = cancelTimeout ?? TimeSpan.FromSeconds(5);
+        _stopTimeout = stopTimeout ?? TimeSpan.FromSeconds(5);
+        if (_stopTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(stopTimeout));
         if (_readyTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(readyTimeout));
         if (_cancelTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(cancelTimeout));
         _restartPolicy = restartPolicy ?? new ServerRestartPolicy();
@@ -56,9 +61,11 @@ public sealed class ServerBackend : IPreviewBackend
             Task<string> logTask = session.RegisterLog(id);
             requestLog = logTask;
             if (PerfTrace.Enabled) PerfTrace.Write("server.run_send", new { request.CorrelationId, id,
-                pid = session.Process.Id, request.TargetSeconds, frames = CommandBuilder.Plan(request).FrameCount });
+                pid = session.Process.Id, request.TargetSeconds, continuous = request.Continuous,
+                frames = request.Continuous ? (int?)null : CommandBuilder.Plan(request).FrameCount,
+                timestampPassthrough = request.Capabilities.TimestampPassthrough });
             await session.SendAsync(new { cmd = "run", id, args = CommandBuilder.BuildServer(request) }).ConfigureAwait(false);
-            var readTask = Task.Run(() => ReadRequest(session, id, request.CorrelationId, sink, execution.Token));
+            var readTask = Task.Run(() => ReadRequestAsync(session, id, request.CorrelationId, sink, execution.Token));
             session.LastRead = readTask;
             var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             using var registration = execution.Token.Register(() => cancelled.TrySetResult());
@@ -84,7 +91,7 @@ public sealed class ServerBackend : IPreviewBackend
                 {
                     if (PerfTrace.Enabled) PerfTrace.Write("server.cancel_drop", new { request.CorrelationId, id });
                     await DropSessionAsync(session).ConfigureAwait(false);
-                    return new PreviewRunResult(-12, await logTask.ConfigureAwait(false), true);
+                    return new PreviewRunResult(-12, await session.ReadLogAsync(logTask).ConfigureAwait(false), true);
                 }
             }
             else end = await readTask.ConfigureAwait(false);
@@ -101,14 +108,14 @@ public sealed class ServerBackend : IPreviewBackend
         catch (Exception) when (execution.IsCancellationRequested)
         {
             if (session != null) await DropSessionAsync(session).ConfigureAwait(false);
-            string diagnostics = requestLog == null ? "" : await requestLog.ConfigureAwait(false);
+            string diagnostics = requestLog == null ? "" : await session!.ReadLogAsync(requestLog).ConfigureAwait(false);
             return new PreviewRunResult(-12, diagnostics, true);
         }
         catch (PreviewServerNotSupportedException) { throw; }
         catch (Exception exception)
         {
             if (session != null) await DropSessionAsync(session).ConfigureAwait(false);
-            string diagnostics = requestLog == null ? "" : await requestLog.ConfigureAwait(false);
+            string diagnostics = requestLog == null ? "" : await session!.ReadLogAsync(requestLog).ConfigureAwait(false);
             throw new PreviewBackendException("常駐サーバの要求を完了できませんでした", diagnostics, exception);
         }
         finally
@@ -119,7 +126,7 @@ public sealed class ServerBackend : IPreviewBackend
         }
     }
 
-    private static PreviewEnd ReadRequest(Session session, long id, long correlationId, IPreviewSink sink, CancellationToken token)
+    private static async Task<PreviewEnd> ReadRequestAsync(Session session, long id, long correlationId, IPreviewSink sink, CancellationToken token)
     {
         bool begun = false;
         int frames = 0;
@@ -127,8 +134,19 @@ public sealed class ServerBackend : IPreviewBackend
         double? firstFrameMs = null;
         double? lastFrameMs = null;
         long readStart = PerfTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
-        while (session.Reader.ReadEvent() is { } item)
+        while (true)
         {
+            if (!token.IsCancellationRequested)
+            {
+                try { await PreviewReadGate.WaitAsync(sink, token).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    // 取消後は需要待ちを迂回する。fwriteの背圧を解き、ENDまで必ず排出する。
+                    // Cancelのコールバック内で同期読取に入ると、cancel送信やkillへ進めなくなる。
+                    await Task.Yield();
+                }
+            }
+            if (session.Reader.ReadEvent() is not { } item) break;
             switch (item)
             {
                 case PreviewBegin begin when !begun && begin.Id == id:
@@ -180,7 +198,7 @@ public sealed class ServerBackend : IPreviewBackend
             return session;
         }
         if (PerfTrace.Enabled) PerfTrace.Write("server.process_start", new { path });
-        session = new Session(path, ProcessSupport.Start(path, ["--preview-server"], _configure));
+        session = new Session(path, ProcessSupport.Start(path, ["--preview-server"], _configure), _timeProvider, _stopTimeout);
         session.Sink = sink;
         lock (_sync) _session = session;
         var readyTask = Task.Run(session.Reader.ReadEvent);
@@ -206,34 +224,98 @@ public sealed class ServerBackend : IPreviewBackend
         }
     }
 
-    private async Task DropSessionAsync(Session session)
+    private async Task DropSessionAsync(Session session, TimeSpan? timeout = null)
     {
         lock (_sync) { if (ReferenceEquals(_session, session)) _session = null; }
-        await session.StopAsync().ConfigureAwait(false);
+        if (!await session.StopAsync(timeout: timeout).ConfigureAwait(false))
+            lock (_sync) _pendingCleanup.Add(session.CleanupCompletion);
+    }
+
+    private async Task<bool> JoinPendingCleanupAsync(CleanupDeadline deadline)
+    {
+        Task[] pending;
+        lock (_sync)
+        {
+            _pendingCleanup.RemoveAll(task => task.IsCompletedSuccessfully);
+            pending = _pendingCleanup.ToArray();
+        }
+        // 過去の期限切れと、現在も残る未回収を区別する。遅れて回収できたsessionは除外する。
+        bool completed = await ProcessSupport.JoinAsync(Task.WhenAll(pending), _timeProvider,
+            deadline.Remaining, "server.pending_cleanup").ConfigureAwait(false);
+        if (completed)
+            lock (_sync) _pendingCleanup.RemoveAll(task => task.IsCompletedSuccessfully);
+        return completed;
     }
 
     public async ValueTask AbortAsync()
     {
+        var deadline = new CleanupDeadline(_timeProvider, _stopTimeout);
         Session? session;
-        lock (_sync)
+        CancellationTokenSource? latest;
+        lock (_sync) { latest = _latest; session = _session; }
+        bool cancelled = true;
+        try
         {
-            _latest?.Cancel();
-            session = _session;
+            if (latest != null) cancelled = await ProcessSupport.JoinAsync(latest.CancelAsync(), _timeProvider,
+                deadline.Remaining, "server.abort_cancel").ConfigureAwait(false);
         }
-        if (session != null) await DropSessionAsync(session).ConfigureAwait(false);
+        catch (ObjectDisposedException) { }
+        if (session != null) await DropSessionAsync(session, deadline.Remaining).ConfigureAwait(false);
+        bool recovered = await JoinPendingCleanupAsync(deadline).ConfigureAwait(false);
+        if (!cancelled || !recovered) throw new TimeoutException("常駐サーバの停止が期限内に完了しませんでした");
     }
 
     public async ValueTask DisposeAsync()
     {
+        Task disposal;
+        bool first;
         lock (_sync)
         {
-            if (_disposed) return;
+            first = _disposeTask == null;
             _disposed = true;
-            _latest?.Cancel();
+            disposal = _disposeTask ??= Task.Run(DisposeCoreAsync);
         }
-        await AbortAsync().ConfigureAwait(false);
-        await _runGate.WaitAsync().ConfigureAwait(false);
-        _runGate.Release();
+        try { await disposal.ConfigureAwait(false); }
+        catch (TimeoutException) when (!first)
+        {
+            // 初回の未回収は通知済み。再試行は、実際の遅延回収が終わった場合だけ成功する。
+            if (!await JoinPendingCleanupAsync(new CleanupDeadline(_timeProvider, _stopTimeout)).ConfigureAwait(false))
+                throw;
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        var deadline = new CleanupDeadline(_timeProvider, _stopTimeout);
+        Session? session;
+        CancellationTokenSource? latest;
+        lock (_sync)
+        {
+            latest = _latest;
+            session = _session;
+        }
+        // 呼出し元は要求の協調取消を先行する。残る要求にもENDを返す猶予を与える。
+        bool cancelled = true;
+        try
+        {
+            if (latest != null) cancelled = await ProcessSupport.JoinAsync(latest.CancelAsync(), _timeProvider,
+                deadline.Remaining, "server.dispose_cancel").ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException) { }
+        Task waitRun = _runGate.WaitAsync();
+        bool entered = await ProcessSupport.JoinAsync(waitRun, _timeProvider, deadline.Remaining, "server.run_gate").ConfigureAwait(false);
+        if (entered) _runGate.Release();
+        else ProcessSupport.Observe(waitRun.ContinueWith(task => { if (task.IsCompletedSuccessfully) _runGate.Release(); },
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default));
+        lock (_sync) session = _session ?? session;
+        if (session != null)
+        {
+            lock (_sync) { if (ReferenceEquals(_session, session)) _session = null; }
+            if (!await session.StopAsync(graceful: entered, timeout: deadline.Remaining).ConfigureAwait(false))
+                lock (_sync) _pendingCleanup.Add(session.CleanupCompletion);
+        }
+        bool recovered = await JoinPendingCleanupAsync(deadline).ConfigureAwait(false);
+        if (!cancelled || !entered || !recovered) throw new TimeoutException("常駐サーバの回収が期限内に完了しませんでした");
     }
 
     private sealed class Session
@@ -242,12 +324,19 @@ public sealed class ServerBackend : IPreviewBackend
         private readonly SemaphoreSlim _writeGate = new(1, 1);
         private readonly Dictionary<long, RequestLog> _logs = [];
         private readonly Task _stderrTask;
-        private Task? _stopTask;
+        private Task<bool>? _stopTask;
+        private readonly int _pid;
+        private readonly TimeProvider _clock;
+        private readonly TimeSpan _stopTimeout;
+        private readonly TaskCompletionSource _forceStop = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private long? _currentLog;
-        public Session(string path, Process process)
+        public Session(string path, Process process, TimeProvider clock, TimeSpan stopTimeout)
         {
             Path = path;
             Process = process;
+            _pid = process.Id;
+            _clock = clock;
+            _stopTimeout = stopTimeout;
             Reader = new PreviewProtocolReader(new ProgressReadStream(process.StandardOutput.BaseStream,
                 () => Volatile.Read(ref _sink)?.OnOutput()));
             _stderrTask = DrainErrorAsync();
@@ -258,6 +347,7 @@ public sealed class ServerBackend : IPreviewBackend
         public Process Process { get; }
         public PreviewProtocolReader Reader { get; }
         public Task? LastRead { get; set; }
+        public Task CleanupCompletion { get; private set; } = Task.CompletedTask;
         public int CompletedRequests { get; set; }
 
         public Task<string> RegisterLog(long id)
@@ -270,8 +360,16 @@ public sealed class ServerBackend : IPreviewBackend
             }
         }
 
-        public async Task SendAsync<T>(T command)
+        public async Task SendAsync<T>(T command, TimeSpan? timeout = null)
         {
+            Task send = SendCoreAsync(command);
+            if (!await ProcessSupport.JoinAsync(send, _clock, timeout ?? _stopTimeout, "server.send", _pid).ConfigureAwait(false))
+                throw new TimeoutException("常駐サーバへのコマンド送信が期限内に完了しませんでした");
+        }
+
+        private async Task SendCoreAsync<T>(T command)
+        {
+            // 期限切れ後も実書込が完了するまで所有権を保ち、後続送信との混在を防ぐ。
             await _writeGate.WaitAsync().ConfigureAwait(false);
             try
             {
@@ -279,6 +377,12 @@ public sealed class ServerBackend : IPreviewBackend
                 await Process.StandardInput.FlushAsync().ConfigureAwait(false);
             }
             finally { _writeGate.Release(); }
+        }
+
+        public async Task<string> ReadLogAsync(Task<string> log)
+        {
+            return await ProcessSupport.JoinAsync(log, _clock, _stopTimeout, "server.log", _pid).ConfigureAwait(false)
+                ? await log.ConfigureAwait(false) : "stderrの完了待機が期限切れになりました";
         }
 
         private async Task DrainErrorAsync()
@@ -321,17 +425,66 @@ public sealed class ServerBackend : IPreviewBackend
             return long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long id) ? id : null;
         }
 
-        public Task StopAsync()
+        public Task<bool> StopAsync(bool graceful = false, TimeSpan? timeout = null)
         {
-            lock (_sync) return _stopTask ??= StopCoreAsync();
+            if (!graceful) _forceStop.TrySetResult();
+            // 同期先頭のOS操作やパイプ操作を呼出し元のロック内で実行しない。
+            lock (_sync) return _stopTask ??= Task.Run(() => StopCoreAsync(graceful, timeout ?? _stopTimeout));
         }
 
-        private async Task StopCoreAsync()
+        private async Task<bool> StopCoreAsync(bool graceful, TimeSpan timeout)
         {
-            await ProcessSupport.ReapAsync(Process).ConfigureAwait(false);
-            if (LastRead != null) { try { await LastRead.ConfigureAwait(false); } catch { } }
-            await _stderrTask.ConfigureAwait(false);
-            Process.Dispose();
+            var deadline = new CleanupDeadline(_clock, timeout);
+            int? pid = null;
+            try { pid = Process.Id; } catch (InvalidOperationException) { }
+            void Stage(string stage)
+            {
+                if (!PerfTrace.Enabled) return;
+                PerfTrace.Write("server.stop.stage", new { stage, pid });
+                PerfTrace.Flush();
+            }
+            bool exited = false;
+            if (graceful && !_forceStop.Task.IsCompleted)
+            {
+                Stage("quit_begin");
+                try
+                {
+                    await SendAsync(new { cmd = "quit" }, deadline.Remaining).ConfigureAwait(false);
+                    Stage("quit_sent");
+                    Task exit = Process.WaitForExitAsync();
+                    Task first = await Task.WhenAny(exit, _forceStop.Task)
+                        .WaitAsync(deadline.Remaining, _clock).ConfigureAwait(false);
+                    if (first == exit) { await exit.ConfigureAwait(false); exited = true; }
+                    else ProcessSupport.Observe(exit);
+                }
+                catch (TimeoutException) { ProcessSupport.WarnTimeout("server.quit", pid); }
+                catch (IOException) { }
+                catch (InvalidOperationException) { }
+            }
+            Stage("reap_begin");
+            if (!exited) exited = await ProcessSupport.ReapBoundedAsync(Process, _clock, deadline.Remaining).ConfigureAwait(false);
+            Stage("reap_end");
+            Stage("read_begin");
+            Task read = LastRead ?? Task.CompletedTask;
+            bool readDone;
+            try { readDone = await ProcessSupport.JoinAsync(read, _clock, deadline.Remaining, "server.read", pid).ConfigureAwait(false); }
+            catch { readDone = true; }
+            Stage("read_end");
+            Stage("stderr_begin");
+            bool errorDone;
+            try { errorDone = await ProcessSupport.JoinAsync(_stderrTask, _clock, deadline.Remaining, "server.stderr", pid).ConfigureAwait(false); }
+            catch { errorDone = true; }
+            Stage("stderr_end");
+            // 取消経路のログ待ちもここで打ち切れるよう、現在までの内容を確定する。
+            lock (_sync)
+            {
+                foreach (var log in _logs.Values) log.Completion.TrySetResult(log.Text.ToString());
+                _logs.Clear();
+            }
+            CleanupCompletion = ProcessSupport.DisposeAfterAsync(Process, read, _stderrTask, Process.WaitForExitAsync());
+            bool complete = exited && readDone && errorDone;
+            Stage(complete ? "complete" : "incomplete");
+            return complete;
         }
 
         private sealed class RequestLog

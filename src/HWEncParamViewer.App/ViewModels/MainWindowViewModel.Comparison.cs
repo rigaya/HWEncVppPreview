@@ -28,6 +28,7 @@ public sealed partial class MainWindowViewModel
     private PreviewRequest? _beforeSelectionRequest;
     private TaskCompletionSource? _beforeImmediate;
     private bool _beforeFinished;
+    private string _beforeFallbackDiagnostic = "";
     private long? _lastNavigationIntent;
     private static readonly TimeSpan BeforeQuietPeriod = TimeSpan.FromMilliseconds(300);
 
@@ -78,6 +79,7 @@ public sealed partial class MainWindowViewModel
 
     private void CancelBefore(bool updatePresentation = true)
     {
+        _beforeFallbackDiagnostic = "";
         if (PerfTrace.Enabled) PerfTrace.Write("vm.cancel.before", new { active = _beforeCancellation != null });
         // キャンセルと破棄を同じ排他区間に置き、古い要求の後処理との競合を防ぐ。
         lock (_taskLock)
@@ -100,6 +102,7 @@ public sealed partial class MainWindowViewModel
     private void ClearBeforeInterval()
     {
         _beforeIntervalRequest = null;
+        _beforeIntervalSegment = null;
         _beforeIntervalFrames = Array.Empty<Y4mFrame>();
     }
 
@@ -121,7 +124,7 @@ public sealed partial class MainWindowViewModel
 
     private void CheckBeforeInterval(PreviewRequest afterRequest)
     {
-        if (_beforeExecutionContext is { } context && !SameBeforeInterval(context.Request, afterRequest)) CancelBefore();
+        if (_beforeExecutionContext is { } context && !ContainsBeforeTarget(context.Request, afterRequest)) CancelBefore();
     }
 
     private void QueueBefore(PreviewRequest afterRequest, long generation, double? cachedTarget = null)
@@ -133,7 +136,9 @@ public sealed partial class MainWindowViewModel
             return;
         }
         if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.before", new { generation, cachedTarget });
-        var before = afterRequest with { VppArgs = Array.Empty<string>(), CorrelationId = -generation };
+        // 元画像は独立した有限窓。Afterの長寿命seekや拡大した前余白を引き継がない。
+        var before = afterRequest with { VppArgs = Array.Empty<string>(), CorrelationId = -generation,
+            Continuous = false, SeekSecondsOverride = null, PreMarginSeconds = 2, PostMarginSeconds = BenchmarkPostMargin() };
         if (cachedTarget is double target) before = RetargetInterval(before, target);
         CheckBeforeInterval(before);
         _beforeSelectionRequest = before;
@@ -141,7 +146,6 @@ public sealed partial class MainWindowViewModel
         if (TryGetBeforeInterval(before, out var frames))
         {
             if (PerfTrace.Enabled) PerfTrace.Write("vm.before.cache", new { generation });
-            _beforeIntervalRequest = before;
             _beforeIntervalFrames = frames;
             var frame = SelectBeforeFrame(before, frames);
             if (frame == null) { IsBeforeBusy = false; return; }
@@ -149,7 +153,7 @@ public sealed partial class MainWindowViewModel
             return;
         }
         // 同一区間なら、待機や実行を保ったまま選択する目標だけを更新する。
-        if (_beforeExecutionContext is { } existing && !_beforeFinished && SameBeforeInterval(existing.Request, before)) return;
+        if (_beforeExecutionContext is { } existing && !_beforeFinished && ContainsBeforeTarget(existing.Request, before)) return;
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         var context = new RequestContext(generation, before, _clock.GetTimestamp(), RequestKind.Before, cancellation,
             editEpoch: Volatile.Read(ref _editEpoch));
@@ -200,7 +204,9 @@ public sealed partial class MainWindowViewModel
                     }
                     if (PerfTrace.Enabled) PerfTrace.Write("vm.before.execute", new { generation = context.Generation });
                     // Coreの背景枠を使い、前景の待機・実行・通知の世代を変更しない。
-                    _controller.Submit(context.Request, bypassDebounce: true, background: true, cancellationToken: token);
+                    // 実受信範囲で確認済み。CoreのsafeEndは末尾の全durationまで含むが、
+                    // Beforeの再利用は半durationまでなので、miss後に同じ旧末尾へ戻さない。
+                    _controller.Submit(context.Request, bypassCache: true, bypassDebounce: true, background: true, cancellationToken: token);
                     submitted = true;
                     Track(FinishBeforeAsync(context));
                 }).ConfigureAwait(false);
@@ -241,40 +247,102 @@ public sealed partial class MainWindowViewModel
     private void CompleteBefore(RequestContext context, IReadOnlyList<Y4mFrame> frames)
     {
         _beforeIntervalRequest = context.Request;
+        _beforeIntervalSegment = context.Segment;
         _beforeIntervalFrames = frames;
         _beforeFinished = true;
         IsBeforeBusy = false;
         // 実行開始時の目標ではなく、同じ区間で最後に移動した位置を選ぶ。
         var selection = RetargetInterval(context.Request, CurrentSeconds);
-        if (!SameBeforeInterval(context.Request, selection)) return;
+        if (!ContainsBeforeTarget(context.Request, selection)) return;
         var frame = SelectBeforeFrame(selection, frames);
-        if (frame != null) DisplayBeforeFrame(frame, Volatile.Read(ref _generation), finishBusy: true);
+        if (frame != null) DisplayBeforeFrame(frame, Volatile.Read(ref _generation), finishBusy: true, revisionContext: context);
     }
 
     private bool TryGetBeforeInterval(PreviewRequest request, out IReadOnlyList<Y4mFrame> frames)
     {
-        if (_cache.TryGet(request, out frames)) return true;
-        // フィルタなしなら、LRUの容量外でも保持中の後画像区間をそのまま元画像に使える。
-        if (_intervalRequest is { VppArgs.Count: 0 } after && SameBeforeInterval(after, request))
-        { frames = _intervalFrames; return true; }
-        if (_beforeIntervalRequest is { } previous && SameBeforeInterval(previous, request))
+        ValidateNavigationState();
+        if (request.Capabilities.TimestampPassthrough && _cache.TryGetAt(request, request.TargetSeconds, out var segment)
+            && ContainsBeforeFrameTarget(segment.PhysicalRequest, segment.Frames, request.TargetSeconds, segment))
+        {
+            _beforeIntervalRequest = segment.PhysicalRequest;
+            _beforeIntervalSegment = segment;
+            frames = segment.Frames;
+            return true;
+        }
+        if (_cache.TryGet(request, out frames, out var physical)
+            && ContainsFrameTarget(physical, frames, request.TargetSeconds, ClockFor(physical, frames)))
+        { _beforeIntervalRequest = physical; _beforeIntervalSegment = null; return true; }
+        // フィルタなしなら、長寿命Afterの同じフレームを共有し、元画像用のプロセスを起動しない。
+        if (_intervalRequest is { VppArgs.Count: 0 } after && SameBeforeInput(after, request)
+            && ContainsBeforeFrameTarget(after, _intervalFrames, request.TargetSeconds, _intervalSegment))
+        { _beforeIntervalRequest = after; _beforeIntervalSegment = _intervalSegment; frames = _intervalFrames; return true; }
+        // 最新目標で計画窓を上書きせず、取得した区間の実時刻と安全範囲だけで再利用を判断する。
+        if (_beforeIntervalRequest is { } previous && SameBeforeInput(previous, request)
+            && ContainsBeforeFrameTarget(previous, _beforeIntervalFrames, request.TargetSeconds, _beforeIntervalSegment)
+            && (_beforeIntervalSegment is not { } held
+                || request.TargetSeconds >= held.SafeStartSeconds - 1e-8 && request.TargetSeconds <= held.SafeEndSeconds + 1e-8))
         { frames = _beforeIntervalFrames; return true; }
         frames = Array.Empty<Y4mFrame>();
         return false;
     }
 
-    private static bool SameBeforeInterval(PreviewRequest a, PreviewRequest b)
+    private bool ContainsBeforeFrameTarget(PreviewRequest request, IReadOnlyList<Y4mFrame> frames, double target, PreviewSegmentSnapshot? segment)
     {
-        var first = CommandBuilder.Plan(a);
-        var second = CommandBuilder.Plan(b);
-        return a.EncoderPath == b.EncoderPath && a.InputFile == b.InputFile && a.Fps == b.Fps
-            && a.InputArgs.SequenceEqual(b.InputArgs) && first.SeekSeconds == second.SeekSeconds && first.FrameCount == second.FrameCount;
+        if (ContainsFrameTarget(request, frames, target, segment?.Clock)) return true;
+        // 自然終端が確定した既知Durationへの移動だけは、Afterと同じ最終画像を共有する。
+        // 通常の取得窓の末尾を、この終端例外で延長しない。
+        if (segment?.ReachedInputEnd != true || frames.Count == 0 || request.InputDurationSeconds is not double end
+            || Math.Abs(target - end) > 1e-8) return false;
+        var last = frames[^1];
+        double lastSeconds = segment.Clock.ToInputSeconds(last, frames.Count - 1, request.Fps);
+        return lastSeconds <= end + 1e-8 && lastSeconds + FrameSelector.Duration(last, request.Fps) >= end - 1e-8;
     }
 
-    private static Y4mFrame? SelectBeforeFrame(PreviewRequest request, IReadOnlyList<Y4mFrame> frames)
+    private bool SameBeforeInput(PreviewRequest a, PreviewRequest b) => a.EncoderPath == b.EncoderPath
+        && a.InputFile == b.InputFile && a.Fps == b.Fps
+        && (a.InputArgs.SequenceEqual(b.InputArgs) || IsKnownLegacyPhysicalSource(a, b)
+            && SameArgumentsWithoutPassthrough(a.InputArgs, b.InputArgs))
+        && a.Capabilities.OpenClTaskThreads == b.Capabilities.OpenClTaskThreads
+        && (a.Capabilities.TimestampPassthrough == b.Capabilities.TimestampPassthrough || IsKnownLegacyPhysicalSource(a, b))
+        && a.TimestampOriginSeconds == b.TimestampOriginSeconds;
+
+    // 保持している有限窓に最新目標が含まれる間は、実行中の元画像を取り消さない。
+    private bool ContainsBeforeTarget(PreviewRequest first, PreviewRequest second)
+    {
+        if (!SameBeforeInput(first, second)) return false;
+        var plan = CommandBuilder.Plan(first);
+        double start = plan.SeekSeconds ?? 0;
+        double end = start + (plan.FrameCount - 1) / first.Fps;
+        return second.TargetSeconds >= start - 1e-8 && second.TargetSeconds <= end + 1e-8;
+    }
+
+    private bool ContainsFrameTarget(PreviewRequest request, IReadOnlyList<Y4mFrame> frames, double target, PreviewClockMap? clock)
+    {
+        if (frames.Count == 0) return false;
+        clock ??= ClockFor(request, frames);
+        double first = clock.ToInputSeconds(frames[0], 0, request.Fps);
+        double last = clock.ToInputSeconds(frames[^1], frames.Count - 1, request.Fps);
+        return target >= first - FrameSelector.Duration(frames[0], request.Fps) / 2
+            && target <= last + FrameSelector.Duration(frames[^1], request.Fps) / 2;
+    }
+
+    private Y4mFrame? SelectBeforeFrame(PreviewRequest request, IReadOnlyList<Y4mFrame> frames)
     {
         if (frames.Count == 0) return null;
-        double target = CommandBuilder.Plan(request).ActualPreMargin;
+        if (_beforeIntervalSegment is { Clock.TrustedAbsolute: true } segment)
+        {
+            var navigation = NavigationFrames(request, segment);
+            int selected = FrameSelector.Select(navigation.Select(reference => new FrameTiming(reference.InputSeconds,
+                FrameSelector.Duration(reference.Frame, reference.Segment.PhysicalRequest.Fps))).ToArray(), request.TargetSeconds, request.Fps);
+            if (selected >= 0)
+            {
+                _beforeIntervalSegment = navigation[selected].Segment;
+                return navigation[selected].Frame;
+            }
+            return null;
+        }
+        var clock = _beforeIntervalSegment?.Clock ?? ClockFor(request, frames);
+        double target = clock.ToFrameSeconds(request.TargetSeconds);
         int index = FrameSelector.Select(frames, target, request.Fps);
         var last = frames.LastOrDefault(frame => frame.Xts.HasValue) ?? frames[^1];
         double lastTime = last.Xts ?? (frames.Count - 1) / FrameSelector.FrameRate(last, request.Fps);
@@ -282,11 +350,38 @@ public sealed partial class MainWindowViewModel
         return index < 0 ? null : frames[index];
     }
 
-    private void DisplayBeforeFrame(Y4mFrame frame, long generation, bool finishBusy = false)
+    private void DisplayBeforeFrame(Y4mFrame frame, long generation, bool finishBusy = false, RequestContext? revisionContext = null)
     {
+        revisionContext ??= Volatile.Read(ref _context);
+        long revision = revisionContext == null ? 0 : Volatile.Read(ref revisionContext.DisplayRevision);
         long imageGeneration = Interlocked.Increment(ref _beforeImageGeneration);
+        var request = _beforeSelectionRequest;
+        var clock = _beforeIntervalSegment?.Clock ?? (request == null ? null : ClockFor(request, new[] { frame }));
         EnqueueImage(new ImageWork(frame, generation, Volatile.Read(ref _editEpoch), Before: true,
-            BeforeVersion: imageGeneration, FinishBeforeBusy: finishBusy));
+            BeforeVersion: imageGeneration, FinishBeforeBusy: finishBusy,
+            DisplaySeconds: PerfTrace.Enabled && frame.Xts.HasValue && request != null && clock != null
+                ? clock.ToInputSeconds(frame, 0, request.Fps) : null,
+            SegmentId: _beforeIntervalSegment?.SegmentId, TrustedAbsolute: clock?.TrustedAbsolute ?? false,
+            RevisionContext: revisionContext, DisplayRevision: revision));
+    }
+
+    private void CaptureBeforeFallbackDiagnostic(string diagnostics)
+    {
+        const string prefix = "[preview] timestamp fallback: ";
+        string? line = diagnostics.Split('\n').Select(value => value.TrimEnd('\r'))
+            .LastOrDefault(value => value.StartsWith(prefix, StringComparison.Ordinal));
+        if (line == null) return;
+        _beforeFallbackDiagnostic = line;
+        LogText = AppendBeforeFallbackDiagnostic(LogText);
+    }
+
+    private string AppendBeforeFallbackDiagnostic(string diagnostics)
+    {
+        if (_beforeFallbackDiagnostic.Length == 0 || diagnostics.Contains(_beforeFallbackDiagnostic, StringComparison.Ordinal))
+            return diagnostics;
+        // Beforeの理由だけを追記し、Afterの画像・状態・既存ログは書き換えない。
+        return diagnostics.Length == 0 ? _beforeFallbackDiagnostic
+            : diagnostics.TrimEnd('\r', '\n') + Environment.NewLine + _beforeFallbackDiagnostic;
     }
 
     private void RecalculateDisplaySizes()

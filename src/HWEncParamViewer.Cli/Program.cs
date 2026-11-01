@@ -65,13 +65,17 @@ public static class Program
 
     private static async Task ExecuteAsync(Options options, CliResult result, TimeProvider clock, CancellationToken cancellationToken)
     {
+        var capabilities = await ReadCapabilitiesAsync(options.Encoder, clock, cancellationToken).ConfigureAwait(false);
         await using var probe = new InputProbe(timeProvider: clock, timeout: options.Watchdog);
-        var input = await probe.ProbeAsync(options.Encoder, options.Input, options.InputArgs, cancellationToken).ConfigureAwait(false);
+        var input = await probe.ProbeAsync(options.Encoder, options.Input, options.InputArgs, cancellationToken, capabilities).ConfigureAwait(false);
         var request = new PreviewRequest
         {
             EncoderPath = options.Encoder, InputFile = options.Input, InputArgs = options.InputArgs,
             VppArgs = options.VppArgs, TargetSeconds = options.Time, PreMarginSeconds = options.PreMargin,
             PostMarginSeconds = options.PostMargin, Fps = input.Fps,
+            Capabilities = capabilities, TimestampOriginSeconds = input.TimestampOriginSeconds,
+            TimestampOriginTrusted = input.TimestampOriginTrusted,
+            InputDurationSeconds = input.Duration?.TotalSeconds,
         };
         var plan = CommandBuilder.Plan(request);
         if (plan.FrameCount <= 0 || (plan.ActualPreMargin + options.PostMargin) * input.Fps > int.MaxValue - 1)
@@ -95,6 +99,25 @@ public static class Program
         controller.Failed += value => failure = value;
         controller.Submit(request);
         await controller.WaitForIdleAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+        // replayで取り直した完了列だけを採用し、初回の異常出力をdumpへ連結しない。
+        if (completion is { Frames.Count: > 0 })
+        {
+            recording.Frames.Clear();
+            recording.Frames.AddRange(completion.Frames);
+            recording.Header = recording.Frames[0].Header;
+        }
+        var winningSegment = completion?.Segment ?? selected?.Segment;
+        var physical = completion?.Segment?.PhysicalRequest ?? recording.PhysicalRequest ?? selected?.Segment?.PhysicalRequest;
+        result.TimestampPassthrough = physical?.Capabilities.TimestampPassthrough == true;
+        result.TrustedAbsolute = winningSegment?.Clock.TrustedAbsolute == true && result.TimestampPassthrough;
+        result.TimestampOriginSeconds = physical?.TimestampOriginSeconds;
+        // 暖機やlegacy再取得で変わった場合も、JSONは実際に取得した計画を返す。
+        if (physical != null)
+        {
+            var actualPlan = CommandBuilder.Plan(physical);
+            result.SeekSeconds = actualPlan.SeekSeconds;
+            result.Frames = actualPlan.FrameCount;
+        }
         result.Mode = recording.Mode;
         result.FrameCount = recording.Frames.Count;
         var header = recording.Header;
@@ -105,7 +128,10 @@ public static class Program
             result.Chroma = Chroma(header.Chroma);
             result.BitDepth = header.BitDepth;
         }
-        result.SelectedIndex = selected == null ? null : recording.Frames.FindIndex(frame => ReferenceEquals(frame, selected.Frame));
+        var selectedFrame = selected?.Frame;
+        int selectedIndex = selectedFrame == null ? -1 : recording.Frames.FindIndex(frame => ReferenceEquals(frame, selectedFrame));
+        if (selectedIndex < 0) selected = null;
+        result.SelectedIndex = selectedIndex < 0 ? null : selectedIndex;
         result.SelectedXts = selected?.Frame.Xts;
         result.TargetNotReached = completion?.TargetNotReached ?? selected?.TargetNotReached ?? false;
         if (failure != null)
@@ -114,7 +140,7 @@ public static class Program
             result.Rc = failure.Result?.ExitCode ?? 3;
             result.Error = failure.Reason;
             result.TimedOut = failure.Exception is TimeoutException || failure.Reason.Contains("タイムアウト", StringComparison.Ordinal);
-            string log = failure.Result?.StandardError ?? (failure.Exception as PreviewBackendException)?.StandardError
+            string log = failure.Diagnostic ?? failure.Result?.StandardError ?? (failure.Exception as PreviewBackendException)?.StandardError
                 ?? recording.Result?.StandardError ?? "";
             result.StderrTail = Tail(log);
             return;
@@ -131,6 +157,33 @@ public static class Program
         result.Sha256 = Convert.ToHexStringLower(SHA256.HashData(selected.Frame.Data));
         if (options.Dump != null) await File.WriteAllBytesAsync(options.Dump, selected.Frame.Data, cancellationToken).ConfigureAwait(false);
         if (options.DumpY4m != null) await DumpY4mAsync(options.DumpY4m, recording.Frames, input.Fps, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<PreviewCapabilities> ReadCapabilitiesAsync(string encoder, TimeProvider clock, CancellationToken token)
+    {
+        try
+        {
+            using var process = new Process { StartInfo = new ProcessStartInfo(encoder)
+                { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true } };
+            process.StartInfo.ArgumentList.Add("--help");
+            process.Start();
+            using var registration = token.Register(() => { try { if (!process.HasExited) process.Kill(true); } catch (InvalidOperationException) { } });
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5), clock, token).ConfigureAwait(false); }
+            finally
+            {
+                if (!process.HasExited) process.Kill(true);
+                await process.WaitForExitAsync().ConfigureAwait(false);
+                await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
+            }
+            if (process.ExitCode != 0) return new();
+            string help = await stdout.ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(help)) help = await stderr.ConfigureAwait(false);
+            return CommandBuilder.CapabilitiesFromHelp(new HelpIndex(help));
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch { return new(); }
     }
 
     private static string Tail(string text) => text.Length <= 8192 ? text : text[^8192..];
@@ -162,6 +215,7 @@ public static class Program
     private sealed class Recording
     {
         public string? Mode { get; set; }
+        public PreviewRequest? PhysicalRequest { get; set; }
         public Y4mHeader? Header { get; set; }
         public List<Y4mFrame> Frames { get; } = new();
         public PreviewRunResult? Result { get; set; }
@@ -173,6 +227,9 @@ public static class Program
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
         {
             recording.Mode = mode;
+            recording.PhysicalRequest = request;
+            recording.Header = null;
+            recording.Frames.Clear();
             return recording.Result = await inner.RunAsync(request, new RecordingSink(sink, recording), token).ConfigureAwait(false);
         }
         public ValueTask AbortAsync() => inner.AbortAsync();
@@ -180,6 +237,8 @@ public static class Program
         private sealed class RecordingSink(IPreviewSink sink, Recording recording) : IPreviewSink
         {
             public void OnOutput() => sink.OnOutput();
+            public ValueTask BeforeReadAsync(CancellationToken token) => sink.BeforeReadAsync(token);
+            public void OnReadStateChanged(bool reading) => sink.OnReadStateChanged(reading);
             public void OnHeader(Y4mHeader header) { recording.Header = header; sink.OnHeader(header); }
             public void OnFrame(Y4mFrame frame) { recording.Frames.Add(frame); sink.OnFrame(frame); }
         }
@@ -274,6 +333,9 @@ public static class Program
         public int? BitDepth { get; set; }
         public string? Sha256 { get; set; }
         public double? SeekSeconds { get; set; }
+        public bool TimestampPassthrough { get; set; }
+        public bool TrustedAbsolute { get; set; }
+        public double? TimestampOriginSeconds { get; set; }
         public double? InputFps { get; set; }
         public int? Frames { get; set; }
         public double ElapsedMs { get; set; }
