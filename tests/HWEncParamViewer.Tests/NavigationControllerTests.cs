@@ -173,6 +173,157 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         Assert.Equal(new[] { "frame:0", "frame:1", "completed:1" }, notifications);
     }
 
+    [Fact]
+    public async Task BackgroundSubmitDoesNotCancelOrInvalidateRunningForeground()
+    {
+        var backend = new ControlledBackend();
+        var frames = new ConcurrentQueue<PreviewFrameResult>();
+        var completions = new ConcurrentQueue<PreviewCompletion>();
+        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        controller.FrameReady += frames.Enqueue;
+        controller.Completed += completions.Enqueue;
+        controller.Submit(Request(0), navigation: true);
+        var foreground = await backend.NextAsync();
+        controller.Submit(Request(10), background: true);
+        Assert.False(foreground.Token.IsCancellationRequested);
+        Assert.Equal(1, backend.Starts);
+        foreground.End();
+        var background = await backend.NextAsync();
+        Assert.Equal(10, background.Request.TargetSeconds);
+        Assert.Equal(0, Assert.Single(frames).Request.TargetSeconds);
+        Assert.Equal(0, Assert.Single(completions).Request.TargetSeconds);
+        background.End();
+        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Equal(new[] { 0.0, 10.0 }, completions.Select(value => value.Request.TargetSeconds));
+    }
+
+    [Fact]
+    public async Task BackgroundKeepsPendingNavigationAndRunsAfterTheLatestForeground()
+    {
+        var backend = new ControlledBackend();
+        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        controller.Submit(Request(0), navigation: true);
+        var first = await backend.NextAsync();
+        controller.Submit(Request(1), navigation: true);
+        controller.Submit(Request(10), background: true);
+        controller.Submit(Request(2), navigation: true);
+        Assert.False(first.Token.IsCancellationRequested);
+        first.End();
+        var latest = await backend.NextAsync();
+        Assert.Equal(2, latest.Request.TargetSeconds);
+        latest.End();
+        var background = await backend.NextAsync();
+        Assert.Equal(10, background.Request.TargetSeconds);
+        background.End();
+        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Equal(3, backend.Starts);
+    }
+
+    [Fact]
+    public async Task BackgroundWaitsForForegroundDebounceWithoutReplacingIt()
+    {
+        var backend = new ControlledBackend();
+        var clock = new FakeTimeProvider();
+        await using var controller = new PreviewController(backend, timeProvider: clock);
+        controller.Submit(Request(0));
+        controller.Submit(Request(10), background: true);
+        Assert.Equal(0, backend.Starts);
+        clock.Advance(TimeSpan.FromMilliseconds(149));
+        Assert.Equal(0, backend.Starts);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        var foreground = await backend.NextAsync();
+        Assert.Equal(0, foreground.Request.TargetSeconds);
+        foreground.End();
+        var background = await backend.NextAsync();
+        Assert.Equal(10, background.Request.TargetSeconds);
+        background.End();
+        await controller.WaitForIdleAsync().WaitAsync(Safety);
+    }
+
+    [Fact]
+    public async Task NavigationPreservesRunningBackgroundAndBothNotificationOrders()
+    {
+        var backend = new ControlledBackend();
+        var completions = new ConcurrentQueue<PreviewCompletion>();
+        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        controller.Completed += completions.Enqueue;
+        controller.Submit(Request(0), background: true);
+        var background = await backend.NextAsync();
+        controller.Submit(Request(1), navigation: true);
+        Assert.False(background.Token.IsCancellationRequested);
+        background.End();
+        var foreground = await backend.NextAsync();
+        Assert.Equal(1, foreground.Request.TargetSeconds);
+        foreground.End();
+        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Equal(new[] { 0.0, 1.0 }, completions.Select(value => value.Request.TargetSeconds));
+    }
+
+    [Fact]
+    public async Task EditingCancelsRunningBackgroundAndSuppressesItsResult()
+    {
+        var backend = new ControlledBackend();
+        var frames = new ConcurrentQueue<PreviewFrameResult>();
+        var completions = new ConcurrentQueue<PreviewCompletion>();
+        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        controller.FrameReady += frames.Enqueue;
+        controller.Completed += completions.Enqueue;
+        controller.Submit(Request(0), background: true);
+        var background = await backend.NextAsync();
+        controller.Submit(Request(1), bypassDebounce: true);
+        Assert.True(background.Token.IsCancellationRequested);
+        background.End();
+        var foreground = await backend.NextAsync();
+        foreground.End();
+        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Equal(1, Assert.Single(frames).Request.TargetSeconds);
+        Assert.Equal(1, Assert.Single(completions).Request.TargetSeconds);
+    }
+
+    [Fact]
+    public async Task BackgroundExternalCancellationRemovesWaitingWorkOnly()
+    {
+        var backend = new ControlledBackend();
+        using var cancellation = new CancellationTokenSource();
+        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        controller.Submit(Request(0), navigation: true);
+        var foreground = await backend.NextAsync();
+        controller.Submit(Request(10), background: true, cancellationToken: cancellation.Token);
+        cancellation.Cancel();
+        Assert.False(foreground.Token.IsCancellationRequested);
+        foreground.End();
+        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Equal(1, backend.Starts);
+    }
+
+    [Fact]
+    public async Task BackgroundExternalCancellationReachesTheRunningBackend()
+    {
+        var backend = new ControlledBackend();
+        var frames = new ConcurrentQueue<PreviewFrameResult>();
+        using var cancellation = new CancellationTokenSource();
+        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        controller.FrameReady += frames.Enqueue;
+        controller.Submit(Request(0), background: true, cancellationToken: cancellation.Token);
+        var background = await backend.NextAsync();
+        cancellation.Cancel();
+        Assert.True(background.Token.IsCancellationRequested);
+        background.End();
+        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Empty(frames);
+    }
+
+    [Fact]
+    public async Task DisposeCollectsForegroundAndBackgroundWaitersWithoutAdvancingFakeTime()
+    {
+        var backend = new ControlledBackend();
+        await using var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider());
+        controller.Submit(Request(0));
+        controller.Submit(Request(10), background: true);
+        await controller.DisposeAsync().AsTask().WaitAsync(Safety);
+        Assert.Equal(0, backend.Starts);
+    }
+
     private static PreviewRequest Request(double time) => new()
     { EncoderPath = "fake", InputFile = "input.ts", Fps = 30, TargetSeconds = time };
 

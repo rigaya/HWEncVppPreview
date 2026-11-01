@@ -30,8 +30,6 @@ public sealed class NavigationTests(ITestOutputHelper output)
         clock.Advance(TimeSpan.FromMilliseconds(150));
         await backend.NextStartAsync();
         clock.Advance(TimeSpan.FromMilliseconds(400));
-        await backend.NextStartAsync();
-        clock.Advance(TimeSpan.FromMilliseconds(400));
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         Assert.NotNull(vm.PreviewImage);
         string previous = ImageHash(vm);
@@ -80,7 +78,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
             EncoderPath = FakeEncoderPath(), InputPath = "navigation input.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00",
         };
-        await InitializeAsync(vm, clock, backend, beforeUsesCache: true);
+        await InitializeAsync(vm, clock, backend);
         var targets = new List<double>();
         for (int i = 0; i < 10; ++i)
         {
@@ -140,7 +138,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
             EncoderPath = FakeEncoderPath(), InputPath = "navigation input.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00",
         };
-        await InitializeAsync(vm, clock, backend, beforeUsesCache: true);
+        await InitializeAsync(vm, clock, backend);
         string initial = ImageHash(vm);
         string previous = initial;
         var displayedLevels = new List<byte>();
@@ -199,7 +197,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
             EncoderPath = FakeEncoderPath(), InputPath = "navigation input.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00",
         };
-        await InitializeAsync(vm, clock, backend, beforeUsesCache: true);
+        await InitializeAsync(vm, clock, backend);
         string initial = ImageHash(vm);
         var published = new List<string>();
         vm.PropertyChanged += (_, args) =>
@@ -227,7 +225,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
     }
 
     [AvaloniaFact]
-    public async Task NavigationCancelsLowPriorityBeforeAndStartsTheNewAfter()
+    public async Task NavigationWithinAnUnfilteredIntervalReusesBeforeWithoutCancellation()
     {
         var clock = new FakeTimeProvider();
         await using var backend = new TimedBackend(clock);
@@ -237,24 +235,23 @@ public sealed class NavigationTests(ITestOutputHelper output)
             EncoderPath = FakeEncoderPath(), InputPath = "navigation input.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00",
         };
-        await vm.InitializeAsync(false).WaitAsync(Safety);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
-        await backend.NextStartAsync();
-        clock.Advance(TimeSpan.FromMilliseconds(400));
-        await backend.NextStartAsync();
-        await WaitUntilAsync(() => vm.PreviewImage != null);
+        await InitializeAsync(vm, clock, backend);
         string original = ImageHash(vm);
         int cancels = backend.Cancels;
         vm.StepFrameCommand.Execute(1);
         await vm.WaitForPreparationAsync().WaitAsync(Safety);
         await backend.NextStartAsync();
-        Assert.Equal(cancels + 1, backend.Cancels);
-        // LRU容量0でも現在の完了区間を保持するので、既知の隣は即座に表示できる。
+        Assert.Equal(cancels, backend.Cancels);
+        // LRU容量0でも現在の区間から前後の画像を選び、元画像を再起動しない。
+        await WaitUntilAsync(() => ImageHash(vm) == ExpectedHash(1));
         Assert.NotEqual(original, ImageHash(vm));
         Assert.Equal(ExpectedHash(1), ImageHash(vm));
         clock.Advance(TimeSpan.FromMilliseconds(400));
-        await WaitUntilAsync(() => ImageHash(vm) == ExpectedHash(1));
+        await vm.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Equal(1.0 / 30, vm.CurrentSeconds, 7);
+        Assert.Equal(cancels, backend.Cancels);
+        Assert.Equal(2, backend.Starts);
+        Assert.Equal(ImageHash(vm), ImageHash(vm.BeforeImage));
     }
 
     [AvaloniaFact]
@@ -369,17 +366,13 @@ public sealed class NavigationTests(ITestOutputHelper output)
         Assert.Equal(expected, ImageHash(vm));
     }
 
-    private static async Task InitializeAsync(MainWindowViewModel vm, FakeTimeProvider clock, TimedBackend backend, bool beforeUsesCache = false)
+    private static async Task InitializeAsync(MainWindowViewModel vm, FakeTimeProvider clock, TimedBackend backend)
     {
         await vm.InitializeAsync(false).WaitAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
         await backend.NextStartAsync();
         clock.Advance(TimeSpan.FromMilliseconds(400));
-        if (!beforeUsesCache)
-        {
-            await backend.NextStartAsync();
-            clock.Advance(TimeSpan.FromMilliseconds(400));
-        }
+        // フィルタなしの初期区間は、LRUの容量によらず前後表示で共有する。
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         Assert.NotNull(vm.PreviewImage);
     }
@@ -391,9 +384,10 @@ public sealed class NavigationTests(ITestOutputHelper output)
         await done.Task.WaitAsync(Safety);
     }
 
-    private static string ImageHash(MainWindowViewModel vm)
+    private static string ImageHash(MainWindowViewModel vm) => ImageHash(vm.PreviewImage);
+    private static string ImageHash(Bitmap? image)
     {
-        var bitmap = Assert.IsType<WriteableBitmap>(vm.PreviewImage);
+        var bitmap = Assert.IsType<WriteableBitmap>(image);
         using var locked = bitmap.Lock();
         byte[] data = new byte[bitmap.PixelSize.Width * bitmap.PixelSize.Height * 4];
         for (int y = 0; y < bitmap.PixelSize.Height; ++y)

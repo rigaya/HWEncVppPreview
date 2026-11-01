@@ -183,7 +183,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     /// <summary>時刻欄 (双方向)。Enter で CommitTimeTextCommand。</summary>
     public string CurrentTimeText { get => _currentTimeText; set => SetProperty(ref _currentTimeText, value ?? ""); }
     /// <summary>シークバーの目標位置(秒)。ドラッグ中も移動要求を送り、待ちは最新位置へ置き換える。</summary>
-    public double CurrentSeconds { get => _currentSeconds; set { if (SetProperty(ref _currentSeconds, ClampTime(value))) { CurrentTimeText = FormatTime(_currentSeconds); _ = QueuePreview(navigation: true); } } }
+    public double CurrentSeconds { get => _currentSeconds; set { RecordNavigationIntent(); if (SetProperty(ref _currentSeconds, ClampTime(value))) { CurrentTimeText = FormatTime(_currentSeconds); _ = QueuePreview(navigation: true); } } }
     /// <summary>入力の長さ (秒)。HasDuration が false のときは意味を持たない。</summary>
     public double DurationSeconds { get => _durationSeconds; set => SetProperty(ref _durationSeconds, value); }
     /// <summary>入力の長さが分かっているか。false ならシークバーを隠す (設計書 17.1)。</summary>
@@ -264,11 +264,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     private bool IsCurrent(long generation) => !_disposed && generation == Volatile.Read(ref _generation);
     private bool IsCurrent(RequestContext context) => context.Kind == RequestKind.Before
-        ? IsCurrent(context.Generation) && ReferenceEquals(Volatile.Read(ref _context), context)
+        ? !_disposed && context.EditEpoch == Volatile.Read(ref _editEpoch)
+            && ReferenceEquals(Volatile.Read(ref _beforeExecutionContext), context)
+            && context.BeforeCancellation?.IsCancellationRequested != true
         : !_disposed && context.EditEpoch == Volatile.Read(ref _editEpoch) && context.Generation >= _lastDisplayedAfter;
     private RequestContext? ContextFor(PreviewRequest request)
     {
         if (_afterRequests.TryGetValue(request.CorrelationId, out var after) && SameRequest(after.Request, request)) return after;
+        var before = Volatile.Read(ref _beforeExecutionContext);
+        if (before != null && SameRequest(before.Request, request)) return before;
         var context = Volatile.Read(ref _context);
         return context != null && SameRequest(context.Request, request) ? context : null;
     }
@@ -278,12 +282,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private void OnFrameReady(PreviewFrameResult value)
     {
         var context = ContextFor(value.Request);
-        if (context == null || context.NeighborDirection != 0) return;
+        // 元画像は完了列から最新目標を選ぶため、古い目標向けの早期通知では表示しない。
+        if (context == null || context.Kind == RequestKind.Before || context.NeighborDirection != 0) return;
         Dispatcher.UIThread.Post(() =>
         {
             if (!IsCurrent(context)) return;
-            if (context.Kind == RequestKind.Before) DisplayBeforeFrame(value.Frame, context.Generation);
-            else DisplayFrame(value.Frame, context);
+            DisplayFrame(value.Frame, context);
         });
     }
     private void OnCompleted(PreviewCompletion value)
@@ -298,9 +302,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (!IsCurrent(context)) return;
             if (context.Kind == RequestKind.Before)
             {
-                _beforeIntervalRequest = value.Request;
-                _beforeIntervalFrames = frames;
-                IsBeforeBusy = false;
+                CompleteBefore(context, frames);
                 return;
             }
             if (_lastFailedAfter == Volatile.Read(ref _generation)) return;
@@ -334,6 +336,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (!IsCurrent(context)) return;
             if (context.Kind == RequestKind.Before)
             {
+                _beforeFinished = true;
                 IsBeforeBusy = false;
                 Interlocked.Increment(ref _beforeImageGeneration);
                 _beforeDisplayedFrame = null;
@@ -366,6 +369,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     private void StepFrame(int direction)
     {
+        if (direction != 0) RecordNavigationIntent();
         if (PerfTrace.Enabled) PerfTrace.Write("vm.step", new { direction, pending = _pendingNeighbor != null, target = CurrentSeconds });
         if (direction == 0 || _pendingNeighbor != null)
         {
@@ -415,6 +419,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         long generation = BeginIntent(navigation: true);
         SetTimeOnly(seconds);
         var request = RetargetInterval(_intervalRequest, seconds) with { CorrelationId = generation };
+        CheckBeforeInterval(request);
         var context = new RequestContext(generation, request, _clock.GetTimestamp(), editEpoch: _editEpoch);
         RegisterContext(context);
         IsBusy = true;
@@ -427,6 +432,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     }
     private void SeekTo(double seconds, bool force = false)
     {
+        RecordNavigationIntent();
         seconds = ClampTime(seconds);
         if (!force && seconds == CurrentSeconds) return;
         SetTimeOnly(seconds);
@@ -635,7 +641,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
         {
-            var context = owner.ExecutionContextFor(request);
+            var context = owner.ContextFor(request);
             if (context != null) context.Mode = mode;
             using var cancellation = context?.BeforeCancellation == null ? null
                 : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, context.BeforeCancellation.Token);

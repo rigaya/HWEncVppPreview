@@ -52,7 +52,8 @@ public sealed class DurationTests
         await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
         vm.CurrentSeconds = 2;
         await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
+        // 元画像の静止待ちも偽時計で進め、Durationの進行とは分けて確認する。
+        clock.Advance(TimeSpan.FromMilliseconds(300));
         await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
         Assert.Equal(1, starts);
         Assert.True(vm.HasDuration);
@@ -79,7 +80,8 @@ public sealed class DurationTests
         await WaitUntilAsync(vm, () => vm.PreviewImage != null && !vm.IsBusy);
         vm.CurrentSeconds = 2;
         await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
+        // 元画像の静止待ちも偽時計で進め、Durationの進行とは分けて確認する。
+        clock.Advance(TimeSpan.FromMilliseconds(300));
         await WaitUntilAsync(vm, () => !vm.IsBusy);
         Assert.Equal(1, starts);
         Assert.False(vm.HasDuration);

@@ -25,6 +25,11 @@ public sealed partial class MainWindowViewModel
     private IReadOnlyList<Y4mFrame> _beforeIntervalFrames = Array.Empty<Y4mFrame>();
     private CancellationTokenSource? _beforeCancellation;
     private RequestContext? _beforeExecutionContext;
+    private PreviewRequest? _beforeSelectionRequest;
+    private TaskCompletionSource? _beforeImmediate;
+    private bool _beforeFinished;
+    private long? _lastNavigationIntent;
+    private static readonly TimeSpan BeforeQuietPeriod = TimeSpan.FromMilliseconds(300);
 
     /// <summary>Toggleは単一表示に正規化し、Spaceの押下状態はIsShowingBeforeで表す。</summary>
     public PreviewCompareMode CompareMode
@@ -39,7 +44,16 @@ public sealed partial class MainWindowViewModel
     public bool IsShowingBefore
     {
         get => _isShowingBefore;
-        set => SetProperty(ref _isShowingBefore, value && CompareMode == PreviewCompareMode.Single);
+        set
+        {
+            if (!SetProperty(ref _isShowingBefore, value && CompareMode == PreviewCompareMode.Single) || !_isShowingBefore) return;
+            // Spaceは遅延だけを解除し、すでに実行中の元画像は取り消さない。
+            if (BeforeImage == null)
+            {
+                if (_beforeFinished && _beforeSelectionRequest is { } request) QueueBefore(request, Volatile.Read(ref _generation));
+                _beforeImmediate?.TrySetResult();
+            }
+        }
     }
     /// <summary>前画像は独立したビットマップとして所有し、後画像と同じインスタンスを共有しない。</summary>
     public Bitmap? BeforeImage
@@ -72,6 +86,10 @@ public sealed partial class MainWindowViewModel
             _beforeCancellation = null;
             _pendingBeforeImage = null;
         }
+        Volatile.Write(ref _beforeExecutionContext, null);
+        _beforeSelectionRequest = null;
+        _beforeImmediate = null;
+        _beforeFinished = false;
         Interlocked.Increment(ref _beforeImageGeneration);
         if (!updatePresentation) return;
         _beforeDisplayedFrame = null;
@@ -85,6 +103,27 @@ public sealed partial class MainWindowViewModel
         _beforeIntervalFrames = Array.Empty<Y4mFrame>();
     }
 
+    private void RecordNavigationIntent()
+    {
+        if (_initialized && !_suspendChanges && !_disposed)
+        {
+            long timestamp = _clock.GetTimestamp();
+            lock (_taskLock) _lastNavigationIntent = timestamp;
+        }
+    }
+
+    private TimeSpan BeforeDelayRemaining()
+    {
+        long? last;
+        lock (_taskLock) last = _lastNavigationIntent;
+        return last is long timestamp ? BeforeQuietPeriod - _clock.GetElapsedTime(timestamp) : TimeSpan.Zero;
+    }
+
+    private void CheckBeforeInterval(PreviewRequest afterRequest)
+    {
+        if (_beforeExecutionContext is { } context && !SameBeforeInterval(context.Request, afterRequest)) CancelBefore();
+    }
+
     private void QueueBefore(PreviewRequest afterRequest, long generation, double? cachedTarget = null)
     {
         if (!IsCurrent(generation)) return;
@@ -95,18 +134,9 @@ public sealed partial class MainWindowViewModel
         }
         if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.before", new { generation, cachedTarget });
         var before = afterRequest with { VppArgs = Array.Empty<string>(), CorrelationId = -generation };
-        if (cachedTarget is double target)
-        {
-            // コマ送りでは、元の区間のseekと要求枚数を保って選択対象の時刻だけを動かす。
-            // 単にTargetSecondsだけを書き換えるとseekや枚数も変わり、キャッシュに当たらなくなる。
-            var interval = CommandBuilder.Plan(afterRequest);
-            double margin = target - (interval.SeekSeconds ?? 0);
-            before = before with
-            {
-                TargetSeconds = target, PreMarginSeconds = Math.Max(0, margin),
-                PostMarginSeconds = Math.Max(0, (interval.FrameCount - 1) / afterRequest.Fps - margin),
-            };
-        }
+        if (cachedTarget is double target) before = RetargetInterval(before, target);
+        CheckBeforeInterval(before);
+        _beforeSelectionRequest = before;
         IsBeforeBusy = true;
         if (TryGetBeforeInterval(before, out var frames))
         {
@@ -118,43 +148,115 @@ public sealed partial class MainWindowViewModel
             DisplayBeforeFrame(frame, generation, finishBusy: true);
             return;
         }
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.before.execute", new { generation });
+        // 同一区間なら、待機や実行を保ったまま選択する目標だけを更新する。
+        if (_beforeExecutionContext is { } existing && !_beforeFinished && SameBeforeInterval(existing.Request, before)) return;
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        var context = new RequestContext(generation, before, _clock.GetTimestamp(), RequestKind.Before, cancellation);
+        var context = new RequestContext(generation, before, _clock.GetTimestamp(), RequestKind.Before, cancellation,
+            editEpoch: Volatile.Read(ref _editEpoch));
+        var immediate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_taskLock) _beforeCancellation = cancellation;
+        _beforeImmediate = immediate;
+        if (IsShowingBefore) immediate.TrySetResult();
+        _beforeFinished = false;
         Volatile.Write(ref _beforeExecutionContext, context);
-        Volatile.Write(ref _context, context);
-        // 後画像が確定してから追加取得するので、編集向けのdebounceは重ねない。
-        _controller.Submit(before, bypassDebounce: true);
-        Track(FinishBeforeAsync(context));
+        Track(ScheduleBeforeAsync(context, immediate));
+    }
+
+    private async Task ScheduleBeforeAsync(RequestContext context, TaskCompletionSource immediate)
+    {
+        var token = context.BeforeCancellation!.Token;
+        bool submitted = false;
+        try
+        {
+            while (true)
+            {
+                while (!immediate.Task.IsCompleted)
+                {
+                    TimeSpan remaining = BeforeDelayRemaining();
+                    if (remaining <= TimeSpan.Zero) break;
+                    // Spaceで待ちだけを終えられるよう、実行用とは別の取消源でタイマーを回収する。
+                    using var wait = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    var delay = Task.Delay(remaining, _clock, wait.Token);
+                    await Task.WhenAny(delay, immediate.Task).ConfigureAwait(false);
+                    wait.Cancel();
+                    try { await delay.ConfigureAwait(false); } catch (OperationCanceledException) when (wait.IsCancellationRequested) { }
+                    token.ThrowIfCancellationRequested();
+                }
+                token.ThrowIfCancellationRequested();
+                bool retry = false;
+                await PostAsync(() =>
+                {
+                    if (!IsCurrent(context) || _beforeSelectionRequest is not { } selection) return;
+                    if (TryGetBeforeInterval(selection, out var frames))
+                    {
+                        CompleteBefore(context, frames);
+                        return;
+                    }
+                    // Postを待つ間にも移動できるため、実行登録の直前に静止期間を再確認する。
+                    if (!immediate.Task.IsCompleted && BeforeDelayRemaining() > TimeSpan.Zero)
+                    {
+                        retry = true;
+                        return;
+                    }
+                    if (PerfTrace.Enabled) PerfTrace.Write("vm.before.execute", new { generation = context.Generation });
+                    // Coreの背景枠を使い、前景の待機・実行・通知の世代を変更しない。
+                    _controller.Submit(context.Request, bypassDebounce: true, background: true, cancellationToken: token);
+                    submitted = true;
+                    Track(FinishBeforeAsync(context));
+                }).ConfigureAwait(false);
+                if (!retry) break;
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            await PostAsync(() =>
+            {
+                if (!IsCurrent(context)) return;
+                _beforeFinished = true;
+                IsBeforeBusy = false;
+                BeforeImage = null;
+                if (PerfTrace.Enabled) PerfTrace.Write("vm.before.error", new { exception.Message });
+            }).ConfigureAwait(false);
+        }
+        finally { if (!submitted) ReleaseBefore(context); }
     }
 
     private async Task FinishBeforeAsync(RequestContext context)
     {
         try { await _controller.WaitForIdleAsync().ConfigureAwait(false); }
-        finally
-        {
-            lock (_taskLock)
-            {
-                if (ReferenceEquals(_beforeCancellation, context.BeforeCancellation)) _beforeCancellation = null;
-                context.BeforeCancellation?.Dispose();
-            }
-            if (ReferenceEquals(Volatile.Read(ref _beforeExecutionContext), context)) Volatile.Write(ref _beforeExecutionContext, null);
-        }
+        finally { ReleaseBefore(context); }
     }
 
-    private RequestContext? ExecutionContextFor(PreviewRequest request)
+    private void ReleaseBefore(RequestContext context)
     {
-        var context = ContextFor(request);
-        if (context != null) return context;
-        // 新しい後画像の準備中でも、実行待ちだった旧Beforeへ中断済みトークンを渡す。
-        context = Volatile.Read(ref _beforeExecutionContext);
-        return context != null && SameRequest(context.Request, request) ? context : null;
+        lock (_taskLock)
+        {
+            if (ReferenceEquals(_beforeCancellation, context.BeforeCancellation)) _beforeCancellation = null;
+            context.BeforeCancellation?.Dispose();
+        }
+        // 完了通知はUIへPostされているため、対応するcontextは反映まで保持する。
+    }
+
+    private void CompleteBefore(RequestContext context, IReadOnlyList<Y4mFrame> frames)
+    {
+        _beforeIntervalRequest = context.Request;
+        _beforeIntervalFrames = frames;
+        _beforeFinished = true;
+        IsBeforeBusy = false;
+        // 実行開始時の目標ではなく、同じ区間で最後に移動した位置を選ぶ。
+        var selection = RetargetInterval(context.Request, CurrentSeconds);
+        if (!SameBeforeInterval(context.Request, selection)) return;
+        var frame = SelectBeforeFrame(selection, frames);
+        if (frame != null) DisplayBeforeFrame(frame, Volatile.Read(ref _generation), finishBusy: true);
     }
 
     private bool TryGetBeforeInterval(PreviewRequest request, out IReadOnlyList<Y4mFrame> frames)
     {
         if (_cache.TryGet(request, out frames)) return true;
+        // フィルタなしなら、LRUの容量外でも保持中の後画像区間をそのまま元画像に使える。
+        if (_intervalRequest is { VppArgs.Count: 0 } after && SameBeforeInterval(after, request))
+        { frames = _intervalFrames; return true; }
         if (_beforeIntervalRequest is { } previous && SameBeforeInterval(previous, request))
         { frames = _beforeIntervalFrames; return true; }
         frames = Array.Empty<Y4mFrame>();

@@ -28,6 +28,10 @@ public sealed class PreviewController : IAsyncDisposable
     private readonly HashSet<string> _unsupported = new(StringComparer.Ordinal);
     private readonly HashSet<Task> _tasks = new();
     private CancellationTokenSource? _scheduled;
+    private CancellationTokenSource? _backgroundScheduled;
+    private long _backgroundVersion;
+    private int _foregroundPending;
+    private TaskCompletionSource _foregroundIdle = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private CancellationTokenSource? _active;
     private long _version;
     private long _lastEditVersion;
@@ -64,7 +68,10 @@ public sealed class PreviewController : IAsyncDisposable
     /// <param name="bypassCache">trueなら過去の画像を使わず実行する。直前の要求が後からキャッシュへ保存されても再実行を保証する。</param>
     /// <param name="bypassDebounce">内部の追加要求を即座に実行する場合だけtrue。通常の編集操作は既定の待機時間を使う。</param>
     /// <param name="navigation">移動要求なら待機時間を省き、実行中の要求を完了させてから最新の待機要求を実行する。</param>
-    public void Submit(PreviewRequest request, bool bypassCache = false, bool bypassDebounce = false, bool navigation = false)
+    /// <param name="background">背景要求なら前景の待機枠・世代を変更せず、前景がすべて終わってから実行する。編集向けdebounceは適用しない。</param>
+    /// <param name="cancellationToken">登録後の待機と実行の両方を取り消す。移動要求の置換による待機取消とは分離する。</param>
+    public void Submit(PreviewRequest request, bool bypassCache = false, bool bypassDebounce = false, bool navigation = false,
+        bool background = false, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         request = request with { InputArgs = request.InputArgs.ToArray(), VppArgs = request.VppArgs.ToArray() };
@@ -72,18 +79,32 @@ public sealed class PreviewController : IAsyncDisposable
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            _scheduled?.Cancel();
-            var scheduled = new CancellationTokenSource();
-            _scheduled = scheduled;
-            long version = ++_version;
-            if (PerfTrace.Enabled) PerfTrace.Write("core.submit", new { request.CorrelationId, version, navigation,
+            var scheduled = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            long version;
+            if (background)
+            {
+                _backgroundScheduled?.Cancel();
+                _backgroundScheduled = scheduled;
+                version = ++_backgroundVersion;
+            }
+            else
+            {
+                _scheduled?.Cancel();
+                _scheduled = scheduled;
+                version = ++_version;
+                if (!navigation) _lastEditVersion = version;
+                if (_foregroundPending++ == 0)
+                    _foregroundIdle = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            long editVersion = _lastEditVersion;
+            if (PerfTrace.Enabled) PerfTrace.Write("core.submit", new { request.CorrelationId, version, navigation, background,
                 bypassCache, bypassDebounce, request.TargetSeconds, request.PreMarginSeconds,
                 request.PostMarginSeconds, vppArgs = request.VppArgs });
-            if (!navigation) _lastEditVersion = version;
             // 同期完了や通知からのDispose再入より先に、回収対象を登録する。
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _tasks.Add(completion.Task);
-            _ = TrackAsync(ScheduleAsync(request, version, scheduled, bypassCache, bypassDebounce, navigation), completion);
+            _ = TrackAsync(ScheduleAsync(request, version, scheduled, bypassCache, bypassDebounce, navigation,
+                background, editVersion, cancellationToken), completion);
         }
     }
 
@@ -105,6 +126,30 @@ public sealed class PreviewController : IAsyncDisposable
     }
 
     private bool IsCurrent(long version) => !_disposed && version == _version;
+
+    private bool IsRequestedCurrent(long version, bool background, long editVersion) => background
+        ? !_disposed && version == _backgroundVersion && editVersion == _lastEditVersion : IsCurrent(version);
+
+    private void NotifyBackground(long version, long editVersion, Action notification)
+    {
+        lock (_sync)
+        {
+            // 背景の通知順は前景と別にし、同じ区間内の移動だけでは背景結果を捨てない。
+            if (!IsRequestedCurrent(version, true, editVersion))
+            {
+                if (PerfTrace.Enabled) PerfTrace.Write("core.notify_suppressed", new { version, background = true,
+                    currentVersion = _backgroundVersion, editVersion, lastEditVersion = _lastEditVersion,
+                    reason = _disposed ? "disposed" : "background_replaced_or_edited" });
+                return;
+            }
+            notification();
+        }
+    }
+
+    private Task WaitForForegroundAsync(CancellationToken token)
+    {
+        lock (_sync) return (_foregroundPending == 0 ? Task.CompletedTask : _foregroundIdle.Task).WaitAsync(token);
+    }
 
     private void Notify(long version, bool navigation, Action notification, bool currentOnly = false)
     {
@@ -132,20 +177,30 @@ public sealed class PreviewController : IAsyncDisposable
     }
 
     private async Task ScheduleAsync(PreviewRequest request, long version, CancellationTokenSource scheduled,
-        bool bypassCache, bool bypassDebounce, bool navigation)
+        bool bypassCache, bool bypassDebounce, bool navigation, bool background, long editVersion,
+        CancellationToken cancellationToken)
     {
         bool entered = false;
         long waitStart = 0;
         long executionStart = 0;
         long backendStart = 0;
         CancellationTokenSource? active = null;
+        void Publish(Action notification, bool currentOnly = false)
+        {
+            if (cancellationToken.IsCancellationRequested) return;
+            if (background)
+            {
+                if (!scheduled.IsCancellationRequested) NotifyBackground(version, editVersion, notification);
+            }
+            else Notify(version, navigation, notification, currentOnly);
+        }
         try
         {
-            await Task.Delay(navigation || bypassDebounce ? TimeSpan.Zero : _debounce, _clock, scheduled.Token).ConfigureAwait(false);
+            await Task.Delay(background || navigation || bypassDebounce ? TimeSpan.Zero : _debounce, _clock, scheduled.Token).ConfigureAwait(false);
             lock (_sync)
             {
-                if (!IsCurrent(version)) return;
-                if (!navigation)
+                if (!IsRequestedCurrent(version, background, editVersion)) return;
+                if (!background && !navigation)
                 {
                     if (PerfTrace.Enabled && _active != null) PerfTrace.Write("core.cancel_active", new { request.CorrelationId, version });
                     _active?.Cancel();
@@ -156,32 +211,44 @@ public sealed class PreviewController : IAsyncDisposable
                 waitStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 PerfTrace.Write("core.execution_wait", new { request.CorrelationId, version });
             }
-            await _execution.WaitAsync(scheduled.Token).ConfigureAwait(false);
-            entered = true;
+            while (true)
+            {
+                if (background) await WaitForForegroundAsync(scheduled.Token).ConfigureAwait(false);
+                await _execution.WaitAsync(scheduled.Token).ConfigureAwait(false);
+                entered = true;
+                if (PerfTrace.Enabled) executionStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                lock (_sync)
+                {
+                    if (!IsRequestedCurrent(version, background, editVersion)) return;
+                    // SemaphoreSlimの待ち順には依存せず、取得と実行登録の間にも前景を優先する。
+                    if (!background || _foregroundPending == 0)
+                    {
+                        // scheduledを連結すると、次の移動による待機置換まで実行中断へ変わってしまう。
+                        active = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        _active = active;
+                        break;
+                    }
+                }
+                _execution.Release();
+                entered = false;
+            }
             if (PerfTrace.Enabled)
             {
-                executionStart = System.Diagnostics.Stopwatch.GetTimestamp();
-                PerfTrace.Write("core.execution_enter", new { request.CorrelationId, version,
+                PerfTrace.Write("core.execution_enter", new { request.CorrelationId, version, background,
                     waitMs = System.Diagnostics.Stopwatch.GetElapsedTime(waitStart).TotalMilliseconds });
-            }
-            lock (_sync)
-            {
-                if (!IsCurrent(version)) return;
-                active = new CancellationTokenSource();
-                _active = active;
             }
             var sink = new SelectionSink(request, frame =>
             {
                 if (PerfTrace.Enabled) PerfTrace.Write("core.target_frame", new { request.CorrelationId, version,
                     frame.Frame.Xts, frame.TargetNotReached });
-                Notify(version, navigation, () => FrameReady?.Invoke(frame));
+                Publish(() => FrameReady?.Invoke(frame));
             });
             if (!bypassCache && _cache.TryGet(request, out var frames))
             {
                 if (PerfTrace.Enabled) PerfTrace.Write("core.cache_hit", new { request.CorrelationId, version, frames = frames.Count });
                 foreach (var frame in frames) sink.OnFrame(frame);
                 sink.Finish();
-                Notify(version, navigation, () => Completed?.Invoke(new(request, new(0, ""), true, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly() }));
+                Publish(() => Completed?.Invoke(new(request, new(0, ""), true, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly() }));
                 return;
             }
             IPreviewBackend backend = _unsupported.Contains(request.EncoderPath) ? _fallback : _preferred;
@@ -202,7 +269,7 @@ public sealed class PreviewController : IAsyncDisposable
                 active.Cancel();
                 await backend.AbortAsync().ConfigureAwait(false);
                 try { await run.ConfigureAwait(false); } catch (Exception) { /* タイムアウトを優先し、回収後に通知する。 */ }
-                Notify(version, navigation, () => Failed?.Invoke(new(request, "出力が進まないためタイムアウトしました")), currentOnly: true);
+                Publish(() => Failed?.Invoke(new(request, "出力が進まないためタイムアウトしました")), currentOnly: true);
                 return;
             }
             result = await run.ConfigureAwait(false);
@@ -212,7 +279,7 @@ public sealed class PreviewController : IAsyncDisposable
             if (active.IsCancellationRequested || result.IsCancelled) return;
             if (result.ExitCode != 0)
             {
-                Notify(version, navigation, () => Failed?.Invoke(new(request, $"エンコーダがエラー終了しました: {result.ExitCode}", result)), currentOnly: true);
+                Publish(() => Failed?.Invoke(new(request, $"エンコーダがエラー終了しました: {result.ExitCode}", result)), currentOnly: true);
                 return;
             }
             sink.Finish();
@@ -220,7 +287,7 @@ public sealed class PreviewController : IAsyncDisposable
             if (PerfTrace.Enabled) PerfTrace.Write("core.cache_store", new { request.CorrelationId, version,
                 frames = sink.Frames.Count, bytes = sink.ReceivedBytes, cacheBytes = _cache.SizeBytes,
                 cacheEntries = _cache.Count });
-            Notify(version, navigation, () => Completed?.Invoke(new(request, result, false, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly() }));
+            Publish(() => Completed?.Invoke(new(request, result, false, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly() }));
 
             async Task<PreviewRunResult> RunWithFallbackAsync()
             {
@@ -242,14 +309,22 @@ public sealed class PreviewController : IAsyncDisposable
         {
             if (PerfTrace.Enabled) PerfTrace.Write("core.exception", new { request.CorrelationId, version,
                 type = ex.GetType().Name, ex.Message });
-            Notify(version, navigation, () => Failed?.Invoke(new(request, ex.Message, Exception: ex)), currentOnly: true);
+            Publish(() => Failed?.Invoke(new(request, ex.Message, Exception: ex)), currentOnly: true);
         }
         finally
         {
             lock (_sync)
             {
                 if (ReferenceEquals(_active, active)) _active = null;
-                if (ReferenceEquals(_scheduled, scheduled)) _scheduled = null;
+                if (background)
+                {
+                    if (ReferenceEquals(_backgroundScheduled, scheduled)) _backgroundScheduled = null;
+                }
+                else
+                {
+                    if (ReferenceEquals(_scheduled, scheduled)) _scheduled = null;
+                    if (--_foregroundPending == 0) _foregroundIdle.TrySetResult();
+                }
             }
             active?.Dispose();
             scheduled.Dispose();
@@ -270,6 +345,7 @@ public sealed class PreviewController : IAsyncDisposable
             _disposed = true;
             ++_version;
             _scheduled?.Cancel();
+            _backgroundScheduled?.Cancel();
             _active?.Cancel();
             _disposeTask = DisposeCoreAsync(_tasks.ToArray());
             return new(_disposeTask);

@@ -7,6 +7,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using HWEncParamViewer.App.Services;
 using HWEncParamViewer.App.ViewModels;
 using HWEncParamViewer.App.Views;
@@ -163,6 +164,7 @@ public sealed class ComparisonTests
         clock.Advance(TimeSpan.FromMilliseconds(150));
         await oldBefore.Cancelled.Task.WaitAsync(SafetyTimeout);
         oldBefore.Release.TrySetResult();
+        clock.Advance(TimeSpan.FromMilliseconds(300));
         await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
         var latestAfter = backend.Runs.Last(run => !run.IsBefore);
         var latestBefore = backend.Runs.Last(run => run.IsBefore);
@@ -212,6 +214,195 @@ public sealed class ComparisonTests
     }
 
     [AvaloniaFact]
+    public async Task BeforeWaitsUntilTheLastMovementHasBeenQuietFor300Milliseconds()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        var backend = new RecordingBackend();
+        await using var vm = Create(services, clock, backend);
+        vm.FilterLines.Add(new() { Text = "--vpp-nlmeans" });
+        await InitializeAndDrainAsync(vm, clock, backend);
+        await MoveAndWaitForAfterAsync(vm, backend, 1.2);
+        Assert.True(vm.IsBeforeBusy);
+        Assert.Single(backend.Runs, run => run.IsBefore);
+        clock.Advance(TimeSpan.FromMilliseconds(299));
+        Assert.Single(backend.Runs, run => run.IsBefore);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        var before = await backend.NextAsync();
+        Assert.True(before.IsBefore);
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.Equal(FrameHash(SelectIndependent(before, vm.CurrentSeconds)), ImageHash(vm.BeforeImage!));
+        Assert.False(vm.IsBeforeBusy);
+    }
+
+    [AvaloniaFact]
+    public async Task DroppedRepeatedStepsStillPostponeTheBeforeRequest()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        var backend = new RecordingBackend();
+        await using var vm = Create(services, clock, backend);
+        vm.FilterLines.Add(new() { Text = "--vpp-nlmeans" });
+        await InitializeAndDrainAsync(vm, clock, backend);
+        backend.HoldNextAfter = true;
+        vm.CurrentSeconds = 1.2;
+        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        var held = await backend.NextAsync();
+        Assert.False(held.IsBefore);
+        vm.StepFrameCommand.Execute(1);
+        clock.Advance(TimeSpan.FromMilliseconds(200));
+        // 隣フレームの要求が待機中なので、この反復は表示目標へ加算されない。
+        vm.StepFrameCommand.Execute(1);
+        Assert.Equal(1.2, vm.CurrentSeconds, 7);
+        held.Release.TrySetResult();
+        await WaitUntilAsync(vm, () => !vm.IsBusy);
+        clock.Advance(TimeSpan.FromMilliseconds(299));
+        Assert.Single(backend.Runs, run => run.IsBefore);
+        vm.IsShowingBefore = true;
+        var before = await backend.NextAsync();
+        Assert.True(before.IsBefore);
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.Equal(FrameHash(SelectIndependent(before, vm.CurrentSeconds)), ImageHash(vm.BeforeImage!));
+    }
+
+    [AvaloniaFact]
+    public async Task MovementAtTheQuietBoundaryKeepsTheBeforePendingUntilSpace()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        var backend = new RecordingBackend();
+        await using var vm = Create(services, clock, backend);
+        vm.FilterLines.Add(new() { Text = "--vpp-nlmeans" });
+        await InitializeAndDrainAsync(vm, clock, backend);
+        await MoveAndWaitForAfterAsync(vm, backend, 1.2);
+        var moved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // 期限で予約された背景Postより先に、新しい移動意図をUIで処理する。
+        Dispatcher.UIThread.Post(() =>
+        {
+            vm.CurrentSeconds = vm.CurrentSeconds;
+            moved.TrySetResult();
+        }, DispatcherPriority.Send);
+        clock.Advance(TimeSpan.FromMilliseconds(300));
+        await moved.Task.WaitAsync(SafetyTimeout);
+        clock.Advance(TimeSpan.FromMilliseconds(299));
+        Assert.Single(backend.Runs, run => run.IsBefore);
+        vm.IsShowingBefore = true;
+        Assert.True((await backend.NextAsync()).IsBefore);
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+    }
+
+    [AvaloniaFact]
+    public async Task SpaceStartsAPendingBeforeWithoutWaitingAndDoesNotDuplicateIt()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        var backend = new RecordingBackend();
+        await using var vm = Create(services, clock, backend);
+        vm.FilterLines.Add(new() { Text = "--vpp-nlmeans" });
+        await InitializeAndDrainAsync(vm, clock, backend);
+        await MoveAndWaitForAfterAsync(vm, backend, 1.2);
+        long time = clock.GetTimestamp();
+        vm.IsShowingBefore = true;
+        var before = await backend.NextAsync();
+        Assert.True(before.IsBefore);
+        Assert.Equal(time, clock.GetTimestamp());
+        vm.IsShowingBefore = false;
+        vm.IsShowingBefore = true;
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.Equal(2, backend.Runs.Count(run => run.IsBefore));
+        Assert.NotNull(vm.BeforeImage);
+    }
+
+    [AvaloniaFact]
+    public async Task SameIntervalStepKeepsTheBeforeRunAndSelectsTheLatestTimeOnCompletion()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        var backend = new RecordingBackend { HoldFirstBefore = true };
+        await using var vm = Create(services, clock, backend);
+        vm.FilterLines.Add(new() { Text = "--vpp-nlmeans" });
+        await PrepareAsync(vm, clock);
+        await backend.NextAsync();
+        var before = await backend.NextAsync();
+        Assert.True(before.IsBefore);
+        vm.StepFrameCommand.Execute(1);
+        Assert.Equal(10 / 30.0, vm.CurrentSeconds, 7);
+        Assert.False(before.Cancelled.Task.IsCompleted);
+        Assert.Single(backend.Runs, run => run.IsBefore);
+        before.Release.TrySetResult();
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.False(before.Cancelled.Task.IsCompleted);
+        Assert.Single(backend.Runs, run => run.IsBefore);
+        Assert.Equal(FrameHash(SelectIndependent(before, vm.CurrentSeconds)), ImageHash(vm.BeforeImage!));
+        Assert.NotEqual(FrameHash(SelectIndependent(before)), ImageHash(vm.BeforeImage!));
+    }
+
+    [AvaloniaFact]
+    public async Task MovementToADifferentIntervalCancelsTheOldBefore()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        var backend = new RecordingBackend { HoldFirstBefore = true };
+        await using var vm = Create(services, clock, backend);
+        vm.FilterLines.Add(new() { Text = "--vpp-nlmeans" });
+        await PrepareAsync(vm, clock);
+        await backend.NextAsync();
+        var old = await backend.NextAsync();
+        vm.CurrentSeconds = 1.2;
+        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        await old.Cancelled.Task.WaitAsync(SafetyTimeout);
+        var after = await backend.NextAsync();
+        Assert.False(after.IsBefore);
+        await WaitUntilAsync(vm, () => !vm.IsBusy);
+        clock.Advance(TimeSpan.FromMilliseconds(300));
+        var before = await backend.NextAsync();
+        Assert.True(before.IsBefore);
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.Equal(FrameHash(SelectIndependent(before, vm.CurrentSeconds)), ImageHash(vm.BeforeImage!));
+    }
+
+    [AvaloniaFact]
+    public async Task EditingCancelsTheBeforeEvenWhenItsIntervalDoesNotChange()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        var backend = new RecordingBackend { HoldFirstBefore = true };
+        await using var vm = Create(services, clock, backend);
+        var line = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.1" };
+        vm.FilterLines.Add(line);
+        await PrepareAsync(vm, clock);
+        await backend.NextAsync();
+        var old = await backend.NextAsync();
+        line.Text = "--vpp-nlmeans sigma=0.2";
+        await old.Cancelled.Task.WaitAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        clock.Advance(TimeSpan.FromMilliseconds(150));
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.Equal(2, backend.Runs.Count(run => run.IsBefore));
+        Assert.NotNull(vm.BeforeImage);
+    }
+
+    [AvaloniaFact]
+    public async Task DisposeReapsAPendingBeforeWithoutAdvancingTheClock()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        var backend = new RecordingBackend();
+        var vm = Create(services, clock, backend);
+        try
+        {
+            vm.FilterLines.Add(new() { Text = "--vpp-nlmeans" });
+            await InitializeAndDrainAsync(vm, clock, backend);
+            await MoveAndWaitForAfterAsync(vm, backend, 1.2);
+            Assert.True(vm.IsBeforeBusy);
+            await vm.DisposeAsync().AsTask().WaitAsync(SafetyTimeout);
+            Assert.Single(backend.Runs, run => run.IsBefore);
+            Assert.Null(vm.BeforeImage);
+        }
+        finally { await vm.DisposeAsync(); }
+    }
+
+    [AvaloniaFact]
     public async Task AllComparisonModesRenderWithoutChangingTheAfterImage()
     {
         using var services = new TestServices();
@@ -249,6 +440,19 @@ public sealed class ComparisonTests
             InputArgsText = "--avhw --fake-duration 00:00:10.00",
         };
 
+    private static async Task InitializeAndDrainAsync(MainWindowViewModel vm, FakeTimeProvider clock, RecordingBackend backend)
+    {
+        await InitializeAsync(vm, clock);
+        Assert.False((await backend.NextAsync()).IsBefore);
+        Assert.True((await backend.NextAsync()).IsBefore);
+    }
+    private static async Task MoveAndWaitForAfterAsync(MainWindowViewModel vm, RecordingBackend backend, double seconds)
+    {
+        vm.CurrentSeconds = seconds;
+        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        Assert.False((await backend.NextAsync()).IsBefore);
+        await WaitUntilAsync(vm, () => !vm.IsBusy);
+    }
     private static async Task PrepareAsync(MainWindowViewModel vm, FakeTimeProvider clock)
     {
         await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
@@ -274,9 +478,10 @@ public sealed class ComparisonTests
         try { await ready.Task.WaitAsync(SafetyTimeout); }
         finally { vm.PropertyChanged -= changed; }
     }
-    private static Y4mFrame SelectIndependent(Invocation invocation)
+    private static Y4mFrame SelectIndependent(Invocation invocation, double? targetSeconds = null)
     {
-        double target = CommandBuilder.Plan(invocation.Request).ActualPreMargin;
+        var plan = CommandBuilder.Plan(invocation.Request);
+        double target = targetSeconds is double seconds ? seconds - (plan.SeekSeconds ?? 0) : plan.ActualPreMargin;
         return invocation.Frames.Where(frame => frame.Xts!.Value <= target + frame.Xdur!.Value / 2)
             .OrderByDescending(frame => frame.Xts).First();
     }
@@ -320,6 +525,7 @@ public sealed class ComparisonTests
         public bool IgnoreHeldBeforeCancellation { get; init; }
         public bool HangFirstBefore { get; init; }
         public bool FailBefore { get; init; }
+        public bool HoldNextAfter { get; set; }
         public RecordingBackend() => _inner = new OneShotBackend(info =>
         {
             if (_current is { IsBefore: true } && HangFirstBefore && _beforeCount == 1)
@@ -337,14 +543,22 @@ public sealed class ComparisonTests
             _started.Writer.TryWrite(invocation);
             try
             {
-                bool held = invocation.IsBefore && beforeNumber == 1 && HoldFirstBefore;
-                if (held) await invocation.Release.Task.WaitAsync(IgnoreHeldBeforeCancellation ? CancellationToken.None : token);
+                bool held = invocation.IsBefore ? beforeNumber == 1 && HoldFirstBefore : HoldNextAfter;
+                if (held && !invocation.IsBefore) HoldNextAfter = false;
+                bool ignoreCancellation = invocation.IsBefore && held && IgnoreHeldBeforeCancellation;
+                if (held) await invocation.Release.Task.WaitAsync(ignoreCancellation ? CancellationToken.None : token);
                 if (invocation.Aborted) return new PreviewRunResult(-12, "", true);
                 if (invocation.IsBefore && FailBefore)
                     return new PreviewRunResult(17, "BEFORE_FAILURE");
                 var result = await _inner.RunAsync(request, new CaptureSink(sink, invocation),
-                    held && IgnoreHeldBeforeCancellation ? CancellationToken.None : token);
+                    ignoreCancellation ? CancellationToken.None : token);
                 return result with { StandardError = (invocation.IsBefore ? "BEFORE\n" : "AFTER\n") + result.StandardError };
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // WaitAsyncの取消継続が先に登録を破棄しても、実際に中断した事実を取りこぼさない。
+                invocation.Cancelled.TrySetResult();
+                throw;
             }
             finally { invocation.Completed.TrySetResult(); }
         }

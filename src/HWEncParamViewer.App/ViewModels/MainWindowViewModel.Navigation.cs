@@ -20,9 +20,9 @@ public sealed partial class MainWindowViewModel
         _latestIntentNavigation = navigation;
         _pendingNeighbor = null;
         Volatile.Write(ref _context, null);
-        CancelBefore();
         if (!navigation)
         {
+            CancelBefore();
             Interlocked.Increment(ref _editEpoch);
             _afterRequests.Clear();
             lock (_taskLock) _pendingAfterImage = null;
@@ -118,6 +118,7 @@ public sealed partial class MainWindowViewModel
                     var neighbor = _pendingNeighbor?.Generation == actualGeneration ? _pendingNeighbor : null;
                     var context = new RequestContext(actualGeneration, request, _clock.GetTimestamp(),
                         editEpoch: editEpoch, neighborDirection: neighbor?.Direction ?? 0);
+                    CheckBeforeInterval(request);
                     RegisterContext(context);
                     StatusText = "処理中…";
                     _controller.Submit(request, bypassCache, navigation: actualNavigation);
