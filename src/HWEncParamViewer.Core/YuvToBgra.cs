@@ -1,4 +1,6 @@
-﻿namespace HWEncParamViewer.Core;
+﻿using System.Runtime.CompilerServices;
+
+namespace HWEncParamViewer.Core;
 
 /// <summary>y4mの平面画像をlimited rangeのBT.601/BT.709からBGRA8へ変換する。</summary>
 public static class YuvToBgra
@@ -44,29 +46,37 @@ public static class YuvToBgra
         double greenCr = 2 * kr * (1 - kr) / kg * cFactor;
         byte[] data = frame.Data;
         byte[] result = new byte[lumaSamples * 4];
-        Parallel.For(0, height, y =>
-        {
-            int sourceRow = y * width;
-            int targetRow = sourceRow * 4;
-            int chromaRow = (header.Chroma == Y4mChroma.C420 ? y / 2 : y) * chromaWidth;
-            for (int x = 0; x < width; ++x)
-            {
-                double luminance = (Sample(data, sourceRow + x, sampleBytes) - black) * yFactor;
-                int cb = 0, cr = 0;
-                if (header.Chroma != Y4mChroma.Mono)
-                {
-                    int chromaIndex = chromaRow + (header.Chroma is Y4mChroma.C420 or Y4mChroma.C422 ? x / 2 : x);
-                    cb = Sample(data, lumaSamples + chromaIndex, sampleBytes) - neutral;
-                    cr = Sample(data, lumaSamples + chromaSamples + chromaIndex, sampleBytes) - neutral;
-                }
-                int target = targetRow + x * 4;
-                result[target] = Clip(luminance + blueCb * cb);
-                result[target + 1] = Clip(luminance - greenCb * cb - greenCr * cr);
-                result[target + 2] = Clip(luminance + redCr * cr);
-                result[target + 3] = 255;
-            }
-        });
+        Parallel.For(0, height, y => ConvertRow(y, header.Chroma, width, chromaWidth, lumaSamples,
+            chromaSamples, sampleBytes, black, neutral, yFactor, redCr, blueCb, greenCb, greenCr, data, result));
         return result;
+    }
+
+    // 行処理を初回から最適化し、短いコマ送りでもTiered JITの暖機待ちを発生させない。
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static void ConvertRow(int y, Y4mChroma chroma, int width, int chromaWidth,
+        int lumaSamples, int chromaSamples, int sampleBytes, int black, int neutral,
+        double yFactor, double redCr, double blueCb, double greenCb, double greenCr,
+        byte[] data, byte[] result)
+    {
+        int sourceRow = y * width;
+        int targetRow = sourceRow * 4;
+        int chromaRow = (chroma == Y4mChroma.C420 ? y / 2 : y) * chromaWidth;
+        for (int x = 0; x < width; ++x)
+        {
+            double luminance = (Sample(data, sourceRow + x, sampleBytes) - black) * yFactor;
+            int cb = 0, cr = 0;
+            if (chroma != Y4mChroma.Mono)
+            {
+                int chromaIndex = chromaRow + (chroma is Y4mChroma.C420 or Y4mChroma.C422 ? x / 2 : x);
+                cb = Sample(data, lumaSamples + chromaIndex, sampleBytes) - neutral;
+                cr = Sample(data, lumaSamples + chromaSamples + chromaIndex, sampleBytes) - neutral;
+            }
+            int target = targetRow + x * 4;
+            result[target] = Clip(luminance + blueCb * cb);
+            result[target + 1] = Clip(luminance - greenCb * cb - greenCr * cr);
+            result[target + 2] = Clip(luminance + redCr * cr);
+            result[target + 3] = 255;
+        }
     }
 
     private static int Sample(byte[] data, int index, int bytes)
@@ -76,5 +86,7 @@ public static class YuvToBgra
         return data[offset] | data[offset + 1] << 8;
     }
 
+    // 行ループ内へ丸めと飽和を取り込み、小関数のTier0呼び出しを画素ごとに残さない。
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static byte Clip(double value) => (byte)Math.Clamp((int)Math.Round(value, MidpointRounding.AwayFromZero), 0, 255);
 }
