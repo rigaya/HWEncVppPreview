@@ -10,7 +10,7 @@ public sealed class FilterLineViewModel : ViewModelBase
     private string _text = "";
     private HelpSchema? _schema;
     private HelpOptionSchema? _parameterOption;
-    private string _displayName = "", _categoryName = "", _summary = "", _formUnavailableReason = "helpのスキーマを取得していません。テキストで編集してください。";
+    private string _displayName = "", _categoryName = "", _summary = "", _formUnavailableReason = AppMessages.SchemaUnavailable;
     private bool _isFormAvailable;
 
     public string DisplayName { get => _displayName; private set => SetProperty(ref _displayName, value); }
@@ -31,6 +31,13 @@ public sealed class FilterLineViewModel : ViewModelBase
         }
     }
 
+    /// <summary>表示言語を変えたときだけ欄を作り直し、入力済みのテキストは保つ。</summary>
+    internal void RefreshLanguage()
+    {
+        _parameterOption = null;
+        RefreshForm();
+    }
+
     private void RefreshForm()
     {
         DisplayName = OptionName.StartsWith("--vpp-", StringComparison.OrdinalIgnoreCase) ? OptionName[6..] : OptionName;
@@ -38,7 +45,7 @@ public sealed class FilterLineViewModel : ViewModelBase
         CategoryName = HelpCategories.DisplayName(info?.Option?.Category);
         Summary = info is null ? "" : FilterLineEditor.Summary(info);
         IsFormAvailable = info is not null && info.Form != FilterLineForm.Unavailable;
-        FormUnavailableReason = info is null ? "helpのスキーマを取得していません。テキストで編集してください。" : info.UnavailableReason ?? "";
+        FormUnavailableReason = info is null ? AppMessages.SchemaUnavailable : info.UnavailableReason ?? "";
         var option = info?.Option;
         if (!ReferenceEquals(_parameterOption, option))
         {

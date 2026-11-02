@@ -23,13 +23,13 @@ public sealed record ValueSpan(int Start, int Length, HelpValueSchema Parameter)
 /// <summary>help分類の表示名と表示順。</summary>
 public static class HelpCategories
 {
-    private static readonly (string Id, string Name)[] Categories =
+    private static readonly (string Id, Func<string> Name)[] Categories =
     [
-        ("deinterlace", "インターレース解除"), ("denoise", "ノイズ除去"), ("edge", "エッジ強調"),
-        ("deband", "バンディング"), ("color", "色調整"), ("resize", "リサイズ・幾何変換"),
-        ("framerate", "フレームレート・補間"), ("overlay", "ロゴ・字幕・合成"), ("ai", "AI"), ("other", "その他・設定")
+        ("deinterlace", () => CoreText.CategoryDeinterlace), ("denoise", () => CoreText.CategoryDenoise), ("edge", () => CoreText.CategoryEdge),
+        ("deband", () => CoreText.CategoryDeband), ("color", () => CoreText.CategoryColor), ("resize", () => CoreText.CategoryResize),
+        ("framerate", () => CoreText.CategoryFramerate), ("overlay", () => CoreText.CategoryOverlay), ("ai", () => CoreText.CategoryAi), ("other", () => CoreText.CategoryOther)
     ];
-    public static string DisplayName(string? id) => Categories.FirstOrDefault(category => category.Id == id).Name ?? id ?? "";
+    public static string DisplayName(string? id) => Categories.FirstOrDefault(category => category.Id == id).Name?.Invoke() ?? id ?? "";
     internal static int Order(string? id)
     {
         int index = Array.FindIndex(Categories, category => category.Id == id);

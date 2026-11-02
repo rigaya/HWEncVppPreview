@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using HWEncParamViewer.App.ViewModels;
+using HWEncParamViewer.App.Localization;
 
 namespace HWEncParamViewer.App.Views;
 
@@ -80,7 +81,7 @@ public partial class FilterCatalogView : UserControl
             if (item.CategoryName != category)
             {
                 category = item.CategoryName;
-                entries.Add(new CatalogEntry { Header = category.Length > 0 ? category : "分類なし", IsHeader = true });
+                entries.Add(new CatalogEntry { Header = category.Length > 0 ? category : Localizer.Instance.Text.Uncategorized, IsHeader = true });
             }
             entries.Add(new CatalogEntry { Item = item });
         }

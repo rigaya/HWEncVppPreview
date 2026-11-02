@@ -30,7 +30,7 @@ public sealed class Y4mTruncatedException : Y4mFormatException
     public int ActualBytes { get; }
 
     public Y4mTruncatedException(double? xts, int expectedBytes, int actualBytes)
-        : base($"y4m のフレームが途中で切れています (期待 {expectedBytes} バイト、実際 {actualBytes} バイト)")
+        : base(CoreText.Y4mFrameTruncated(expectedBytes, actualBytes))
     {
         Xts = xts;
         ExpectedBytes = expectedBytes;
@@ -90,7 +90,7 @@ public sealed class Y4mHeader
         const string magic = "YUV4MPEG2";
         if (!line.StartsWith(magic, StringComparison.Ordinal))
         {
-            throw new Y4mFormatException($"y4m ヘッダが YUV4MPEG2 で始まっていません: {Truncate(line)}");
+            throw new Y4mFormatException(CoreText.Y4mMagicInvalid(Truncate(line)));
         }
         int width = 0, height = 0, fpsN = 0, fpsD = 0, sarN = 0, sarD = 0;
         char interlace = '?';
@@ -119,7 +119,7 @@ public sealed class Y4mHeader
         }
         if (width <= 0 || height <= 0)
         {
-            throw new Y4mFormatException($"y4m ヘッダに有効な W / H がありません: {Truncate(line)}");
+            throw new Y4mFormatException(CoreText.Y4mSizeInvalid(Truncate(line)));
         }
         var (chroma, depth) = ParseColorSpace(csTag);
         return new Y4mHeader
@@ -139,7 +139,7 @@ public sealed class Y4mHeader
         else if (tag.StartsWith("420", StringComparison.Ordinal)) { chroma = Y4mChroma.C420; rest = tag[3..]; }
         else if (tag.StartsWith("422", StringComparison.Ordinal)) { chroma = Y4mChroma.C422; rest = tag[3..]; }
         else if (tag.StartsWith("444", StringComparison.Ordinal)) { chroma = Y4mChroma.C444; rest = tag[3..]; }
-        else throw new Y4mFormatException($"未対応のカラースペース: C{tag}");
+        else throw new Y4mFormatException(CoreText.ColorSpaceUnsupported(tag));
 
         // 8bit 系の接尾辞 (420jpeg / 420mpeg2 / 420paldv) は 8bit。"p10" "p12" "p16" はビット深度。
         // mono は ffmpeg 流に "mono10" "mono12" のように p 無しで数字が付く。
@@ -150,17 +150,17 @@ public sealed class Y4mHeader
         {
             return (chroma, depth);
         }
-        throw new Y4mFormatException($"未対応のカラースペース: C{tag}");
+        throw new Y4mFormatException(CoreText.ColorSpaceUnsupported(tag));
     }
 
     private static int ParseInt(string s, string tok) =>
         int.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture, out int v)
-            ? v : throw new Y4mFormatException($"y4m ヘッダのタグが不正です: {tok}");
+            ? v : throw new Y4mFormatException(CoreText.Y4mTagInvalid(tok));
 
     private static (int, int) ParseRatio(string s, string tok)
     {
         int colon = s.IndexOf(':');
-        if (colon < 0) throw new Y4mFormatException($"y4m ヘッダのタグが不正です: {tok}");
+        if (colon < 0) throw new Y4mFormatException(CoreText.Y4mTagInvalid(tok));
         return (ParseInt(s[..colon], tok), ParseInt(s[(colon + 1)..], tok));
     }
 
@@ -201,7 +201,7 @@ public sealed class Y4mReader
     public Y4mReader(Stream stream)
     {
         _stream = stream;
-        var line = ReadLine(stream) ?? throw new Y4mFormatException("y4m ストリームが空です");
+        var line = ReadLine(stream) ?? throw new Y4mFormatException(CoreText.Y4mEmpty);
         Header = Y4mHeader.Parse(line);
     }
 
@@ -227,7 +227,7 @@ public sealed class Y4mReader
     {
         if (frameLine != "FRAME" && !frameLine.StartsWith("FRAME ", StringComparison.Ordinal))
         {
-            throw new Y4mFormatException($"FRAME 行が期待されましたが、別の内容でした: {frameLine}");
+            throw new Y4mFormatException(CoreText.Y4mFrameExpected(frameLine));
         }
         double? xts = null, xdur = null;
         foreach (var tok in frameLine.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1))
@@ -261,10 +261,10 @@ public sealed class Y4mReader
             if (b == '\n') return Encoding.ASCII.GetString(buf.ToArray());
             buf.Add((byte)b);
             // 壊れた入力 (改行が来ない) でメモリを食い尽くさないための上限。ヘッダ行は高々数百バイト。
-            if (buf.Count > 4096) throw new Y4mFormatException("y4m の行が長すぎます (4096 バイト超)");
+            if (buf.Count > 4096) throw new Y4mFormatException(CoreText.Y4mLineTooLong);
         }
         // 改行なしで EOF: 中途半端な行は捨てて、データなしと同じ扱いにする
         if (buf.Count == 0) return null;
-        throw new Y4mFormatException("y4m の行が改行なしで終わっています");
+        throw new Y4mFormatException(CoreText.Y4mMissingNewline);
     }
 }

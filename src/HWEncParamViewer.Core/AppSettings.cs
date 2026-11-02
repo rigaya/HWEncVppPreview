@@ -17,6 +17,7 @@ public sealed record AppSettings
     public double WindowHeight { get; init; } = 900;
     public double CurrentSeconds { get; init; }
     public bool IsTextListMode { get; init; }
+    public string Language { get; init; } = "auto";
 
     public static string DefaultPath => Path.Combine(OperatingSystem.IsWindows()
         ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
@@ -57,6 +58,7 @@ public sealed record AppSettings
 
     private static AppSettings Normalize(AppSettings settings) => settings with
     {
+        Language = UiLanguage.Normalize(settings.Language),
         EncoderPath = settings.EncoderPath ?? "",
         InputPath = settings.InputPath ?? "",
         InputArgsText = settings.InputArgsText ?? "--avhw",

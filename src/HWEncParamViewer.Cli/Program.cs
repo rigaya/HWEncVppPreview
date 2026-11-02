@@ -139,7 +139,7 @@ public static class Program
             result.ExitCode = failure.Result == null ? 3 : 1;
             result.Rc = failure.Result?.ExitCode ?? 3;
             result.Error = failure.Reason;
-            result.TimedOut = failure.Exception is TimeoutException || failure.Reason.Contains("タイムアウト", StringComparison.Ordinal);
+            result.TimedOut = failure.TimedOut || failure.Exception is TimeoutException;
             string log = failure.Diagnostic ?? failure.Result?.StandardError ?? (failure.Exception as PreviewBackendException)?.StandardError
                 ?? recording.Result?.StandardError ?? "";
             result.StderrTail = Tail(log);

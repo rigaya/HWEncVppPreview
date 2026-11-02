@@ -91,12 +91,12 @@ public sealed partial class PreviewController
         return WithLegacyDiagnostic(request, result).StandardError;
     }
 
-    private void MarkLegacySource(PreviewRequest request, string reason = "absolute時刻の信頼性を確認できませんでした")
+    private void MarkLegacySource(PreviewRequest request, string? reason = null)
     {
         lock (_sync)
         {
             if (!_untrustedClocks.Any(source => FrameCache.SameContent(source, request)))
-            { _untrustedClocks.Add(request); _legacyDiagnostics.Add((request, reason)); }
+            { _untrustedClocks.Add(request); _legacyDiagnostics.Add((request, reason ?? "absolute時刻の信頼性を確認できませんでした")); }
             _cache.InvalidateSource(request);
         }
     }
@@ -271,8 +271,8 @@ public sealed partial class PreviewController
                 lock (_sync)
                 {
                     if (ReferenceEquals(_stream, session)) Notify(session.Version, session.Navigation,
-                        () => Failed?.Invoke(new(session.LatestRequest, "出力が進まないためタイムアウトしました")
-                            { Diagnostic = LegacyFailureDiagnostic(session.LatestRequest, stoppedException, stoppedResult) }), true);
+                        () => Failed?.Invoke(new(session.LatestRequest, CoreText.OutputTimedOut)
+                            { TimedOut = true, Diagnostic = LegacyFailureDiagnostic(session.LatestRequest, stoppedException, stoppedResult) }), true);
                 }
                 return;
             }
@@ -298,7 +298,7 @@ public sealed partial class PreviewController
                     TryPublishDemand(session, finish: true);
                     if (ReferenceEquals(_stream, session) && session.LastNotifiedVersion != session.Version)
                         Notify(session.Version, session.Navigation, () => Failed?.Invoke(new(session.LatestRequest,
-                            "目標時刻のフレームを取得できませんでした", result)), true);
+                            CoreText.FrameUnavailable, result)), true);
                     else if (ReferenceEquals(_stream, session) && _cache.GetSegment(session.SegmentId) is { } segment)
                         Notify(session.Version, session.Navigation, () => Completed?.Invoke(new(session.LatestRequest,
                             result, false, !session.Satisfied)
@@ -309,7 +309,7 @@ public sealed partial class PreviewController
             {
                 _cache.RemoveSegment(session.SegmentId);
                 Notify(session.Version, session.Navigation, () => Failed?.Invoke(new(session.LatestRequest,
-                    $"エンコーダがエラー終了しました: {result.ExitCode}", result)), true);
+                    CoreText.EncoderExited(result.ExitCode), result)), true);
             }
 
             async Task<PreviewRunResult> RunAsync()
@@ -438,7 +438,7 @@ public sealed partial class PreviewController
                 bool needs = !trusted || last < session.LatestRequest.TargetSeconds + 2;
                 // 暖機境界とVFRの位相が重なると、安全な候補がないまま先読みに到達する。永久pauseにしない。
                 if (!needs && segment != null && FrameSelector.Select(segment, session.LatestRequest.TargetSeconds, session.LatestRequest.Fps) < 0)
-                    throw new InvalidOperationException("目標時刻のフレームを取得できませんでした");
+                    throw new InvalidOperationException(CoreText.FrameUnavailable);
                 bool budget = !needs || session.LastFrameBytes == 0 || owner._cache.CanAppend(session.SegmentId, session.LastFrameBytes);
                 if (needs && budget) return ValueTask.CompletedTask;
                 // 需要を満たせない容量では、永久pauseではなく失敗として回復可能にする。
@@ -446,7 +446,7 @@ public sealed partial class PreviewController
                     || session.LatestRequest.TargetSeconds > segment.SafeEndSeconds + 1e-7
                     || session.LatestRequest.TargetSeconds >= last + FrameSelector.Duration(segment.Frames[^1], session.LatestRequest.Fps) / 2 - 1e-8
                     || FrameSelector.Select(segment, session.LatestRequest.TargetSeconds, session.LatestRequest.Fps) < 0))
-                    throw new InvalidOperationException("表示目標までのフレームをキャッシュ上限内に保持できませんでした");
+                    throw new InvalidOperationException(CoreText.TargetCacheFull);
                 if (session.ReadAllowed.Task.IsCompleted) session.ReadAllowed = NewSignal();
                 return new ValueTask(session.ReadAllowed.Task.WaitAsync(token));
             }
@@ -473,7 +473,7 @@ public sealed partial class PreviewController
                 }
                 if (_timestampGuard.IsInvalid(frame)) { RequestReplay(_timestampGuard.Reason); return; }
                 if (!owner._cache.Append(session.SegmentId, frame))
-                    throw new InvalidOperationException("現在の画像と先読みをキャッシュ上限内に保持できませんでした");
+                    throw new InvalidOperationException(CoreText.ReadAheadCacheFull);
                 session.LastFrameBytes = frame.Data.LongLength;
                 owner.TryPublishDemand(session);
 

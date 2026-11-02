@@ -19,7 +19,7 @@ internal static class ProcessSupport
         };
         foreach (var argument in arguments) info.ArgumentList.Add(argument);
         configure?.Invoke(info);
-        return Process.Start(info) ?? throw new IOException("エンコーダを起動できませんでした");
+        return Process.Start(info) ?? throw new IOException(CoreText.EncoderStartFailed);
     }
 
     public static void Kill(Process process)

@@ -10,7 +10,7 @@ public sealed partial class MainWindowViewModel
     private long _editEpoch, _lastQueuedAfter, _lastDisplayedAfter, _lastCompletedAfter, _lastFailedAfter;
     private long _lastQueuedRevision, _lastDisplayedRevision;
     private bool _latestIntentNavigation;
-    private string _completedAfterStatus = "完了";
+    private string _completedAfterStatus = AppMessages.Done;
     private ImageWork? _pendingAfterImage, _pendingBeforeImage;
     private bool _conversionActive;
     private NeighborIntent? _pendingNeighbor;
@@ -50,7 +50,7 @@ public sealed partial class MainWindowViewModel
         if (neighborDirection != 0) _pendingNeighbor = new NeighborIntent(generation, neighborDirection);
         // 入力検査中の移動連打では検査そのものを止めず、取得後の最新位置だけを使う。
         if (navigation && _inputInfo == null && _preparationCancellation != null)
-        { IsBusy = true; StatusText = "処理中…"; return _preparation; }
+        { IsBusy = true; StatusText = AppMessages.Processing; return _preparation; }
         CancellationTokenSource cancellation;
         lock (_taskLock)
         {
@@ -70,7 +70,7 @@ public sealed partial class MainWindowViewModel
             _pendingNeighbor = null;
             IsBusy = false;
             ErrorText = null;
-            StatusText = "エンコーダと入力ファイルを選択してください";
+            StatusText = AppMessages.SelectEncoderAndInput;
             _preparation = Task.CompletedTask;
             lock (_taskLock)
             {
@@ -81,7 +81,7 @@ public sealed partial class MainWindowViewModel
         }
         IsBusy = true;
         ErrorText = null;
-        StatusText = navigation ? "処理中…" : "入力情報を取得中…";
+        StatusText = navigation ? AppMessages.Processing : AppMessages.ProbingInput;
         string[] inputArgs = OptionTextParser.ParseText(InputArgsText);
         string[] vpp = OptionTextParser.Parse(FilterLines.Select(line => new OptionLine(line.Text, line.IsEnabled)));
         double seconds = CurrentSeconds;
@@ -141,7 +141,7 @@ public sealed partial class MainWindowViewModel
                         editEpoch: editEpoch, neighborDirection: neighbor?.Direction ?? 0);
                     CheckBeforeInterval(request);
                     RegisterContext(context);
-                    StatusText = "処理中…";
+                    StatusText = AppMessages.Processing;
                     // safe viewに隣が無い場合、中心だけのcache hitや同stream再利用では隣需要を満たせない。
                     _controller.Submit(request, bypassCache || requirePhysicalRefetch, navigation: actualNavigation);
                     Track(ReleaseContextAsync(context));
@@ -196,7 +196,7 @@ public sealed partial class MainWindowViewModel
         long latest = Volatile.Read(ref _generation);
         if (_lastFailedAfter == latest) return;
         IsBusy = _lastDisplayedAfter < latest || _lastCompletedAfter < latest;
-        StatusText = IsBusy ? "処理中…" : _completedAfterStatus;
+        StatusText = IsBusy ? AppMessages.Processing : _completedAfterStatus;
     }
 
     private static PreviewRequest RetargetInterval(PreviewRequest request, double target)
@@ -265,7 +265,7 @@ public sealed partial class MainWindowViewModel
                         }
                         if (image.Before) { if (IsCurrent(image.Generation) && image.BeforeVersion == _beforeImageGeneration) { IsBeforeBusy = false; BeforeImage = null; } }
                         else if (image.Generation == Volatile.Read(ref _generation))
-                        { _lastFailedAfter = image.Generation; ShowError("画像を表示できませんでした", exception.Message); }
+                        { _lastFailedAfter = image.Generation; ShowError(AppMessages.ImageDisplayFailed, exception.Message); }
                     }).ConfigureAwait(false);
                 }
             }
@@ -372,7 +372,7 @@ public sealed partial class MainWindowViewModel
                 _lastDisplayedAfter = context.Generation;
                 _lastDisplayedRevision = -1;
             }
-            _completedAfterStatus = context.NeighborDirection < 0 ? "先頭" : "終端";
+            _completedAfterStatus = context.NeighborDirection < 0 ? AppMessages.Start : AppMessages.End;
         }
         return null;
 

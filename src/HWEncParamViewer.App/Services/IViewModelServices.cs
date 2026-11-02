@@ -23,9 +23,9 @@ public sealed class AvaloniaViewModelServices : IViewModelServices
 {
     public string SettingsPath => AppSettings.DefaultPath;
     private static Window? Window => (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
-    public Task<string?> BrowseEncoderAsync() => OpenAsync("エンコーダを選択");
-    public Task<string?> BrowseInputAsync() => OpenAsync("入力ファイルを選択");
-    public Task<string?> ChooseLoadFiltersAsync() => OpenAsync("フィルタのテキストを読み込み");
+    public Task<string?> BrowseEncoderAsync() => OpenAsync(AppMessages.SelectEncoder);
+    public Task<string?> BrowseInputAsync() => OpenAsync(AppMessages.SelectInput);
+    public Task<string?> ChooseLoadFiltersAsync() => OpenAsync(AppMessages.LoadFilters);
     private static async Task<string?> OpenAsync(string title)
     {
         if (Window is not { } window) return null;
@@ -36,7 +36,7 @@ public sealed class AvaloniaViewModelServices : IViewModelServices
     {
         if (Window is not { } window) return null;
         var file = await window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
-        { Title = "フィルタのテキストを保存", SuggestedFileName = "filters.txt", DefaultExtension = "txt" });
+        { Title = AppMessages.SaveFilters, SuggestedFileName = "filters.txt", DefaultExtension = "txt" });
         return file?.TryGetLocalPath();
     }
     public async Task CopyTextAsync(string text)

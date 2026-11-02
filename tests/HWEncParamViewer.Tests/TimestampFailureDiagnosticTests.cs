@@ -3,6 +3,7 @@ using HWEncParamViewer.Tests.Testing;
 
 namespace HWEncParamViewer.Tests;
 
+[Collection("Language")]
 public sealed class TimestampFailureDiagnosticTests
 {
     [Theory]
@@ -39,15 +40,34 @@ public sealed class TimestampFailureDiagnosticTests
         AssertFailurePayload(failureKind, failure.Value, failure.Backend);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InternalDiagnosticRemainsStableWhenDisplayLanguageIsEnglish(bool continuous)
+    {
+        string previous = UiLanguage.Preference;
+        try
+        {
+            UiLanguage.Set("en");
+            var failure = await RunFailureAsync(continuous, "protocol", legacy: true);
+            Assert.Contains("要求内Xtsが増加していません", failure.Value.Diagnostic);
+            Assert.Contains("native protocol stderr", failure.Value.Diagnostic);
+            Assert.Equal("protocol failure", failure.Value.Reason);
+        }
+        finally { UiLanguage.Set(previous); }
+    }
+
     private static void AssertFailurePayload(string kind, PreviewFailure failure, FailureBackend backend)
     {
         if (kind == "timeout")
         {
             Assert.Equal("出力が進まないためタイムアウトしました", failure.Reason);
+            Assert.True(failure.TimedOut);
             Assert.Null(failure.Exception);
         }
         else
         {
+            Assert.False(failure.TimedOut);
             Assert.Same(backend.ExpectedException, failure.Exception);
             Assert.Equal(backend.ExpectedException.Message, failure.Reason);
             if (kind == "protocol") Assert.Equal("native protocol stderr", ((PreviewBackendException)backend.ExpectedException).StandardError);

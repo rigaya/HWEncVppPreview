@@ -112,7 +112,7 @@ public sealed class InputProbe : IAsyncDisposable
             catch (TimeoutException exception)
             {
                 string diagnostics = await StopProbeRunAsync(run, cancellation).ConfigureAwait(false);
-                throw new InputProbeTimeoutException("入力情報の取得がタイムアウトしました", diagnostics, exception);
+                throw new InputProbeTimeoutException(CoreText.InputProbeTimedOut, diagnostics, exception);
             }
             catch (OperationCanceledException)
             {
@@ -122,9 +122,9 @@ public sealed class InputProbe : IAsyncDisposable
             cancellation.Token.ThrowIfCancellationRequested();
             // 自己中断と外部のキャンセルは区別する。最初のフレーム取得後の自己中断だけを成功扱いにする。
             if (!sink.HasFrame && result.ExitCode != 0)
-                throw new InputProbeException($"入力情報の取得でエンコーダがエラー終了しました: {result.ExitCode}", result.ExitCode, result.StandardError);
+                throw new InputProbeException(CoreText.InputProbeEncoderExited(result.ExitCode), result.ExitCode, result.StandardError);
             if (!sink.HasFrame || sink.Header is not { } header || header.Fps <= 0 || !double.IsFinite(header.Fps))
-                throw new InputProbeException("入力情報の取得で有効なfps付きヘッダとフレームを受信できませんでした", -1, result.StandardError);
+                throw new InputProbeException(CoreText.InputHeaderUnavailable, -1, result.StandardError);
             double? origin = capabilities?.TimestampPassthrough == true && sink.FirstTimestamp is double timestamp && double.IsFinite(timestamp) ? timestamp : null;
             var info = new InputInfo(header.Width, header.Height, header.FpsNum, header.FpsDen,
                 header.SarNum, header.SarDen, header.Chroma, header.BitDepth, header.ColorSpaceTag, ParseDuration(result.StandardError),
@@ -196,7 +196,7 @@ public sealed class InputProbe : IAsyncDisposable
                     await ProcessSupport.JoinAsync(cancellation.CancelAsync(), _clock, Remaining(), "probe.duration_cancel", process.Id).ConfigureAwait(false);
                     await ProcessSupport.ReapBoundedAsync(process, _clock, Remaining()).ConfigureAwait(false);
                     await ProcessSupport.JoinAsync(completion, _clock, Remaining(), "probe.duration_timeout", process.Id).ConfigureAwait(false);
-                    throw new InputProbeTimeoutException("入力の長さの取得がタイムアウトしました",
+                    throw new InputProbeTimeoutException(CoreText.InputDurationTimedOut,
                         stderr.IsCompletedSuccessfully ? stderr.Result : "", exception);
                 }
                 cancellation.Token.ThrowIfCancellationRequested();

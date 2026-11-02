@@ -1,4 +1,7 @@
 ﻿using System.Globalization;
+using System.ComponentModel;
+using HWEncParamViewer.App.Localization;
+using Avalonia.Threading;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
@@ -63,6 +66,23 @@ public sealed class ZoomPanViewer : Control
         Background = Brushes.Transparent;
     }
 
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        Localizer.Instance.PropertyChanged += LanguageTextChanged;
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        Localizer.Instance.PropertyChanged -= LanguageTextChanged;
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    private void LanguageTextChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(Localizer.Text)) Dispatcher.UIThread.Post(InvalidateVisual);
+    }
+
     public IBrush? Background { get; set; }
     public Bitmap? AfterSource { get => GetValue(AfterSourceProperty); set => SetValue(AfterSourceProperty, value); }
     public Bitmap? BeforeSource { get => GetValue(BeforeSourceProperty); set => SetValue(BeforeSourceProperty, value); }
@@ -122,8 +142,8 @@ public sealed class ZoomPanViewer : Control
                     }
                 }
                 DrawSplitLine(context, splitX, viewport);
-                DrawLabel(context, "前", new Point(Math.Max(rect.X, 0) + 8, Math.Max(rect.Y, 0) + 8), alignRight: false);
-                DrawLabel(context, "後", new Point(Math.Min(rect.Right, viewport.Width) - 8, Math.Max(rect.Y, 0) + 8), alignRight: true);
+                DrawLabel(context, Localizer.Instance.Text.Before, new Point(Math.Max(rect.X, 0) + 8, Math.Max(rect.Y, 0) + 8), alignRight: false);
+                DrawLabel(context, Localizer.Instance.Text.After, new Point(Math.Min(rect.Right, viewport.Width) - 8, Math.Max(rect.Y, 0) + 8), alignRight: true);
             }
             else
             {

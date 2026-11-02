@@ -78,14 +78,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _cache = cache ?? new FrameCache();
         var first = preferred ?? new ServerBackend(_clock);
         var second = fallback ?? new OneShotBackend(timeProvider: _clock);
-        var observedFirst = new ObservedBackend(first, first is OneShotBackend ? "都度起動" : "常駐", this);
+        var observedFirst = new ObservedBackend(first, first is OneShotBackend ? "oneshot" : "server", this);
         _controller = new PreviewController(observedFirst,
-            ReferenceEquals(first, second) ? observedFirst : new ObservedBackend(second, "都度起動", this), _cache, _clock,
-            backgroundBackend: backgroundPreferred != null ? new ObservedBackend(backgroundPreferred, "常駐", this) :
-                preferred == null ? new ObservedBackend(new ServerBackend(_clock), "常駐", this) : observedFirst,
-            backgroundFallback: backgroundFallback != null ? new ObservedBackend(backgroundFallback, "都度起動", this) :
-                preferred == null ? new ObservedBackend(new OneShotBackend(timeProvider: _clock), "都度起動", this) :
-                ReferenceEquals(first, second) ? observedFirst : new ObservedBackend(second, "都度起動", this));
+            ReferenceEquals(first, second) ? observedFirst : new ObservedBackend(second, "oneshot", this), _cache, _clock,
+            backgroundBackend: backgroundPreferred != null ? new ObservedBackend(backgroundPreferred, "server", this) :
+                preferred == null ? new ObservedBackend(new ServerBackend(_clock), "server", this) : observedFirst,
+            backgroundFallback: backgroundFallback != null ? new ObservedBackend(backgroundFallback, "oneshot", this) :
+                preferred == null ? new ObservedBackend(new OneShotBackend(timeProvider: _clock), "oneshot", this) :
+                ReferenceEquals(first, second) ? observedFirst : new ObservedBackend(second, "oneshot", this));
         _controller.ReplayStarted += OnReplayStarted;
         _controller.SegmentUpdated += OnSegmentUpdated;
         _controller.FrameReady += OnFrameReady;
@@ -113,6 +113,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         LoadFiltersCommand = new RelayCommand(() => RunCommand(LoadFiltersAsync));
         CopyCommandLineCommand = new RelayCommand(() => RunCommand(() => _services.CopyTextAsync(EnabledOptionsText())));
         ToggleLogCommand = new RelayCommand(() => IsLogOpen = !IsLogOpen);
+        UiLanguage.Changed += OnLanguageChanged;
         SetCompareModeCommand = new RelayCommand(parameter =>
         {
             if (parameter is PreviewCompareMode mode) CompareMode = mode;
@@ -131,6 +132,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             var settings = AppSettings.Load(_services.SettingsPath);
             _suspendChanges = true;
+            Language = settings.Language;
             EncoderPath = settings.EncoderPath;
             InputPath = settings.InputPath;
             InputArgsText = settings.InputArgsText;
@@ -173,10 +175,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             EncoderPath = EncoderPath, InputPath = InputPath, InputArgsText = InputArgsText,
             FilterLines = FilterLines.Select(line => new FilterSetting(line.Text, line.IsEnabled)).ToArray(),
-            WindowWidth = width, WindowHeight = height, CurrentSeconds = CurrentSeconds, IsTextListMode = IsTextListMode,
+            WindowWidth = width, WindowHeight = height, CurrentSeconds = CurrentSeconds, IsTextListMode = IsTextListMode, Language = Language,
         };
         try { await Task.Run(() => settings.Save(_services.SettingsPath)).ConfigureAwait(false); }
-        catch (Exception exception) { await PostAsync(() => ShowError("設定を保存できませんでした", exception.Message)).ConfigureAwait(false); }
+        catch (Exception exception) { await PostAsync(() => ShowError(AppMessages.SaveSettingsFailed, exception.Message)).ConfigureAwait(false); }
     }
 
     public string EncoderPath { get => _encoderPath; set { if (SetProperty(ref _encoderPath, value ?? "")) { EncoderDescription = ""; _metadataEncoder = ""; _helpIndex = new HelpIndex(""); _capabilities = new(); HelpSchema = null; HelpText = ""; InputChanged(); } } }
@@ -198,17 +200,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             if (!SetProperty(ref _helpSchema, value)) return;
             foreach (var line in FilterLines) line.HelpSchema = value;
-            FilterCatalog.Clear();
-            string[] categoryOrder = ["deinterlace", "denoise", "edge", "deband", "color", "resize", "framerate", "overlay", "ai", "other"];
-            foreach (var option in (value?.Options ?? []).OrderBy(option =>
-                {
-                    int order = Array.IndexOf(categoryOrder, option.Category);
-                    return order < 0 ? categoryOrder.Length : order;
-                }).ThenBy(option => option.Name, StringComparer.Ordinal))
-                FilterCatalog.Add(new(option.Name, option.Name.StartsWith("--vpp-", StringComparison.Ordinal) ? option.Name[6..] : option.Name,
-                    HelpCategories.DisplayName(option.Category), option.Description.Split('\n')[0]));
-            UpdateCatalogUsage();
+            RefreshFilterCatalog();
         }
+    }
+    private void RefreshFilterCatalog()
+    {
+        FilterCatalog.Clear();
+        string[] categoryOrder = ["deinterlace", "denoise", "edge", "deband", "color", "resize", "framerate", "overlay", "ai", "other"];
+        foreach (var option in (HelpSchema?.Options ?? []).OrderBy(option =>
+            {
+                int order = Array.IndexOf(categoryOrder, option.Category);
+                return order < 0 ? categoryOrder.Length : order;
+            }).ThenBy(option => option.Name, StringComparer.Ordinal))
+            FilterCatalog.Add(new(option.Name, option.Name.StartsWith("--vpp-", StringComparison.Ordinal) ? option.Name[6..] : option.Name,
+                HelpCategories.DisplayName(option.Category), option.Description.Split('\n')[0]));
+        UpdateCatalogUsage();
     }
     private void UpdateCatalogUsage()
     {
@@ -364,7 +370,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (context.Generation != Volatile.Read(ref _generation)) return;
             _lastCompletedAfter = Math.Min(_lastCompletedAfter, context.Generation - 1);
             IsBusy = true;
-            StatusText = "処理中…";
+            StatusText = AppMessages.Processing;
         });
     }
     private static void BeginReplay(RequestContext context)
@@ -413,15 +419,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             _lastCompletedAfter = Math.Max(_lastCompletedAfter, context.Generation);
             var afterRequest = context.NeighborDirection != 0 ? CompleteNeighbor(context, frames) : value.Request;
             if (frames.Count == 0 && context.Generation == Volatile.Read(ref _generation) && _lastQueuedAfter < context.Generation)
-            { _lastFailedAfter = context.Generation; ShowError("表示できるフレームがありません", value.Result.StandardError); return; }
+            { _lastFailedAfter = context.Generation; ShowError(AppMessages.NoDisplayableFrames, value.Result.StandardError); return; }
             ErrorText = null;
             LogText = AppendBeforeFallbackDiagnostic(value.Result.StandardError);
-            if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = context.Mode;
-            ElapsedText = $"{_clock.GetElapsedTime(context.Started).TotalSeconds:0.00}秒";
+            if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = AppMessages.BackendMode(context.Mode);
+            ElapsedText = AppMessages.Elapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
             if (context.Generation == Volatile.Read(ref _generation))
             {
                 if (afterRequest != null)
-                    _completedAfterStatus = value.TargetNotReached ? "完了（目標時刻に届かなかったため最終フレームを表示）" : value.FromCache ? "完了（キャッシュ）" : "完了";
+                    _completedAfterStatus = value.TargetNotReached ? AppMessages.DoneTargetNotReached : value.FromCache ? AppMessages.DoneCache : AppMessages.Done;
                 QueueBefore(afterRequest ?? value.Request, context.Generation);
             }
             UpdateNavigationStatus();
@@ -449,8 +455,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (context.Generation != Volatile.Read(ref _generation)) return;
             if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
             _lastFailedAfter = context.Generation;
-            if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = context.Mode;
-            ElapsedText = $"{_clock.GetElapsedTime(context.Started).TotalSeconds:0.00}秒";
+            if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = AppMessages.BackendMode(context.Mode);
+            ElapsedText = AppMessages.Elapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
             ShowError(value.Reason, diagnostics);
         });
     }
@@ -471,7 +477,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         if (PerfTrace.Enabled) PerfTrace.Write("vm.error", new { message, diagnostics });
         IsBusy = false;
-        StatusText = "エラー";
+        StatusText = AppMessages.Error;
         LogText = AppendBeforeFallbackDiagnostic(diagnostics);
         string tail = string.Join(Environment.NewLine, diagnostics.Split('\n').TakeLast(6));
         ErrorText = string.IsNullOrWhiteSpace(tail) ? message : message + Environment.NewLine + tail;
@@ -490,7 +496,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         direction = Math.Sign(direction);
         if (_initialized && direction < 0 && CurrentSeconds <= 1e-8)
         {
-            _completedAfterStatus = "先頭";
+            _completedAfterStatus = AppMessages.Start;
             UpdateNavigationStatus();
             return;
         }
@@ -569,7 +575,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         RegisterContext(context);
         IsBusy = true;
         ErrorText = null;
-        _completedAfterStatus = "完了（キャッシュ）";
+        _completedAfterStatus = AppMessages.DoneCache;
         DisplayFrame(frame, context);
         // 表示は即時に進め、Coreにも最新の移動意図を伝えて古い待ち要求を置き換える。
         _controller.Submit(request, navigation: true);
@@ -593,7 +599,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private double ClampTime(double seconds) => double.IsFinite(seconds) ? Math.Clamp(seconds, 0, HasDuration ? DurationSeconds : double.MaxValue) : 0;
     private void CommitTime()
     {
-        if (!TryParseTime(CurrentTimeText, out double seconds)) { ShowError("時刻は秒数、mm:ss、h:mm:ss.fffで指定してください", ""); return; }
+        if (!TryParseTime(CurrentTimeText, out double seconds)) { ShowError(AppMessages.InvalidTime, ""); return; }
         SeekTo(seconds, force: true);
     }
     private static bool TryParseTime(string text, out double seconds)
@@ -658,7 +664,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         async Task ExecuteAsync()
         {
             try { await command(); }
-            catch (Exception exception) { await PostAsync(() => { if (!_disposed) ShowError("操作に失敗しました", exception.Message); }); }
+            catch (Exception exception) { await PostAsync(() => { if (!_disposed) ShowError(AppMessages.OperationFailed, exception.Message); }); }
         }
     }
 
@@ -687,7 +693,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                 _metadataEncoder = "";
                 _capabilities = new();
                 EncoderDescription = Path.GetFileName(encoder);
-                HelpText = "ヘルプを取得できませんでした: " + exception.Message;
+                HelpText = AppMessages.HelpUnavailable + exception.Message;
             }).ConfigureAwait(false);
         }
     }
@@ -720,7 +726,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             await process.WaitForExitAsync().ConfigureAwait(false);
             await Task.WhenAll(output, error).ConfigureAwait(false);
         }
-        if (process.ExitCode != 0) throw new InvalidOperationException($"エンコーダの情報取得に失敗しました: {process.ExitCode}");
+        if (process.ExitCode != 0) throw new InvalidOperationException(AppMessages.EncoderInfoFailed(process.ExitCode));
         string stdout = await output.ConfigureAwait(false);
         return string.IsNullOrWhiteSpace(stdout) ? await error.ConfigureAwait(false) : stdout;
     }
@@ -745,6 +751,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         TraceDisposeStage("enter");
         _disposed = true;
+        UiLanguage.Changed -= OnLanguageChanged;
         _initialized = false;
         Interlocked.Increment(ref _generation);
         long started = _clock.GetTimestamp();
@@ -903,10 +910,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             DurationSeconds = 6750,
             HasDuration = true,
             DurationText = "1:52:30",
-            BackendModeText = "常駐",
-            ElapsedText = "0.48秒",
+            BackendModeText = AppMessages.Server,
+            ElapsedText = AppMessages.Elapsed(0.48),
             InputInfoText = "1440x1080 (SAR 4:3)  29.97fps",
-            StatusText = "完了",
+            StatusText = AppMessages.Done,
             DisplayWidth = 1920,
             DisplayHeight = 1080,
             HelpText =

@@ -8,6 +8,8 @@ using Avalonia.VisualTree;
 using HWEncParamViewer.App.ViewModels;
 using HWEncParamViewer.Core;
 
+using HWEncParamViewer.App.Localization;
+
 namespace HWEncParamViewer.App.Views;
 
 /// <summary>補完の一覧の1行。分類の見出し行は選択できない。</summary>
@@ -102,7 +104,7 @@ public partial class MainWindow
                 category = item.Category;
                 entries.Add(new CompletionEntry
                 {
-                    Text = category is { } id ? HelpCategories.DisplayName(id) : "分類なし",
+                    Text = category is { } id ? HelpCategories.DisplayName(id) : Localizer.Instance.Text.Uncategorized,
                     IsHeader = true,
                 });
             }
@@ -111,7 +113,7 @@ public partial class MainWindow
             entries.Add(new CompletionEntry
             {
                 Text = item.Text,
-                Detail = item.IsDefault ? (description.Length > 0 ? description + " (既定)" : "既定") : description,
+                Detail = item.IsDefault ? (description.Length > 0 ? description + Localizer.Instance.Text.DefaultSuffix : Localizer.Instance.Text.DefaultValue) : description,
                 Item = item,
             });
         }

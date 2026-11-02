@@ -26,7 +26,7 @@ public sealed partial class MainWindowViewModel
         _pendingNeighbor = new NeighborIntent(generation, direction);
         IsBusy = true;
         ErrorText = null;
-        StatusText = "処理中…";
+        StatusText = AppMessages.Processing;
         if (PerfTrace.Enabled) PerfTrace.Write("vm.reverse_prefetch.wait", new { generation, direction, target = CurrentSeconds });
         Track(WaitForReversePrefetchAsync(waiting));
         return true;

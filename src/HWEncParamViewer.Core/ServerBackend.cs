@@ -116,7 +116,7 @@ public sealed class ServerBackend : IPreviewBackend
         {
             if (session != null) await DropSessionAsync(session).ConfigureAwait(false);
             string diagnostics = requestLog == null ? "" : await session!.ReadLogAsync(requestLog).ConfigureAwait(false);
-            throw new PreviewBackendException("常駐サーバの要求を完了できませんでした", diagnostics, exception);
+            throw new PreviewBackendException(CoreText.ServerRequestFailed, diagnostics, exception);
         }
         finally
         {
@@ -177,10 +177,10 @@ public sealed class ServerBackend : IPreviewBackend
                         cancelled = token.IsCancellationRequested });
                     return end;
                 default:
-                    throw new PreviewProtocolException("要求と一致しない常駐プロトコルのイベントを受信しました");
+                    throw new PreviewProtocolException(CoreText.ServerEventMismatch);
             }
         }
-        throw new EndOfStreamException("ENDの前にエンコーダが終了しました");
+        throw new EndOfStreamException(CoreText.EncoderExitedBeforeEnd);
     }
 
     private async Task<Session> GetSessionAsync(string path, IPreviewSink sink, CancellationToken token)
@@ -207,7 +207,7 @@ public sealed class ServerBackend : IPreviewBackend
         {
             PreviewEvent? ready = await readyTask.WaitAsync(_readyTimeout, _timeProvider, token).ConfigureAwait(false);
             if (ready is not PreviewReady info || !info.Values.TryGetValue("version", out string? version) || version != "1")
-                throw new PreviewServerNotSupportedException("対応するREADYを受信できませんでした");
+                throw new PreviewServerNotSupportedException(CoreText.ServerReadyUnavailable);
             if (PerfTrace.Enabled) PerfTrace.Write("server.ready", new { pid = session.Process.Id });
             return session;
         }
@@ -220,7 +220,7 @@ public sealed class ServerBackend : IPreviewBackend
         {
             await DropSessionAsync(session).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
-            throw new PreviewServerNotSupportedException("常駐サーバのハンドシェイクに失敗しました", exception);
+            throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed, exception);
         }
     }
 
@@ -262,7 +262,7 @@ public sealed class ServerBackend : IPreviewBackend
         catch (ObjectDisposedException) { }
         if (session != null) await DropSessionAsync(session, deadline.Remaining).ConfigureAwait(false);
         bool recovered = await JoinPendingCleanupAsync(deadline).ConfigureAwait(false);
-        if (!cancelled || !recovered) throw new TimeoutException("常駐サーバの停止が期限内に完了しませんでした");
+        if (!cancelled || !recovered) throw new TimeoutException(CoreText.ServerStopTimedOut);
     }
 
     public async ValueTask DisposeAsync()
@@ -315,7 +315,7 @@ public sealed class ServerBackend : IPreviewBackend
                 lock (_sync) _pendingCleanup.Add(session.CleanupCompletion);
         }
         bool recovered = await JoinPendingCleanupAsync(deadline).ConfigureAwait(false);
-        if (!cancelled || !entered || !recovered) throw new TimeoutException("常駐サーバの回収が期限内に完了しませんでした");
+        if (!cancelled || !entered || !recovered) throw new TimeoutException(CoreText.ServerCleanupTimedOut);
     }
 
     private sealed class Session
@@ -364,7 +364,7 @@ public sealed class ServerBackend : IPreviewBackend
         {
             Task send = SendCoreAsync(command);
             if (!await ProcessSupport.JoinAsync(send, _clock, timeout ?? _stopTimeout, "server.send", _pid).ConfigureAwait(false))
-                throw new TimeoutException("常駐サーバへのコマンド送信が期限内に完了しませんでした");
+                throw new TimeoutException(CoreText.ServerCommandTimedOut);
         }
 
         private async Task SendCoreAsync<T>(T command)
@@ -382,7 +382,7 @@ public sealed class ServerBackend : IPreviewBackend
         public async Task<string> ReadLogAsync(Task<string> log)
         {
             return await ProcessSupport.JoinAsync(log, _clock, _stopTimeout, "server.log", _pid).ConfigureAwait(false)
-                ? await log.ConfigureAwait(false) : "stderrの完了待機が期限切れになりました";
+                ? await log.ConfigureAwait(false) : CoreText.StandardErrorTimedOut;
         }
 
         private async Task DrainErrorAsync()

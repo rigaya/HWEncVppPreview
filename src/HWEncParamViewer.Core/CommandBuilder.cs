@@ -51,10 +51,10 @@ public static class CommandBuilder
         help.OptionNames.Contains("--opencl-task-threads", StringComparer.Ordinal));
     public static PreviewPlan Plan(PreviewRequest req)
     {
-        if (req.Fps <= 0) throw new ArgumentException("Fps は正の値が必要です", nameof(req));
+        if (req.Fps <= 0) throw new ArgumentException(CoreText.FpsPositive, nameof(req));
         if (req.TargetSeconds < 0 || req.PreMarginSeconds < 0 || req.PostMarginSeconds < 0)
         {
-            throw new ArgumentException("時刻とマージンは 0 以上が必要です", nameof(req));
+            throw new ArgumentException(CoreText.TimeMarginNonnegative, nameof(req));
         }
         // T < Mb なら先頭から処理し、前マージンは T にする
         double mb = Math.Min(req.PreMarginSeconds, req.TargetSeconds);
@@ -62,7 +62,7 @@ public static class CommandBuilder
         long seekMs = (long)Math.Round((req.TargetSeconds - mb) * 1000.0, MidpointRounding.AwayFromZero);
         if (req.SeekSecondsOverride is double forced)
         {
-            if (!double.IsFinite(forced) || forced < 0) throw new ArgumentException("seekは有限の0以上が必要です", nameof(req));
+            if (!double.IsFinite(forced) || forced < 0) throw new ArgumentException(CoreText.SeekNonnegative, nameof(req));
             seekMs = (long)Math.Round(forced * 1000.0, MidpointRounding.AwayFromZero);
         }
         double? seek = seekMs > 0 ? seekMs / 1000.0 : null;

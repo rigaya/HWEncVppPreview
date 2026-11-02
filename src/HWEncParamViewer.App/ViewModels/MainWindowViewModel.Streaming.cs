@@ -78,7 +78,7 @@ public sealed partial class MainWindowViewModel
         {
             _lastCompletedAfter = Math.Max(_lastCompletedAfter, context.Generation);
             if (context.NeighborDirection == 0 || context.ResolvedTargetSeconds.HasValue)
-                _completedAfterStatus = "完了";
+                _completedAfterStatus = AppMessages.Done;
             ErrorText = null;
         }
         if (update.IsReadPaused && satisfied && context.Generation == Volatile.Read(ref _generation))

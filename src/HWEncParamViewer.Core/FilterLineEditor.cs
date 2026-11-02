@@ -25,36 +25,36 @@ public static class FilterLineEditor
         FilterLineInfo Result(FilterLineForm form, string? reason = null, string? shortValue = null) =>
             new(optionName, option, form, reason, new ReadOnlyDictionary<string, string>(values), shortValue, unknown.AsReadOnly());
         if (text.Contains('\n') || text.Contains('\r') || line is null || option is null || option.IsNameOnly)
-            return Result(FilterLineForm.Unavailable, "スキーマに対応していない行です。テキストで編集してください。");
+            return Result(FilterLineForm.Unavailable, CoreText.FormSchemaUnavailable);
         var args = Tokenize(text);
         if (args.Count is < 1 or > 2)
-            return Result(FilterLineForm.Unavailable, "引数が複数あります。テキストで編集してください。");
+            return Result(FilterLineForm.Unavailable, CoreText.FormMultipleArguments);
         if (option.Type is not null)
         {
             // 値とパラメータ列の混在形式は、推測で書き換えない。
             if (option.Parameters.Count > 0)
-                return Result(FilterLineForm.Unavailable, "短い値とパラメータの混在はテキストで編集してください。");
+                return Result(FilterLineForm.Unavailable, CoreText.FormMixedArguments);
             return Result(FilterLineForm.ShortValue, shortValue: args.Count == 2 ? args[1] : null);
         }
         if (option.Parameters.Count == 0)
             return args.Count == 1 ? Result(FilterLineForm.None)
-                : Result(FilterLineForm.Unavailable, "引数を取らないオプションです。テキストで編集してください。");
+                : Result(FilterLineForm.Unavailable, CoreText.FormNoArguments);
         foreach (var segment in line.Segments)
         {
             int start = SkipSpace(text, segment.Start, segment.End);
             int end = TrimSpace(text, start, segment.End);
             if (start == end && line.Segments.Count == 1) continue;
             if (segment.Equal < start)
-                return Result(FilterLineForm.Unavailable, "パラメータの形式を読み取れません。テキストで編集してください。");
+                return Result(FilterLineForm.Unavailable, CoreText.FormParameterInvalid);
             string key = text[start..TrimSpace(text, start, segment.Equal)];
             IReadOnlyList<string> tokens = line.ArgumentQuoted
                 ? new[] { text[SkipSpace(text, segment.Equal + 1, end)..end].Replace("\"\"", "\"") }
                 : Tokenize(text[SkipSpace(text, segment.Equal + 1, end)..end], allowComment: false);
             string value = tokens.Count == 0 ? "" : tokens[0];
             if (tokens.Count > 1 || value.Contains(','))
-                return Result(FilterLineForm.Unavailable, "パラメータ値にカンマは使えません。テキストはそのまま保持します。");
+                return Result(FilterLineForm.Unavailable, CoreText.FormCommaUnavailable);
             if (key.Length == 0 || !values.TryAdd(key, value))
-                return Result(FilterLineForm.Unavailable, "空の名前または重複したパラメータがあります。テキストで編集してください。");
+                return Result(FilterLineForm.Unavailable, CoreText.FormDuplicateParameter);
             if (!option.Parameters.Any(parameter => parameter.Name.Equals(key, StringComparison.OrdinalIgnoreCase))) unknown.Add(key);
         }
         return Result(FilterLineForm.Parameters);

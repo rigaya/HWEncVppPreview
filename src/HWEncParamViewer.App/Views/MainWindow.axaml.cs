@@ -1,8 +1,10 @@
-﻿using Avalonia.Controls;
+﻿using System.ComponentModel;
+using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using HWEncParamViewer.App.ViewModels;
+using HWEncParamViewer.App.Localization;
 
 namespace HWEncParamViewer.App.Views;
 
@@ -14,6 +16,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Opened += (_, _) => Localizer.Instance.PropertyChanged += LanguageTextChanged;
+        Closed += (_, _) => Localizer.Instance.PropertyChanged -= LanguageTextChanged;
 
         // ← → などのコマ送りは、TextBox が処理しなかったキーだけを受ける (bubble)。
         // TextBox 内のカーソル移動を横取りしないため。
@@ -68,6 +72,12 @@ public partial class MainWindow : Window
 
         // フィルタの追加の一覧と、パラメータのフォーム (設計書 23.2、MainWindow.Form.cs)
         InitializeForm();
+    }
+
+    private void LanguageTextChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(Localizer.Text) && IsCompletionOpen && _completionBox is { } box)
+            RefreshCompletion(box);
     }
 
     private void StepFrames(int frames)

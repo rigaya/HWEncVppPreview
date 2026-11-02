@@ -1,6 +1,7 @@
 ﻿namespace HWEncParamViewer.Core;
 
 /// <summary>absolute出力の要求内の後退と大jumpを検出する。正しい長durationのVFRは大きい側で許容する。</summary>
+// ログ検索と不具合報告で照合できるよう、内部診断は表示言語に依存させない。
 internal sealed class PreviewTimestampGuard(double requestedFps)
 {
     // 長いVFRの表示時間を許しつつ、wrapなど秒単位の飛びを拾うため8倍を上限にする。

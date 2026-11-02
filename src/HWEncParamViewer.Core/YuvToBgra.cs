@@ -18,11 +18,11 @@ public static class YuvToBgra
         ArgumentNullException.ThrowIfNull(frame.Data);
         var header = frame.Header;
         int width = header.Width, height = header.Height;
-        if (width <= 0 || height <= 0) throw new ArgumentException("幅と高さは正の値が必要です", nameof(frame));
-        if (header.BitDepth is < 8 or > 16) throw new ArgumentException("ビット深度は8〜16が必要です", nameof(frame));
-        if (!Enum.IsDefined(header.Chroma)) throw new ArgumentException("未対応のクロマ形式です", nameof(frame));
+        if (width <= 0 || height <= 0) throw new ArgumentException(CoreText.ImageSizePositive, nameof(frame));
+        if (header.BitDepth is < 8 or > 16) throw new ArgumentException(CoreText.BitDepthUnsupported, nameof(frame));
+        if (!Enum.IsDefined(header.Chroma)) throw new ArgumentException(CoreText.ChromaUnsupported, nameof(frame));
         long pixels = (long)width * height;
-        if (pixels > int.MaxValue / 4) throw new ArgumentException("BGRA画像が大きすぎます", nameof(frame));
+        if (pixels > int.MaxValue / 4) throw new ArgumentException(CoreText.ImageTooLarge, nameof(frame));
         int lumaSamples = (int)pixels;
         int chromaWidth = header.Chroma is Y4mChroma.C420 or Y4mChroma.C422 ? (width + 1) / 2 : width;
         int chromaHeight = header.Chroma == Y4mChroma.C420 ? (height + 1) / 2 : height;
@@ -30,7 +30,7 @@ public static class YuvToBgra
         int sampleBytes = header.BytesPerSample;
         long expectedBytes = ((long)lumaSamples + 2L * chromaSamples) * sampleBytes;
         if (frame.Data.LongLength != expectedBytes)
-            throw new ArgumentException($"平面データ長が不正です: 期待{expectedBytes}バイト、実際{frame.Data.LongLength}バイト", nameof(frame));
+            throw new ArgumentException(CoreText.PlaneDataLengthInvalid(expectedBytes, frame.Data.LongLength), nameof(frame));
 
         bool hd = width > 1024 || height > 576;
         double kr = hd ? 0.2126 : 0.299;

@@ -122,7 +122,7 @@ public sealed class FilterParameterViewModel : ViewModelBase
     public double? Maximum { get; }
     public double Step { get; }
     public IReadOnlyList<string> Choices { get; }
-    public string DefaultText => _schema.IsDerivedDefault ? "自動" : _schema.DefaultValue ?? "";
+    public string DefaultText => _schema.IsDerivedDefault ? AppMessages.Automatic : _schema.DefaultValue ?? "";
     public bool IsSet => _valueText is not null;
     public string? ValidationMessage { get => _validationMessage; private set => SetProperty(ref _validationMessage, value); }
     public string? ValueText
@@ -134,7 +134,7 @@ public sealed class FilterParameterViewModel : ViewModelBase
             // エンコーダは引用符の内側でもカンマを区切るため、表現できない値を行へ書かない。
             if (value?.Contains(',') == true)
             {
-                ValidationMessage = "値にカンマは使えません。エンコーダがパラメータの区切りとして扱います。";
+                ValidationMessage = AppMessages.CommaUnavailable;
                 return;
             }
             ValidationMessage = null;

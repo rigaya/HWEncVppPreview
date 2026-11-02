@@ -2,6 +2,8 @@
 using Avalonia;
 using Avalonia.Controls;
 using HWEncParamViewer.App.Services;
+using HWEncParamViewer.App.Localization;
+using HWEncParamViewer.Core;
 using Avalonia.Headless;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -11,10 +13,12 @@ using Avalonia.VisualTree;
 using HWEncParamViewer.App.ViewModels;
 using HWEncParamViewer.App.Views;
 
-// 使い方: UiSnapshot <出力ディレクトリ> [--encoder <exe> --input <入力> --time <秒>]
+// 使い方: UiSnapshot <出力ディレクトリ> [--language ja|en] [--encoder <exe> --input <入力> --time <秒>]
 // MainWindow をデザイン用のダミー値で描画し、ライト/ダーク・状態違いの PNG を保存する。
 string outDir = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : ".";
 Directory.CreateDirectory(outDir);
+// 言語ごとに別の出力先を使い、既存の撮影条件でも英語表示を比較できるようにする。
+Localizer.Instance.Language = Option(args, "--language") ?? "ja";
 
 AppBuilder.Configure<HWEncParamViewer.App.App>()
     .UseSkia()
@@ -51,7 +55,9 @@ Capture("light", ThemeVariant.Light, _ => { });
 Capture("dark_busy_error", ThemeVariant.Dark, vm =>
 {
     vm.IsBusy = true;
-    vm.ErrorText = "エンコーダがエラー終了しました: -24\nInvalid value for --vpp-nlmeans sigma=: abc";
+    vm.ErrorText = UiLanguage.Current == "ja"
+        ? "エンコーダがエラー終了しました: -24\nInvalid value for --vpp-nlmeans sigma=: abc"
+        : "Encoder exited with an error: -24\nInvalid value for --vpp-nlmeans sigma=: abc";
     vm.IsLogOpen = true;
     vm.LogText = "RGYPREVIEW BEGIN id=12\nInvalid value for --vpp-nlmeans sigma=: abc\nRGYPREVIEW END id=12 rc=-24";
 });
@@ -98,6 +104,7 @@ CaptureForm("light_form_choice", ThemeVariant.Light, ["--vpp-nlmeans sigma=0.01"
 CaptureForm("dark_form_empty", ThemeVariant.Dark, [], -1);
 CaptureForm("dark_form_add", ThemeVariant.Dark, ["--vpp-nlmeans"], 0, openAdd: true);
 CaptureForm("dark_form_textmode", ThemeVariant.Dark, ["--vpp-nlmeans sigma=0.01,h=0.08", "--vpp-unknown a=1"], 1, textMode: true);
+CaptureForm("dark_form_number_or_choice", ThemeVariant.Dark, ["--vpp-mctf"], 0);
 
 void CaptureForm(string name, ThemeVariant theme, string[] lines, int selected, bool openAdd = false, bool textMode = false)
 {

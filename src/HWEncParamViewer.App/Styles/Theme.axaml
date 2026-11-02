@@ -206,6 +206,14 @@
     <Setter Property="FontSize" Value="12" />
     <Setter Property="MinHeight" Value="26" />
   </Style>
+  <!-- ステータスバーの選択欄 (表示言語)。バーの高さを変えない -->
+  <Style Selector="ComboBox.small">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Height" Value="24" />
+    <Setter Property="Padding" Value="8,0,0,0" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
   <Style Selector="ComboBox.param">
     <Setter Property="FontSize" Value="12" />
     <Setter Property="MinHeight" Value="26" />

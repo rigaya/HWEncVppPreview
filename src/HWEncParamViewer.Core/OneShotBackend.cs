@@ -64,13 +64,13 @@ public sealed class OneShotBackend : IPreviewBackend
             {
                 await ProcessSupport.ReapBoundedAsync(process, _clock, Remaining()).ConfigureAwait(false);
                 string diagnostics = await ReadErrorAsync(errorTask, Remaining()).ConfigureAwait(false);
-                throw new PreviewBackendException("都度起動の出力を読み取れませんでした", diagnostics, exception);
+                throw new PreviewBackendException(CoreText.OneShotReadFailed, diagnostics, exception);
             }
             bool exited = await ProcessSupport.JoinAsync(process.WaitForExitAsync(), _clock, Remaining(),
                 "oneshot.exit", process.Id).ConfigureAwait(false);
             string error = await ReadErrorAsync(errorTask, Remaining()).ConfigureAwait(false);
             if (!exited && !token.IsCancellationRequested)
-                throw new PreviewBackendException("都度起動プロセスの終了待機が期限切れになりました", error, new TimeoutException());
+                throw new PreviewBackendException(CoreText.OneShotExitTimedOut, error, new TimeoutException());
             return new PreviewRunResult(exited ? process.ExitCode : -12, error, token.IsCancellationRequested);
         }
         finally
@@ -100,7 +100,7 @@ public sealed class OneShotBackend : IPreviewBackend
 
     private async Task<string> ReadErrorAsync(Task<string> error, TimeSpan timeout) =>
         await ProcessSupport.JoinAsync(error, _clock, timeout, "oneshot.diagnostics").ConfigureAwait(false)
-            ? await error.ConfigureAwait(false) : "stderrの完了待機が期限切れになりました";
+            ? await error.ConfigureAwait(false) : CoreText.StandardErrorTimedOut;
 
     public async ValueTask AbortAsync()
     {
@@ -131,7 +131,7 @@ public sealed class OneShotBackend : IPreviewBackend
             deadline.Remaining, "oneshot.pending_cleanup").ConfigureAwait(false);
         if (recovered)
             lock (_sync) _pendingCleanup.RemoveAll(task => task.IsCompletedSuccessfully);
-        if (!cancelled || !joined || !recovered) throw new TimeoutException("都度起動プロセスの回収が期限内に完了しませんでした");
+        if (!cancelled || !joined || !recovered) throw new TimeoutException(CoreText.OneShotCleanupTimedOut);
     }
 
     private sealed record ActiveRun(CancellationTokenSource Cancellation, TaskCompletionSource<bool> Finished);

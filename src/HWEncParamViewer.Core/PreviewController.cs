@@ -16,6 +16,8 @@ public sealed record PreviewFailure(PreviewRequest Request, string Reason, Previ
 {
     /// <summary>失敗区分・元の例外を変えず、通常ログへ追加する診断。なければ従来のstderrを使う。</summary>
     public string? Diagnostic { get; init; }
+    /// <summary>表示文言に依存せず、watchdogの期限切れを識別する。</summary>
+    public bool TimedOut { get; init; }
 }
 
 /// <summary>最新要求の実行、画像選択、キャッシュを管理する。イベントは処理中のスレッドで通知するため、GUI側でディスパッチする。</summary>
@@ -363,7 +365,7 @@ public sealed partial class PreviewController : IAsyncDisposable
                 foreach (var frame in frames) sink.OnFrame(frame);
                 sink.Finish();
                 if (!sink.HasSelection && prefetch == null && !background && request.Capabilities.TimestampPassthrough && request.TimestampOriginSeconds.HasValue)
-                { Publish(() => Failed?.Invoke(new(request, "目標時刻のフレームを取得できませんでした")), currentOnly: true); return; }
+                { Publish(() => Failed?.Invoke(new(request, CoreText.FrameUnavailable)), currentOnly: true); return; }
                 Publish(() => Completed?.Invoke(new(request, WithLegacyDiagnostic(request, new(0, "")), true, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly(), Segment = sink.Segment, IsReplay = isReplay }));
                 return;
             }
@@ -395,8 +397,8 @@ public sealed partial class PreviewController : IAsyncDisposable
                 Exception? stoppedException = null;
                 try { stoppedResult = await run.ConfigureAwait(false); }
                 catch (Exception error) { stoppedException = error; }
-                Publish(() => Failed?.Invoke(new(request, "出力が進まないためタイムアウトしました")
-                    { Diagnostic = LegacyFailureDiagnostic(request, stoppedException, stoppedResult) }), currentOnly: true);
+                Publish(() => Failed?.Invoke(new(request, CoreText.OutputTimedOut)
+                    { TimedOut = true, Diagnostic = LegacyFailureDiagnostic(request, stoppedException, stoppedResult) }), currentOnly: true);
                 return;
             }
             try { result = await run.ConfigureAwait(false); }
@@ -419,12 +421,12 @@ public sealed partial class PreviewController : IAsyncDisposable
             if (active.IsCancellationRequested || result.IsCancelled) return;
             if (result.ExitCode != 0)
             {
-                Publish(() => Failed?.Invoke(new(request, $"エンコーダがエラー終了しました: {result.ExitCode}", result)), currentOnly: true);
+                Publish(() => Failed?.Invoke(new(request, CoreText.EncoderExited(result.ExitCode), result)), currentOnly: true);
                 return;
             }
             sink.Finish();
             if (!sink.HasSelection && prefetch == null && !background && request.Capabilities.TimestampPassthrough && request.TimestampOriginSeconds.HasValue)
-            { Publish(() => Failed?.Invoke(new(request, "目標時刻のフレームを取得できませんでした", result)), currentOnly: true); return; }
+            { Publish(() => Failed?.Invoke(new(request, CoreText.FrameUnavailable, result)), currentOnly: true); return; }
             if (sink.Segment is { Clock.TrustedAbsolute: true } segment)
             {
                 var stored = _cache.StoreSegment(segment.PhysicalRequest, sink.Frames, segment.Clock, segment.SafeStartSeconds,

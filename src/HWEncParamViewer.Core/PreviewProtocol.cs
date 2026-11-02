@@ -59,28 +59,28 @@ public sealed class PreviewProtocolReader
         }
         if (!_inRequest)
         {
-            throw new PreviewProtocolException($"BEGIN の外で想定外の行を受信しました: {Short(line)}");
+            throw new PreviewProtocolException(CoreText.ProtocolLineOutsideBegin(Short(line)));
         }
         if (line.StartsWith("YUV4MPEG2", StringComparison.Ordinal))
         {
             // 1要求あたりヘッダは1回だけ。2回目が来たら新しいヘッダで読み直す方が害は小さいが、仕様違反なので弾く
-            if (_y4m != null) throw new PreviewProtocolException("1つの要求の中で y4m ヘッダが2回来ました");
+            if (_y4m != null) throw new PreviewProtocolException(CoreText.DuplicateY4mHeader);
             var header = Y4mHeader.Parse(line);
             _y4m = new Y4mReader(_stream, header);
             return new PreviewHeader(header);
         }
         if (line == "FRAME" || line.StartsWith("FRAME ", StringComparison.Ordinal))
         {
-            if (_y4m == null) throw new PreviewProtocolException("y4m ヘッダの前に FRAME が来ました");
+            if (_y4m == null) throw new PreviewProtocolException(CoreText.FrameBeforeY4mHeader);
             return new PreviewFrame(_y4m.ReadFrameBody(line));
         }
-        throw new PreviewProtocolException($"想定外の行を受信しました: {Short(line)}");
+        throw new PreviewProtocolException(CoreText.ProtocolLineUnexpected(Short(line)));
     }
 
     private PreviewEvent ParseControlLine(string line)
     {
         var tokens = line[Prefix.Length..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length == 0) throw new PreviewProtocolException($"不明な制御行: {Short(line)}");
+        if (tokens.Length == 0) throw new PreviewProtocolException(CoreText.ProtocolControlUnknown(Short(line)));
         var kv = ParseKeyValues(tokens.Skip(1));
 
         switch (tokens[0])
@@ -88,17 +88,17 @@ public sealed class PreviewProtocolReader
             case "READY":
                 return new PreviewReady(kv);
             case "BEGIN":
-                if (_inRequest) throw new PreviewProtocolException("END なしで次の BEGIN が来ました");
+                if (_inRequest) throw new PreviewProtocolException(CoreText.BeginBeforeEnd);
                 _inRequest = true;
                 _y4m = null;
                 return new PreviewBegin(RequireLong(kv, "id", line));
             case "END":
-                if (!_inRequest) throw new PreviewProtocolException("BEGIN なしで END が来ました");
+                if (!_inRequest) throw new PreviewProtocolException(CoreText.EndBeforeBegin);
                 _inRequest = false;
                 _y4m = null;
                 return new PreviewEnd(RequireLong(kv, "id", line), RequireInt(kv, "rc", line));
             default:
-                throw new PreviewProtocolException($"不明な制御行: {Short(line)}");
+                throw new PreviewProtocolException(CoreText.ProtocolControlUnknown(Short(line)));
         }
     }
 
@@ -115,12 +115,12 @@ public sealed class PreviewProtocolReader
 
     private static int RequireInt(Dictionary<string, string> kv, string key, string line) =>
         kv.TryGetValue(key, out var s) && int.TryParse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int v)
-            ? v : throw new PreviewProtocolException($"{key}= が無い、または数値ではありません: {Short(line)}");
+            ? v : throw new PreviewProtocolException(CoreText.ProtocolNumberInvalid(key, Short(line)));
 
     // サーバの id は int64_t なので long で受ける (rc は RGY_ERR で int)
     private static long RequireLong(Dictionary<string, string> kv, string key, string line) =>
         kv.TryGetValue(key, out var s) && long.TryParse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long v)
-            ? v : throw new PreviewProtocolException($"{key}= が無い、または数値ではありません: {Short(line)}");
+            ? v : throw new PreviewProtocolException(CoreText.ProtocolNumberInvalid(key, Short(line)));
 
     private static string Short(string s) => s.Length <= 80 ? s : s[..80] + "...";
 }
