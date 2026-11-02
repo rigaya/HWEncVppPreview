@@ -191,9 +191,18 @@ Other Options:
     {
         Assert.Equal("--vpp-alpha mode=\"fast\",count=3", Apply("--vpp-alpha mode=\"f|ast\",count=3", "fast").Text);
         Assert.Equal("--vpp-alpha mode=\"fast", Apply("--vpp-alpha mode=\"f|", "fast").Text);
-        var context = Context("--vpp-alpha file=\"a\\\"b,c=d|.png\",mode=fast");
+        var context = Context("--vpp-alpha file=\"a\"\"b,c=d|.png\",mode=fast");
         Assert.Equal("file", context.Parameter!.Name);
         Assert.Empty(FilterCompletion.GetItems(context, CompletionOrder.Alphabetical));
+    }
+
+    [Fact]
+    public void Windowsの末尾バックスラッシュで閉じ引用符を無効化しない()
+    {
+        var context = Context("--vpp-alpha file=\"C:\\folder\\\",mo|de=fast");
+        Assert.Equal(CompletionKind.ParameterName, context.Kind);
+        Assert.Equal("mo", context.Prefix);
+        Assert.Equal("--vpp-alpha file=\"C:\\folder\\\",mode=fast", Apply("--vpp-alpha file=\"C:\\folder\\\",mo|de=fast", "mode").Text);
     }
 
     [Fact]
@@ -254,4 +263,19 @@ Other Options:
         Assert.Equal("future", HelpCategories.DisplayName("future"));
         Assert.Equal("", HelpCategories.DisplayName(null));
     }
+
+    [Fact]
+    public void 引数全体の引用符でも名前と値の補完を行う()
+    {
+        var context = Context("--vpp-alpha \"file=C:\\My Videos\\,mo|de=fast\"");
+        Assert.Equal(CompletionKind.ParameterName, context.Kind);
+        Assert.Equal("mo", context.Prefix);
+        Assert.Equal("--vpp-alpha \"file=C:\\My Videos\\,mode=fast\"", Apply("--vpp-alpha \"file=C:\\My Videos\\,mo|de=fast\"", "mode").Text);
+        Assert.Equal("--vpp-alpha \"file=C:\\My Videos\\,mode=fast\"", Apply("--vpp-alpha \"file=C:\\My Videos\\,mode=f|ast\"", "fast").Text);
+        var (text, caret) = Mark("--vpp-alpha \"file=C:\\My Videos\\,count=3|\"");
+        var span = FilterCompletion.ValueAt(text, caret, Schema);
+        Assert.NotNull(span);
+        Assert.Equal("3", text.Substring(span.Start, span.Length));
+    }
+
 }

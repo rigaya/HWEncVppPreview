@@ -16,6 +16,7 @@ public sealed record AppSettings
     public double WindowWidth { get; init; } = 1440;
     public double WindowHeight { get; init; } = 900;
     public double CurrentSeconds { get; init; }
+    public bool IsTextListMode { get; init; }
 
     public static string DefaultPath => Path.Combine(OperatingSystem.IsWindows()
         ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)

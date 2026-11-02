@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using static HWEncParamViewer.Core.FilterLineSyntax;
 
 namespace HWEncParamViewer.Core;
 
@@ -39,9 +40,6 @@ public static class HelpCategories
 /// <summary>フィルタ行の補完と値の位置を、副作用なしで計算する。</summary>
 public static class FilterCompletion
 {
-    private sealed record Segment(int Start, int End, int Equal);
-    private sealed record Line(int Start, int End, int OptionStart, int OptionEnd, HelpOptionSchema? Option, IReadOnlyList<Segment> Segments);
-
     public static CompletionContext? GetContext(string text, int caret, HelpSchema schema)
     {
         ArgumentNullException.ThrowIfNull(text);
@@ -196,50 +194,11 @@ public static class FilterCompletion
         if (start < end && text[start] == '"')
         {
             ++start;
-            if (end > start && text[end - 1] == '"' && !Escaped(text, end - 1)) --end;
+            if (end > start && text[end - 1] == '"') --end;
         }
         return create(start, end, text[start..Math.Clamp(caret, start, end)]);
     }
 
-    private static Line? ReadLine(string text, int caret, HelpSchema schema)
-    {
-        if (caret < 0 || caret > text.Length) return null;
-        int start = caret == 0 ? 0 : text.LastIndexOf('\n', caret - 1) + 1;
-        int end = text.IndexOf('\n', caret);
-        if (end < 0) end = text.Length;
-        if (end > start && text[end - 1] == '\r') --end;
-        if (caret > end) return null;
-        int optionStart = SkipSpace(text, start, end);
-        int optionEnd = optionStart;
-        while (optionEnd < end && !char.IsWhiteSpace(text[optionEnd])) ++optionEnd;
-        if (optionStart == end) return new(start, end, caret, caret, null, []);
-        string name = text[optionStart..optionEnd];
-        var option = schema.Lookup(name.ToLowerInvariant());
-        var segments = new List<Segment>();
-        int partStart = optionEnd, equal = -1;
-        bool quoted = false;
-        for (int i = optionEnd; i < end; ++i)
-        {
-            if (text[i] == '"' && !Escaped(text, i)) quoted = !quoted;
-            if (quoted) continue;
-            if (text[i] == '=' && equal < 0) equal = i;
-            if (text[i] != ',') continue;
-            segments.Add(new(partStart, i, equal));
-            partStart = i + 1;
-            equal = -1;
-        }
-        segments.Add(new(partStart, end, equal));
-        return new(start, end, optionStart, optionEnd, option, segments);
-    }
-
-    private static bool Escaped(string text, int index)
-    {
-        int backslashes = 0;
-        for (int i = index - 1; i >= 0 && text[i] == '\\'; --i) ++backslashes;
-        return (backslashes & 1) != 0;
-    }
-    private static int SkipSpace(string text, int start, int end) { while (start < end && char.IsWhiteSpace(text[start])) ++start; return start; }
-    private static int TrimSpace(string text, int start, int end) { while (end > start && char.IsWhiteSpace(text[end - 1])) --end; return end; }
     private static bool HasType(HelpValueSchema value, string type) => !value.IsStructured && value.Type?.Split('|').Contains(type, StringComparer.Ordinal) == true;
     private static bool IsNumeric(HelpValueSchema value, string text) => (HasType(value, "int") || HasType(value, "float"))
         && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double number) && double.IsFinite(number);

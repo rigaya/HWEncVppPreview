@@ -1,4 +1,5 @@
-﻿using HWEncParamViewer.Core;
+﻿using System.Collections.ObjectModel;
+using HWEncParamViewer.Core;
 
 namespace HWEncParamViewer.App.ViewModels;
 
@@ -7,6 +8,69 @@ public sealed class FilterLineViewModel : ViewModelBase
 {
     private bool _isEnabled = true;
     private string _text = "";
+    private HelpSchema? _schema;
+    private HelpOptionSchema? _parameterOption;
+    private string _displayName = "", _categoryName = "", _summary = "", _formUnavailableReason = "helpのスキーマを取得していません。テキストで編集してください。";
+    private bool _isFormAvailable;
+
+    public string DisplayName { get => _displayName; private set => SetProperty(ref _displayName, value); }
+    public string CategoryName { get => _categoryName; private set => SetProperty(ref _categoryName, value); }
+    public string Summary { get => _summary; private set => SetProperty(ref _summary, value); }
+    public bool IsFormAvailable { get => _isFormAvailable; private set => SetProperty(ref _isFormAvailable, value); }
+    public string FormUnavailableReason { get => _formUnavailableReason; private set => SetProperty(ref _formUnavailableReason, value); }
+    public ObservableCollection<FilterParameterViewModel> Parameters { get; } = new();
+
+    public HelpSchema? HelpSchema
+    {
+        get => _schema;
+        set
+        {
+            if (ReferenceEquals(_schema, value)) return;
+            _schema = value;
+            RefreshForm();
+        }
+    }
+
+    private void RefreshForm()
+    {
+        DisplayName = OptionName.StartsWith("--vpp-", StringComparison.OrdinalIgnoreCase) ? OptionName[6..] : OptionName;
+        var info = _schema is null ? null : FilterLineEditor.Read(_text, _schema);
+        CategoryName = HelpCategories.DisplayName(info?.Option?.Category);
+        Summary = info is null ? "" : FilterLineEditor.Summary(info);
+        IsFormAvailable = info is not null && info.Form != FilterLineForm.Unavailable;
+        FormUnavailableReason = info is null ? "helpのスキーマを取得していません。テキストで編集してください。" : info.UnavailableReason ?? "";
+        var option = info?.Option;
+        if (!ReferenceEquals(_parameterOption, option))
+        {
+            _parameterOption = option;
+            Parameters.Clear();
+            if (option is not null && !option.IsNameOnly)
+            {
+                if (option.Parameters.Count > 0)
+                {
+                    foreach (var parameter in option.Parameters)
+                    {
+                        string name = parameter.Name;
+                        Parameters.Add(new(parameter, value =>
+                        {
+                            if (_schema is not null) Text = FilterLineEditor.SetValue(Text, _schema, name, value);
+                        }));
+                    }
+                }
+                else if (option.Type is not null)
+                    Parameters.Add(new(option, value =>
+                    {
+                        if (_schema is not null) Text = FilterLineEditor.SetShortValue(Text, _schema, value);
+                    }));
+            }
+        }
+        foreach (var parameter in Parameters)
+        {
+            string? value = info?.Form == FilterLineForm.ShortValue ? info.ShortValue
+                : info is not null && info.Values.TryGetValue(parameter.Name, out string? found) ? found : null;
+            parameter.Update(value);
+        }
+    }
 
     public bool IsEnabled
     {
@@ -19,7 +83,12 @@ public sealed class FilterLineViewModel : ViewModelBase
         get => _text;
         set
         {
-            if (SetProperty(ref _text, value ?? "")) OnPropertyChanged(nameof(OptionName));
+            string text = value ?? "";
+            if (_text == text) return;
+            _text = text;
+            RefreshForm();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(OptionName));
         }
     }
 

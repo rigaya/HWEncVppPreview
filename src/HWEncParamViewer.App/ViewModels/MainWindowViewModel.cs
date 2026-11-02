@@ -95,6 +95,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         BrowseEncoderCommand = new RelayCommand(() => RunCommand(async () => { string? path = await _services.BrowseEncoderAsync(); if (path != null) EncoderPath = path; }));
         BrowseInputCommand = new RelayCommand(() => RunCommand(async () => { string? path = await _services.BrowseInputAsync(); if (path != null) InputPath = path; }));
         AddFilterLineCommand = new RelayCommand(() => { var line = new FilterLineViewModel(); FilterLines.Add(line); SelectedFilterLine = line; });
+        AddFilterCommand = new RelayCommand(parameter =>
+        {
+            if (parameter is not string optionName || HelpSchema?.Lookup(optionName) is null) return;
+            var line = new FilterLineViewModel { Text = optionName };
+            FilterLines.Add(line);
+            SelectedFilterLine = line;
+        });
         RemoveFilterLineCommand = new RelayCommand(p => { if (p is FilterLineViewModel line) { FilterLines.Remove(line); if (ReferenceEquals(SelectedFilterLine, line)) SelectedFilterLine = FilterLines.FirstOrDefault(); } });
         StepFrameCommand = new RelayCommand(p => StepFrame((int)Number(p)));
         StepSecondsCommand = new RelayCommand(p => SeekTo(CurrentSeconds + Number(p)));
@@ -130,6 +137,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             _currentSeconds = settings.CurrentSeconds;
             CurrentTimeText = FormatTime(_currentSeconds);
             WindowWidth = settings.WindowWidth;
+            IsTextListMode = settings.IsTextListMode;
             WindowHeight = settings.WindowHeight;
             FilterLines.Clear();
             foreach (var line in settings.FilterLines) FilterLines.Add(new FilterLineViewModel { Text = line.Text, IsEnabled = line.IsEnabled });
@@ -165,7 +173,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             EncoderPath = EncoderPath, InputPath = InputPath, InputArgsText = InputArgsText,
             FilterLines = FilterLines.Select(line => new FilterSetting(line.Text, line.IsEnabled)).ToArray(),
-            WindowWidth = width, WindowHeight = height, CurrentSeconds = CurrentSeconds,
+            WindowWidth = width, WindowHeight = height, CurrentSeconds = CurrentSeconds, IsTextListMode = IsTextListMode,
         };
         try { await Task.Run(() => settings.Save(_services.SettingsPath)).ConfigureAwait(false); }
         catch (Exception exception) { await PostAsync(() => ShowError("設定を保存できませんでした", exception.Message)).ConfigureAwait(false); }
@@ -180,7 +188,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     public ObservableCollection<FilterLineViewModel> FilterLines { get; } = new();
     /// <summary>フォーカスのある行。View の code-behind が設定する。ヘルプ表示の対象。</summary>
     public FilterLineViewModel? SelectedFilterLine { get => _selectedFilterLine; set { if (SetProperty(ref _selectedFilterLine, value)) UpdateHelp(); } }
-    public HelpSchema? HelpSchema { get => _helpSchema; private set => SetProperty(ref _helpSchema, value); }
+    private bool _isTextListMode;
+    public bool IsTextListMode { get => _isTextListMode; set => SetProperty(ref _isTextListMode, value); }
+    public ObservableCollection<FilterCatalogItem> FilterCatalog { get; } = new();
+    public HelpSchema? HelpSchema
+    {
+        get => _helpSchema;
+        private set
+        {
+            if (!SetProperty(ref _helpSchema, value)) return;
+            foreach (var line in FilterLines) line.HelpSchema = value;
+            FilterCatalog.Clear();
+            string[] categoryOrder = ["deinterlace", "denoise", "edge", "deband", "color", "resize", "framerate", "overlay", "ai", "other"];
+            foreach (var option in (value?.Options ?? []).OrderBy(option =>
+                {
+                    int order = Array.IndexOf(categoryOrder, option.Category);
+                    return order < 0 ? categoryOrder.Length : order;
+                }).ThenBy(option => option.Name, StringComparer.Ordinal))
+                FilterCatalog.Add(new(option.Name, option.Name.StartsWith("--vpp-", StringComparison.Ordinal) ? option.Name[6..] : option.Name,
+                    HelpCategories.DisplayName(option.Category), option.Description.Split('\n')[0]));
+            UpdateCatalogUsage();
+        }
+    }
+    private void UpdateCatalogUsage()
+    {
+        foreach (var item in FilterCatalog) item.IsInUse = FilterLines.Any(line => line.OptionName.Equals(item.OptionName, StringComparison.OrdinalIgnoreCase));
+    }
     public string HelpText { get => _helpText; set => SetProperty(ref _helpText, value); }
 
     /// <summary>表示中の画像 (BGRA)。処理中も直前の画像を保持する。</summary>
@@ -216,6 +249,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     public ICommand BrowseEncoderCommand { get; }
     public ICommand BrowseInputCommand { get; }
     public ICommand AddFilterLineCommand { get; }
+    public ICommand AddFilterCommand { get; }
     /// <summary>引数: 削除する FilterLineViewModel。</summary>
     public ICommand RemoveFilterLineCommand { get; }
     /// <summary>引数: -1 / +1 (前後のフレーム)。</summary>
@@ -256,12 +290,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         foreach (var line in _observedLines.Where(line => !FilterLines.Contains(line)).ToArray())
         { line.PropertyChanged -= LineChanged; _observedLines.Remove(line); }
         foreach (var line in FilterLines.Where(line => !_observedLines.Contains(line)))
-        { line.PropertyChanged += LineChanged; _observedLines.Add(line); }
+        { line.HelpSchema = HelpSchema; line.PropertyChanged += LineChanged; _observedLines.Add(line); }
+        UpdateCatalogUsage();
         FiltersChanged();
     }
     private void LineChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (args.PropertyName is nameof(FilterLineViewModel.Text) or nameof(FilterLineViewModel.IsEnabled)) FiltersChanged();
+        if (args.PropertyName is nameof(FilterLineViewModel.Text) or nameof(FilterLineViewModel.IsEnabled))
+        { UpdateCatalogUsage(); FiltersChanged(); }
         if (ReferenceEquals(sender, SelectedFilterLine)) UpdateHelp();
     }
     private void FiltersChanged() { ClearInterval(); _ = QueuePreview(); }

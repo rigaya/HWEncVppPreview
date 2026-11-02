@@ -1,6 +1,4 @@
-﻿using System.Text;
-
-namespace HWEncParamViewer.Core;
+﻿namespace HWEncParamViewer.Core;
 
 /// <summary>オプションテキストの1行と、その有効フラグ (チェックボックス)。</summary>
 public sealed record OptionLine(string Text, bool Enabled = true);
@@ -33,35 +31,5 @@ public static class OptionTextParser
     /// 閉じていないクォートは、編集途中の行でも例外にせず、行末までを1つの引数として扱う。
     /// # は行頭 (前の空白を除く) のときだけコメント。行の途中の # は引数の一部。
     /// </remarks>
-    public static IReadOnlyList<string> TokenizeLine(string line)
-    {
-        var args = new List<string>();
-        if (line.TrimStart().StartsWith('#')) return args;
-
-        var cur = new StringBuilder();
-        bool inQuote = false;
-        // クォートで囲まれた空文字列 ("") を、引数なしと区別するための印
-        bool hasToken = false;
-        for (int i = 0; i < line.Length; i++)
-        {
-            char c = line[i];
-            if (inQuote)
-            {
-                if (c == '"')
-                {
-                    if (i + 1 < line.Length && line[i + 1] == '"') { cur.Append('"'); i++; }
-                    else inQuote = false;
-                }
-                else cur.Append(c);
-            }
-            else if (c == '"') { inQuote = true; hasToken = true; }
-            else if (c == ' ' || c == '\t')
-            {
-                if (hasToken) { args.Add(cur.ToString()); cur.Clear(); hasToken = false; }
-            }
-            else { cur.Append(c); hasToken = true; }
-        }
-        if (hasToken) args.Add(cur.ToString());
-        return args;
-    }
+    public static IReadOnlyList<string> TokenizeLine(string line) => FilterLineSyntax.Tokenize(line);
 }

@@ -97,4 +97,21 @@ public class OptionTextParserTests
     {
         Assert.Equal(new[] { "a", "b", "c" }, OptionTextParser.ParseText("a\r\nb\nc\r\n"));
     }
+
+    [Fact]
+    public void 末尾バックスラッシュでも引用符を閉じて次の値を読める()
+    {
+        Assert.Equal(new[] { "--vpp-subburn", @"file=C:\My Videos\,track=1" },
+            OptionTextParser.TokenizeLine("--vpp-subburn file=\"C:\\My Videos\\\",track=1"));
+    }
+
+    [Fact]
+    public void パラメータ値内の引用符とシャープは行全体で解釈する()
+    {
+        Assert.Equal(new[] { "--vpp-subburn", "file=say\"hello\",track=1" },
+            OptionTextParser.TokenizeLine("--vpp-subburn file=\"say\"\"hello\"\"\",track=1"));
+        Assert.Equal(new[] { "--vpp-subburn", "file=#not-comment,track=1" },
+            OptionTextParser.TokenizeLine("--vpp-subburn file=#not-comment,track=1"));
+    }
+
 }
