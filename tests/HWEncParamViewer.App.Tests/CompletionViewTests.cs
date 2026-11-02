@@ -146,14 +146,15 @@ public sealed class CompletionViewTests
         Assert.Equal("--vpp-kfm mode=60,thswitch=0.5", box.Text);
     }
 
-    private static async Task Flush()
+    internal static async Task Flush()
     {
         // TextChanged 後の Post と、レイアウト・描画の更新を待つ
         for (int i = 0; i < 3; i++) await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
         Dispatcher.UIThread.RunJobs();
     }
 
-    private sealed class Session : IAsyncDisposable
+    /// <summary>偽エンコーダの help を読んだ画面。V8 のフォームのテスト (FormViewTests) でも使う。</summary>
+    internal sealed class Session : IAsyncDisposable
     {
         private readonly string? _previousHelp;
         private readonly TestServices _services;
@@ -174,7 +175,7 @@ public sealed class CompletionViewTests
             Window = window;
         }
 
-        public static async Task<Session> StartAsync()
+        public static async Task<Session> StartAsync(bool textListMode = true)
         {
             string? previous = Environment.GetEnvironmentVariable("FAKE_ENCODER_HELP_FILE");
             Environment.SetEnvironmentVariable("FAKE_ENCODER_HELP_FILE", Path.Combine(AppContext.BaseDirectory, "Data", "help", "qsvenc-h1.txt"));
@@ -185,6 +186,8 @@ public sealed class CompletionViewTests
             await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
             await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
             Assert.NotNull(vm.HelpSchema);
+            // 補完はテキストの一覧の行で確かめる (V8 のフォームの上の行のテキスト欄も同じ処理を使う)
+            vm.IsTextListMode = textListMode;
             var window = new MainWindow { DataContext = vm, Width = 1300, Height = 800 };
             window.Show();
             await Flush();
@@ -242,7 +245,7 @@ public sealed class CompletionViewTests
             OperatingSystem.IsWindows() ? "FakeEncoder.exe" : "FakeEncoder");
     }
 
-    private sealed class TestServices : IViewModelServices, IDisposable
+    internal sealed class TestServices : IViewModelServices, IDisposable
     {
         private readonly string _directory = Path.Combine(Path.GetTempPath(), $"viewer-completion-{Guid.NewGuid():N}");
         public TestServices() => Directory.CreateDirectory(_directory);

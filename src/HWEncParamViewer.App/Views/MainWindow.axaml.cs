@@ -65,6 +65,9 @@ public partial class MainWindow : Window
 
         // フィルタ行の補完と、数値の上下ドラッグ (設計書 21.7、MainWindow.Completion.cs)
         InitializeCompletion();
+
+        // フィルタの追加の一覧と、パラメータのフォーム (設計書 23.2、MainWindow.Form.cs)
+        InitializeForm();
     }
 
     private void StepFrames(int frames)

@@ -140,20 +140,77 @@
 
       <GridSplitter Grid.Column="1" Width="4" ResizeDirection="Columns" />
 
-      <!-- 右: フィルタ編集とヘルプ -->
-      <Grid Grid.Column="2" RowDefinitions="*,Auto,*" Background="{DynamicResource PaneBackgroundBrush}">
+      <!-- 右: フィルタの一覧と、選んだフィルタのフォーム (設計書 23.2) -->
+      <Grid Grid.Column="2" RowDefinitions="Auto,*,Auto,1.6*,Auto" Background="{DynamicResource PaneBackgroundBrush}">
 
-        <!-- フィルタ編集 -->
-        <Grid Grid.Row="0" RowDefinitions="Auto,*,Auto">
-          <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="10,8,10,4">
-            <TextBlock Grid.Column="0" Classes="header" Text="フィルタ" />
-            <Button Grid.Column="1" Classes="small" Content="読み込み" Margin="0,0,4,0"
-                    Command="{Binding LoadFiltersCommand}" ToolTip.Tip="テキストファイルから読み込み (Ctrl+O)" />
-            <Button Grid.Column="2" Classes="small" Content="保存"
-                    Command="{Binding SaveFiltersCommand}" ToolTip.Tip="テキストファイルに保存 (Ctrl+S)" />
-          </Grid>
+        <!-- 見出しと操作 -->
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="10,8,10,4">
+          <TextBlock Grid.Column="0" Classes="header" Text="フィルタ" />
+          <Button Grid.Column="1" x:Name="AddFilterButton" Classes="small" Content="＋ フィルタを追加" Margin="0,0,8,0"
+                  IsEnabled="{Binding HelpSchema, Converter={x:Static ObjectConverters.IsNotNull}}"
+                  ToolTip.Tip="用途別の一覧から選んで追加">
+            <Button.Flyout>
+              <Flyout Placement="BottomEdgeAlignedRight">
+                <!-- Flyout の中は DataContext が継承されないことがあるので、Items は code-behind で渡す -->
+                <views:FilterCatalogView x:Name="FlyoutCatalog" Width="460" Height="440" />
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+          <ToggleButton Grid.Column="2" Classes="small" Content="テキスト" Margin="0,0,8,0" IsChecked="{Binding IsTextListMode}"
+                        ToolTip.Tip="1行1フィルタのテキストで一覧を編集する (貼り付けやまとめての編集用)" />
+          <Button Grid.Column="3" Classes="small" Content="読み込み" Margin="0,0,4,0"
+                  Command="{Binding LoadFiltersCommand}" ToolTip.Tip="テキストファイルから読み込み (Ctrl+O)" />
+          <Button Grid.Column="4" Classes="small" Content="保存"
+                  Command="{Binding SaveFiltersCommand}" ToolTip.Tip="テキストファイルに保存 (Ctrl+S)" />
+        </Grid>
 
-          <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" Padding="10,0">
+        <Panel Grid.Row="1">
+          <!-- 一覧: 名前・分類・変えた値の要約 -->
+          <ListBox x:Name="FilterList" Classes="filters" Margin="10,0"
+                   ItemsSource="{Binding FilterLines}" SelectedItem="{Binding SelectedFilterLine}"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.IsVisible>
+              <MultiBinding Converter="{x:Static BoolConverters.And}">
+                <Binding Path="!IsTextListMode" />
+                <Binding Path="!!FilterLines.Count" />
+              </MultiBinding>
+            </ListBox.IsVisible>
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:FilterLineViewModel">
+                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
+                  <CheckBox Grid.Column="0" Grid.RowSpan="2" IsChecked="{Binding IsEnabled}" MinWidth="0" Margin="0,0,6,0"
+                            VerticalAlignment="Center" ToolTip.Tip="有効 / 無効" />
+                  <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal" Spacing="8">
+                    <TextBlock Classes="filterName" Text="{Binding DisplayName}" />
+                    <TextBlock Classes="filterName subtle" Text="(空の行)"
+                               IsVisible="{Binding DisplayName, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+                    <TextBlock Classes="subtle" FontSize="11" Text="{Binding CategoryName}" />
+                  </StackPanel>
+                  <Panel Grid.Column="1" Grid.Row="1">
+                    <!-- フォームで扱える行は要約、扱えない行はテキストそのもの -->
+                    <TextBlock Classes="filterSummary" Text="{Binding Summary}" IsVisible="{Binding IsFormAvailable}"
+                               ToolTip.Tip="{Binding Text}" />
+                    <TextBlock Classes="filterSummary" Text="既定値">
+                      <TextBlock.IsVisible>
+                        <MultiBinding Converter="{x:Static BoolConverters.And}">
+                          <Binding Path="IsFormAvailable" />
+                          <Binding Path="Summary" Converter="{x:Static StringConverters.IsNullOrEmpty}" />
+                        </MultiBinding>
+                      </TextBlock.IsVisible>
+                    </TextBlock>
+                    <TextBlock Classes="filterSummary" Text="{Binding Text}" IsVisible="{Binding !IsFormAvailable}"
+                               ToolTip.Tip="{Binding Text}" />
+                  </Panel>
+                  <Button Grid.Column="2" Grid.RowSpan="2" Classes="icon flat" Content="✕" Margin="2,0,0,0"
+                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RemoveFilterLineCommand}"
+                          CommandParameter="{Binding}" ToolTip.Tip="このフィルタを削除" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+          <!-- テキストの一覧 (V4〜V6 の表示) -->
+          <ScrollViewer HorizontalScrollBarVisibility="Disabled" Padding="10,0" IsVisible="{Binding IsTextListMode}">
             <StackPanel Spacing="4">
               <ItemsControl ItemsSource="{Binding FilterLines}">
                 <ItemsControl.ItemTemplate>
@@ -175,40 +232,152 @@
               </ItemsControl>
               <Button Classes="small flat" Content="＋ 行を追加" HorizontalAlignment="Left"
                       Command="{Binding AddFilterLineCommand}" Click="AddLine_Click" />
-              <!-- フィルタが1行もないときの案内 -->
               <TextBlock Classes="subtle" Margin="4,8,0,0" TextWrapping="Wrap"
                          Text="1行に1つ、--vpp-xxx 形式でフィルタを書きます。入力中は候補が出ます (Ctrl+Space でも表示)。チェックを外した行は無効になります。数値は上下にドラッグ、またはホイール / Ctrl+↑↓ で増減できます。"
                          IsVisible="{Binding !FilterLines.Count}" />
             </StackPanel>
           </ScrollViewer>
 
-          <Grid Grid.Row="2" ColumnDefinitions="Auto,*" Margin="10,6,10,10">
-            <TextBlock Grid.Column="0" Classes="subtle" Text="入力の追加引数" Margin="0,0,8,0" />
-            <TextBox Grid.Column="1" Classes="mono" Text="{Binding InputArgsText}" />
-          </Grid>
-        </Grid>
-
-        <GridSplitter Grid.Row="1" Height="4" ResizeDirection="Rows" />
-
-        <!-- ヘルプ -->
-        <Grid Grid.Row="2" RowDefinitions="Auto,*">
-          <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="6" Margin="10,8,10,4">
-            <TextBlock Classes="header" Text="ヘルプ" />
-            <TextBlock Classes="subtle" FontFamily="{StaticResource MonoFont}"
-                       Text="{Binding SelectedFilterLine.OptionName, FallbackValue=''}" />
+          <!-- help を読めないエンコーダで、1行もないとき -->
+          <StackPanel Margin="14,4" Spacing="8">
+            <StackPanel.IsVisible>
+              <MultiBinding Converter="{x:Static BoolConverters.And}">
+                <Binding Path="!IsTextListMode" />
+                <Binding Path="!FilterLines.Count" />
+                <Binding Path="HelpSchema" Converter="{x:Static ObjectConverters.IsNull}" />
+              </MultiBinding>
+            </StackPanel.IsVisible>
+            <TextBlock Classes="subtle" TextWrapping="Wrap"
+                       Text="エンコーダを指定すると、追加できるフィルタの一覧が出ます。ヘルプを読めないエンコーダでは、「テキスト」で --vpp-xxx 形式のまま編集できます。" />
           </StackPanel>
-          <Border Grid.Row="1" Margin="10,0,10,10" BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1"
-                  CornerRadius="3">
-            <ScrollViewer HorizontalScrollBarVisibility="Auto">
-              <Panel>
-                <SelectableTextBlock Classes="help" Text="{Binding HelpText}" />
-                <!-- ヘルプが空のときの案内 -->
-                <TextBlock Classes="subtle" Margin="12,10" TextWrapping="Wrap" VerticalAlignment="Top"
-                           Text="フィルタの行をクリックすると、そのオプションのヘルプを表示します。"
-                           IsVisible="{Binding HelpText, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
-              </Panel>
+        </Panel>
+
+        <GridSplitter Grid.Row="2" Height="4" ResizeDirection="Rows" />
+
+        <!-- 選んだフィルタ: 行のテキストと、パラメータのフォーム (設計書 23.2、23.3) -->
+        <Panel Grid.Row="3">
+          <TextBlock Classes="subtle" Margin="14,10" TextWrapping="Wrap" VerticalAlignment="Top"
+                     Text="フィルタを選ぶと、ここでパラメータを調整できます。"
+                     IsVisible="{Binding SelectedFilterLine, Converter={x:Static ObjectConverters.IsNull}}" />
+          <ContentControl Content="{Binding SelectedFilterLine}" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+            <ContentControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:FilterLineViewModel">
+          <Grid RowDefinitions="Auto,Auto,*">
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="10,8,10,4">
+              <TextBlock Classes="header" FontFamily="{StaticResource MonoFont}" Text="{Binding DisplayName}" />
+              <TextBlock Classes="subtle" FontSize="11" Text="{Binding CategoryName}" />
+            </StackPanel>
+            <!-- 行のテキスト。補完・ホイール・上下ドラッグは今までと同じ (正はこのテキスト) -->
+            <TextBox Grid.Row="1" Classes="mono filterLine" Margin="10,0,10,6" Text="{Binding Text}"
+                     PlaceholderText="--vpp-"
+                     GotFocus="FilterLine_GotFocus" LostFocus="FilterLine_LostFocus"
+                     PointerWheelChanged="FilterLine_PointerWheelChanged"
+                     KeyDown="FilterLine_KeyDown" />
+            <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Disabled" Padding="10,0,10,10">
+              <StackPanel Spacing="2">
+                <TextBlock Classes="subtle" TextWrapping="Wrap" Margin="2,4" Text="{Binding FormUnavailableReason}"
+                           IsVisible="{Binding !IsFormAvailable}" />
+                <TextBlock Classes="subtle" Margin="2,4" Text="パラメータはありません。">
+                  <TextBlock.IsVisible>
+                    <MultiBinding Converter="{x:Static BoolConverters.And}">
+                      <Binding Path="IsFormAvailable" />
+                      <Binding Path="!Parameters.Count" />
+                    </MultiBinding>
+                  </TextBlock.IsVisible>
+                </TextBlock>
+
+                <ItemsControl ItemsSource="{Binding Parameters}" IsVisible="{Binding IsFormAvailable}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:FilterParameterViewModel">
+                      <Grid ColumnDefinitions="128,*,Auto" RowDefinitions="Auto,Auto,Auto" Margin="0,3">
+                        <TextBlock Grid.Column="0" Classes="paramName" Classes.set="{Binding IsSet}" Text="{Binding Name}"
+                                   ToolTip.Tip="{Binding Description}" TextTrimming="CharacterEllipsis" />
+
+                        <!-- 欄の種類は Kind で切り替える (23.3) -->
+                        <Panel Grid.Column="1">
+                          <Grid ColumnDefinitions="*,88"
+                                IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Slider}}">
+                            <!-- 値は ViewModel から一方向。利用者の操作だけを code-behind で書き戻す (初期化時の補正で行を書き換えないため) -->
+                            <Slider Grid.Column="0" Classes="param" Minimum="{Binding Minimum, FallbackValue=0}"
+                                    Maximum="{Binding Maximum, FallbackValue=1}" SmallChange="{Binding Step}"
+                                    LargeChange="{Binding Step}" TickFrequency="{Binding Step}" IsSnapToTickEnabled="True"
+                                    Value="{Binding NumberValue, Mode=OneWay}" />
+                            <TextBox Grid.Column="1" Classes="mono paramValue number" Margin="6,0,0,0"
+                                     Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}" />
+                          </Grid>
+                          <TextBox Classes="mono paramValue number" Width="140" HorizontalAlignment="Left"
+                                   Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}"
+                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Number}}" />
+                          <StackPanel Orientation="Horizontal" Spacing="6"
+                                      IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.NumberOrChoice}}">
+                            <TextBox Classes="mono paramValue number" Width="140"
+                                     Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}" />
+                            <ComboBox Classes="param" MinWidth="96" ItemsSource="{Binding Choices}" SelectedItem="{Binding ChoiceValue}"
+                                      PlaceholderText="選択" />
+                          </StackPanel>
+                          <ComboBox Classes="param" MinWidth="180" ItemsSource="{Binding Choices}" SelectedItem="{Binding ChoiceValue}"
+                                    IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Choice}}" />
+                          <ToggleSwitch Classes="param" IsChecked="{Binding BoolValue}" OnContent="true" OffContent="false"
+                                        IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Bool}}" />
+                          <Grid ColumnDefinitions="*,Auto"
+                                IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Path}}">
+                            <TextBox Grid.Column="0" Classes="mono paramValue" Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}" />
+                            <Button Grid.Column="1" Classes="icon" Content="…" Margin="4,0,0,0" Click="ParameterBrowse_Click"
+                                    ToolTip.Tip="ファイルを選択" />
+                          </Grid>
+                          <TextBox Classes="mono paramValue" Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}"
+                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Text}}" />
+                        </Panel>
+
+                        <Button Grid.Column="2" Classes="icon flat" Content="↺" Margin="4,0,0,0" Command="{Binding ResetCommand}"
+                                IsVisible="{Binding IsSet}" ToolTip.Tip="既定に戻す (行から消す)" />
+
+                        <!-- 既定値と説明 -->
+                        <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" ColumnDefinitions="Auto,*" Margin="0,1,0,0">
+                          <TextBlock Grid.Column="0" Classes="paramDesc" Margin="0,0,10,0"
+                                     Text="{Binding DefaultText, StringFormat='既定 {0}'}"
+                                     IsVisible="{Binding DefaultText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                          <TextBlock Grid.Column="1" Classes="paramDesc" Text="{Binding Description}" ToolTip.Tip="{Binding Description}" />
+                        </Grid>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Classes="paramError" Text="{Binding ValidationMessage}"
+                                   IsVisible="{Binding ValidationMessage, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- help の該当部分 (今までのヘルプ欄) -->
+                <Expander Header="ヘルプ全文" Margin="0,8,0,0" HorizontalAlignment="Stretch">
+                  <SelectableTextBlock Classes="help" TextWrapping="Wrap"
+                                       Text="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).HelpText, FallbackValue=''}" />
+                </Expander>
+              </StackPanel>
             </ScrollViewer>
-          </Border>
+          </Grid>
+              </DataTemplate>
+            </ContentControl.ContentTemplate>
+          </ContentControl>
+        </Panel>
+
+        <!-- 1行もないとき: 追加の一覧をそのまま出す (最初に触る場所をはっきりさせる)。フォームの区画も使って縦いっぱいに広げる -->
+        <Border Grid.Row="1" Grid.RowSpan="3" Padding="10,0,10,6" Background="{DynamicResource PaneBackgroundBrush}">
+          <Border.IsVisible>
+            <MultiBinding Converter="{x:Static BoolConverters.And}">
+              <Binding Path="!IsTextListMode" />
+              <Binding Path="!FilterLines.Count" />
+              <Binding Path="HelpSchema" Converter="{x:Static ObjectConverters.IsNotNull}" />
+            </MultiBinding>
+          </Border.IsVisible>
+          <Grid RowDefinitions="Auto,*">
+            <TextBlock Grid.Row="0" Classes="subtle" Margin="2,0,0,6" TextWrapping="Wrap"
+                       Text="フィルタを選んで追加します。追加すると既定値ですぐにプレビューされ、パラメータを調整できます。" />
+            <views:FilterCatalogView Grid.Row="1" x:Name="InlineCatalog" Items="{Binding FilterCatalog}" />
+          </Grid>
+        </Border>
+
+        <Grid Grid.Row="4" ColumnDefinitions="Auto,*" Margin="10,6,10,10">
+          <TextBlock Grid.Column="0" Classes="subtle" Text="入力の追加引数" Margin="0,0,8,0" />
+          <TextBox Grid.Column="1" Classes="mono" Text="{Binding InputArgsText}" />
         </Grid>
       </Grid>
     </Grid>

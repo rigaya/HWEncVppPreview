@@ -156,4 +156,62 @@
   <Style Selector="GridSplitter">
     <Setter Property="Background" Value="{DynamicResource DividerBrush}" />
   </Style>
+
+  <!-- フィルタの一覧と、パラメータのフォーム (設計書 23.2) -->
+  <Style Selector="ListBox.filters, ListBox.catalog">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="ListBox.filters ListBoxItem">
+    <Setter Property="Padding" Value="6,4" />
+    <Setter Property="CornerRadius" Value="4" />
+  </Style>
+  <Style Selector="ListBox.catalog ListBoxItem">
+    <Setter Property="Padding" Value="8,2" />
+    <Setter Property="MinHeight" Value="0" />
+  </Style>
+  <Style Selector="TextBlock.filterName">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="TextBlock.filterSummary">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Foreground" Value="{DynamicResource SubtleTextBrush}" />
+    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+  </Style>
+  <!-- パラメータ名。行に書かれている (既定値から変えた) ものはアクセント色で強調する -->
+  <Style Selector="TextBlock.paramName">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Foreground" Value="{DynamicResource SubtleTextBrush}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="TextBlock.paramName.set">
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{DynamicResource SystemAccentColor}" />
+  </Style>
+  <Style Selector="TextBlock.paramDesc">
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Foreground" Value="{DynamicResource SubtleTextBrush}" />
+    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+  </Style>
+  <Style Selector="TextBlock.paramError">
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Foreground" Value="#D04848" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+  <Style Selector="TextBox.paramValue">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="MinHeight" Value="26" />
+  </Style>
+  <Style Selector="ComboBox.param">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="MinHeight" Value="26" />
+  </Style>
+  <Style Selector="Slider.param">
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Margin" Value="0,-8" />
+  </Style>
 </Styles>

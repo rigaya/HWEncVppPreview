@@ -92,6 +92,43 @@ CaptureCompletion("dark_completion_option_typing", ThemeVariant.Dark, "--vpp-n")
 CaptureCompletion("dark_completion_parameter", ThemeVariant.Dark, "--vpp-kfm ");
 CaptureCompletion("light_completion_value", ThemeVariant.Light, "--vpp-kfm mode=");
 
+// V8: パラメータのフォーム (設計書 23.2)
+CaptureForm("dark_form", ThemeVariant.Dark, ["--vpp-nlmeans sigma=0.01,h=0.08", "--vpp-kfm mode=24", "--vpp-edgelevel"], 0);
+CaptureForm("light_form_choice", ThemeVariant.Light, ["--vpp-nlmeans sigma=0.01", "--vpp-kfm mode=24,thswitch=0.6"], 1);
+CaptureForm("dark_form_empty", ThemeVariant.Dark, [], -1);
+CaptureForm("dark_form_add", ThemeVariant.Dark, ["--vpp-nlmeans"], 0, openAdd: true);
+CaptureForm("dark_form_textmode", ThemeVariant.Dark, ["--vpp-nlmeans sigma=0.01,h=0.08", "--vpp-unknown a=1"], 1, textMode: true);
+
+void CaptureForm(string name, ThemeVariant theme, string[] lines, int selected, bool openAdd = false, bool textMode = false)
+{
+    Application.Current!.RequestedThemeVariant = theme;
+    var vm = MainWindowViewModel.CreateDesignSample();
+    vm.PreviewImage = CreateTestImage(1440, 1080);
+    vm.FilterLines.Clear();
+    typeof(MainWindowViewModel).GetProperty(nameof(MainWindowViewModel.HelpSchema))!
+        .SetValue(vm, new HWEncParamViewer.Core.HelpSchema(File.ReadAllText(HelpDataPath("qsvenc-h1.txt"))));
+    foreach (var text in lines) vm.FilterLines.Add(new FilterLineViewModel { Text = text });
+    vm.SelectedFilterLine = selected >= 0 ? vm.FilterLines[selected] : null;
+    vm.IsTextListMode = textMode;
+    var window = new MainWindow { DataContext = vm, Width = 1440, Height = 900 };
+    window.Show();
+    Dispatcher.UIThread.RunJobs();
+    if (openAdd)
+    {
+        window.FindControl<Button>("AddFilterButton")!.Flyout!.ShowAt(window.FindControl<Button>("AddFilterButton")!);
+        Dispatcher.UIThread.RunJobs();
+    }
+    string before = string.Join(" | ", vm.FilterLines.Select(line => line.Text));
+#pragma warning disable CS0618 // 開発用ツールなので、PNG 保存は簡単な旧 API で十分
+    using (var frame = window.CaptureRenderedFrame()) frame!.Save(Path.Combine(outDir, name + ".png"));
+#pragma warning restore CS0618
+    // 表示しただけで行のテキストが変わっていないこと (欄の初期化で書き戻さないこと)
+    string after = string.Join(" | ", vm.FilterLines.Select(line => line.Text));
+    window.Close();
+    Pump(vm.DisposeAsync().AsTask());
+    Console.WriteLine(name + (before == string.Join(" | ", lines) && after == before ? "" : $" (行が変わった: {after})"));
+}
+
 void CaptureCompletion(string name, ThemeVariant theme, string text, bool category = false)
 {
     Application.Current!.RequestedThemeVariant = theme;
@@ -102,6 +139,8 @@ void CaptureCompletion(string name, ThemeVariant theme, string text, bool catego
         .SetValue(vm, new HWEncParamViewer.Core.HelpSchema(File.ReadAllText(HelpDataPath("qsvenc-h1.txt"))));
     var line = new FilterLineViewModel { Text = text };
     vm.FilterLines.Add(line);
+    // V8 以降、行のテキスト欄は選んだ行のフォームの上にある
+    vm.SelectedFilterLine = line;
     var window = new MainWindow { DataContext = vm, Width = 1440, Height = 900 };
     window.Show();
     Dispatcher.UIThread.RunJobs();
