@@ -83,6 +83,20 @@ public partial class MainWindow
         e.Handled = true;
     }
 
+    /// <summary>「数値」を押したら、隣の数値の欄へフォーカスを移す (欄が使えるようになってから)。</summary>
+    private void NumberChoice_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control button) return;
+        var box = button.FindAncestorOfType<StackPanel>()?.FindAncestorOfType<Border>()?.Parent is StackPanel row
+            ? row.Children.OfType<TextBox>().FirstOrDefault() : null;
+        if (box != null) Dispatcher.UIThread.Post(() => box.Focus(), DispatcherPriority.Background);
+    }
+
+    private void NumberChoice_LostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { DataContext: FilterParameterViewModel parameter }) parameter.EndNumberEntry();
+    }
+
     private async void ParameterBrowse_Click(object? sender, RoutedEventArgs e)
     {
         if (sender is not Control { DataContext: FilterParameterViewModel parameter }) return;

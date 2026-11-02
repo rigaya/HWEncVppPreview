@@ -210,6 +210,19 @@
     <Setter Property="FontSize" Value="12" />
     <Setter Property="MinHeight" Value="26" />
   </Style>
+  <!-- 既定に戻すボタンは、書かれていないときは見えないだけで場所は取る -->
+  <Style Selector="Button.reset:disabled">
+    <Setter Property="Opacity" Value="0" />
+  </Style>
+  <!-- 語と数値の選択のボタンの並び。角丸は外枠でまとめて付ける -->
+  <Style Selector="Border.segGroup">
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="ClipToBounds" Value="True" />
+  </Style>
+  <Style Selector="Border.segGroup Button.seg">
+    <Setter Property="MinWidth" Value="44" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+  </Style>
   <Style Selector="Slider.param">
     <Setter Property="VerticalAlignment" Value="Center" />
     <Setter Property="Margin" Value="0,-8" />

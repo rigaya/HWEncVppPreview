@@ -112,6 +112,51 @@ public sealed class FormViewTests
         Assert.True(message.IsEffectivelyVisible);
     }
 
+    [AvaloniaFact]
+    public async Task AWordOrNumberFieldPicksOneOfThemWithButtons()
+    {
+        await using var session = await Session.StartAsync(textListMode: false);
+        var line = await session.SelectAsync("--vpp-kfm mode=24");
+        Button Segment(string text) => session.Window.GetVisualDescendants().OfType<Button>()
+            .First(button => button.IsEffectivelyVisible && button.Content as string == text
+                && (button.DataContext is FilterParameterViewModel { Name: "search_early_sad" }
+                    || button.FindAncestorOfType<ItemsControl>()?.DataContext is FilterParameterViewModel { Name: "search_early_sad" }));
+        var number = session.Window.GetVisualDescendants().OfType<TextBox>()
+            .First(box => box.Classes.Contains("numberChoice") && box.DataContext is FilterParameterViewModel { Name: "search_early_sad" });
+
+        // 未指定では既定の語 (auto) が選ばれた表示で、数値の欄は使えない
+        Assert.Contains("active", Segment("auto").Classes);
+        Assert.False(number.IsEnabled);
+
+        Segment("off").Command!.Execute(null);
+        await Flush();
+        Assert.Equal("--vpp-kfm mode=24,search_early_sad=off", line.Text);
+
+        // 「数値」を押しただけでは行を変えず、数値の欄が使えるようになる
+        Segment("数値").Command!.Execute(null);
+        await Flush();
+        Assert.Equal("--vpp-kfm mode=24,search_early_sad=off", line.Text);
+        Assert.True(number.IsEnabled);
+        Assert.DoesNotContain("active", Segment("off").Classes);
+
+        number.Text = "16";
+        await Flush();
+        Assert.Equal("--vpp-kfm mode=24,search_early_sad=16", line.Text);
+        Assert.Contains("active", Segment("数値").Classes);
+    }
+
+    [AvaloniaFact]
+    public async Task TheResetButtonKeepsItsPlaceWhetherOrNotTheValueIsWritten()
+    {
+        await using var session = await Session.StartAsync(textListMode: false);
+        var line = await session.SelectAsync("--vpp-kfm mode=24");
+        var slider = Field<Slider>(session, "thswitch");
+        double width = slider.Bounds.Width;
+        line.Text = "--vpp-kfm mode=24,thswitch=0.7";
+        await Flush();
+        Assert.Equal(width, Field<Slider>(session, "thswitch").Bounds.Width);
+    }
+
     private static IEnumerable<string> ParameterNames(Session session) =>
         session.Window.GetVisualDescendants().OfType<TextBlock>()
             .Where(text => text.Classes.Contains("paramName") && text.IsEffectivelyVisible)

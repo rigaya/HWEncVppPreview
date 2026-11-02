@@ -308,12 +308,34 @@
                           <TextBox Classes="mono paramValue number" Width="140" HorizontalAlignment="Left"
                                    Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}"
                                    IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Number}}" />
+                          <!--
+                            語と数値の両方を取るもの (int|auto|off など): 語ごとのボタンと「数値」のボタンから1つを選ぶ。
+                            数値の欄は「数値」を選んでいるときだけ使える (語と数値を同時に指定できるように見せない)
+                          -->
                           <StackPanel Orientation="Horizontal" Spacing="6"
                                       IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.NumberOrChoice}}">
-                            <TextBox Classes="mono paramValue number" Width="140"
-                                     Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}" />
-                            <ComboBox Classes="param" MinWidth="96" ItemsSource="{Binding Choices}" SelectedItem="{Binding ChoiceValue}"
-                                      PlaceholderText="選択" />
+                            <Border Classes="segGroup">
+                              <StackPanel Orientation="Horizontal">
+                                <ItemsControl ItemsSource="{Binding Words}">
+                                  <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                      <StackPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                  </ItemsControl.ItemsPanel>
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ChoiceOptionViewModel">
+                                      <Button Classes="seg" Classes.active="{Binding IsSelected}" Content="{Binding Text}"
+                                              Command="{Binding SelectCommand}" />
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <Button Classes="seg" Classes.active="{Binding IsNumberSelected}" Content="数値"
+                                        Command="{Binding SelectNumberCommand}" Click="NumberChoice_Click" />
+                              </StackPanel>
+                            </Border>
+                            <TextBox Classes="mono paramValue number numberChoice" Width="110"
+                                     Text="{Binding NumberText}" PlaceholderText="{Binding NumberPlaceholder}"
+                                     IsEnabled="{Binding IsNumberSelected}" LostFocus="NumberChoice_LostFocus" />
                           </StackPanel>
                           <ComboBox Classes="param" MinWidth="180" ItemsSource="{Binding Choices}" SelectedItem="{Binding ChoiceValue}"
                                     IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Choice}}" />
@@ -329,8 +351,9 @@
                                    IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Text}}" />
                         </Panel>
 
-                        <Button Grid.Column="2" Classes="icon flat" Content="↺" Margin="4,0,0,0" Command="{Binding ResetCommand}"
-                                IsVisible="{Binding IsSet}" ToolTip.Tip="既定に戻す (行から消す)" />
+                        <!-- 書かれていないときも場所は空けておく (出たり消えたりで欄の幅が変わらないように) -->
+                        <Button Grid.Column="2" Classes="icon flat reset" Content="↺" Margin="4,0,0,0" Command="{Binding ResetCommand}"
+                                IsEnabled="{Binding IsSet}" ToolTip.Tip="既定に戻す (行から消す)" />
 
                         <!-- 既定値と説明 -->
                         <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" ColumnDefinitions="Auto,*" Margin="0,1,0,0">
