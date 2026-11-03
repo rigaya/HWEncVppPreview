@@ -44,7 +44,7 @@ public sealed class UiText
     public string SaveHint => T("テキストファイルに保存 (Ctrl+S)", "Save a text file (Ctrl+S)");
     public string EnableDisable => T("有効 / 無効", "Enable / disable");
     public string EmptyLine => T("(空の行)", "(empty line)");
-    public string Defaults => T("既定値", "Defaults");
+    public string Defaults => T("デフォルト", "Defaults");
     public string DeleteFilter => T("このフィルタを削除", "Remove this filter");
     public string DeleteLine => T("この行を削除", "Remove this line");
     public string AddLine => T("＋ 行を追加", "+ Add line");
@@ -54,10 +54,10 @@ public sealed class UiText
     public string NoParameters => T("パラメータはありません。", "No parameters.");
     public string Number => T("数値", "Number");
     public string BrowseFile => T("ファイルを選択", "Choose file");
-    public string ResetHint => T("既定に戻す (行から消す)", "Reset to default (remove from the line)");
-    public string DefaultLabel => T("既定", "Default");
+    public string ResetHint => T("デフォルトに戻す (行から消す)", "Reset to default (remove from the line)");
+    public string DefaultLabel => T("デフォルト", "Default");
     public string FullHelp => T("ヘルプ全文", "Full help");
-    public string EmptyFiltersHint => T("フィルタを選んで追加します。追加すると既定値ですぐにプレビューされ、パラメータを調整できます。", "Select a filter to add it. Preview starts with its defaults; then adjust its parameters.");
+    public string EmptyFiltersHint => T("フィルタを選んで追加します。追加するとデフォルトの設定ですぐにプレビューされ、パラメータを調整できます。", "Select a filter to add it. Preview starts with its defaults; then adjust its parameters.");
     public string InputArguments => T("入力の追加引数", "Input arguments");
     public string SarHint => T("オン: SAR を考慮した表示サイズ / オフ: 正方画素 (画素単位の確認用)", "On: use SAR for display size. Off: square pixels for pixel inspection");
     public string Log => T("ログ", "Log");
@@ -67,8 +67,8 @@ public sealed class UiText
     public string SearchFiltersHint => T("名前や説明で絞り込み (↑↓ で選択、Enter で追加)", "Search filters (↑↓ select, Enter add)");
     public string InUse => T("使用中", "In use");
     public string Uncategorized => T("分類なし", "Uncategorized");
-    public string DefaultValue => T("既定", "Default");
-    public string DefaultSuffix => T(" (既定)", " (default)");
+    public string DefaultValue => T("デフォルト", "Default");
+    public string DefaultSuffix => T(" (デフォルト)", " (default)");
     public string Language => T("表示言語", "Language");
     // 選択欄の「自動」だけは今の言語で出す (日本語・English は常にその言語の名前)
     public string LanguageAuto => T("自動", "Auto");
