@@ -111,6 +111,7 @@ public static class CommandBuilder
             args.AddRange(new[] { "-c", "raw", "--y4m-timestamp", "-o", "-" });
         }
         args.AddRange(req.VppArgs);
+        // --y4m-timestamp(2026-08)を前提にしているため、color(2025-05)も必ず使える。
         // ログ末尾の色リセットが常駐サーバの制御行へ混ざらないよう、最後に色を無効化する。
         args.AddRange(new[] { "--log-opt", "color=false" });
         // 入力/VPP引数より後に置き、Viewerが確認したプレビュー用設定を適用する。
