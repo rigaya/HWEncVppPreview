@@ -207,7 +207,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         FilterCatalog.Clear();
         string[] categoryOrder = ["deinterlace", "denoise", "edge", "deband", "color", "resize", "framerate", "overlay", "ai", "other"];
-        foreach (var option in (HelpSchema?.Options ?? []).OrderBy(option =>
+        // 「その他・設定」(フィルタでない設定や、単体では使わない部品) は追加の一覧に出さない (2026-11-03 部長判断)。
+        // テキストでの入力と補完では今までどおり使える
+        foreach (var option in (HelpSchema?.Options ?? []).Where(option => option.Category != "other").OrderBy(option =>
             {
                 int order = Array.IndexOf(categoryOrder, option.Category);
                 return order < 0 ? categoryOrder.Length : order;

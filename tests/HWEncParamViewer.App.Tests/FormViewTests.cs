@@ -38,6 +38,19 @@ public sealed class FormViewTests
     }
 
     [AvaloniaFact]
+    public async Task TheAddListLeavesOutOtherSettingsButCompletionKeepsThem()
+    {
+        await using var session = await Session.StartAsync(textListMode: false);
+        var names = session.ViewModel.FilterCatalog.Select(item => item.OptionName).ToList();
+        Assert.Contains("--vpp-nlmeans", names);
+        // [other] は追加の一覧に出さない
+        Assert.DoesNotContain("--vpp-resize-mode", names);
+        Assert.DoesNotContain("--vpp-rtgmc-primitive", names);
+        // 補完 (テキストでの入力) では使える
+        Assert.Contains("--vpp-resize-mode", session.ViewModel.HelpSchema!.OptionNames);
+    }
+
+    [AvaloniaFact]
     public async Task ShowingAndSwitchingFormsDoesNotRewriteLines()
     {
         await using var session = await Session.StartAsync(textListMode: false);
