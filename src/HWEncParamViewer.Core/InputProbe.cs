@@ -47,7 +47,7 @@ public sealed class InputProbe : IAsyncDisposable
     private readonly SemaphoreSlim _durationGate = new(1, 1);
     private readonly Dictionary<ProbeKey, InputInfo> _cache = new();
     private readonly Dictionary<ProbeKey, TimeSpan?> _durationCache = new();
-    private readonly HashSet<Process> _durationProcesses = new();
+    private readonly Dictionary<Process, Task> _durationProcesses = new();
     private readonly Action<ProcessStartInfo>? _configureStartInfo;
     private readonly IPreviewBackend _backend;
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
@@ -171,36 +171,56 @@ public sealed class InputProbe : IAsyncDisposable
             {
                 "-i", inputFile, "--log-level", "input=debug", "--frames", "1", "-c", "raw", "-o", "-",
             });
-            Process process;
-            lock (_sync)
-            {
-                cancellation.Token.ThrowIfCancellationRequested();
-                process = ProcessSupport.Start(encoderPath, command, _configureStartInfo);
-                _durationProcesses.Add(process);
-            }
-            Task? stdout = null;
+            Process? process = null;
+            int pid = 0;
             Task<string>? stderr = null;
-            Task? completion = null;
+            Task completion = Task.CompletedTask;
+            CancellationTokenRegistration registration = default;
             CleanupDeadline? cleanup = null;
             TimeSpan Remaining() => (cleanup ??= new CleanupDeadline(_clock, StopTimeout)).Remaining;
-            using var registration = cancellation.Token.Register(() => ProcessSupport.Observe(Task.Run(() => ProcessSupport.Kill(process))));
+            async Task StopIfOwnerAsync()
+            {
+                if (process == null) return;
+                Task? owned;
+                // 通常終了・期限切れ・Disposeのうち、一度だけ取り出せた側が回収・破棄する。
+                lock (_sync) _durationProcesses.Remove(process, out owned);
+                if (owned != null) await StopDurationProcessAsync(process, owned, Remaining()).ConfigureAwait(false);
+            }
             try
             {
-                // 失敗終了時はy4mでないこともある。stdoutは解析せず読み切り、stderrと並行して詰まりを防ぐ。
-                stdout = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
-                stderr = process.StandardError.ReadToEndAsync();
-                completion = Task.WhenAll(process.WaitForExitAsync(), stdout, stderr);
+                lock (_sync)
+                {
+                    cancellation.Token.ThrowIfCancellationRequested();
+                    process = ProcessSupport.Start(encoderPath, command, _configureStartInfo);
+                    pid = process.Id;
+                    var pending = new List<Task>();
+                    try
+                    {
+                        // 終了待ちは一度だけ作り、回収側がDispose後に新しい待ちを登録しないようにする。
+                        pending.Add(process.WaitForExitAsync());
+                        pending.Add(process.StandardOutput.BaseStream.CopyToAsync(Stream.Null));
+                        stderr = process.StandardError.ReadToEndAsync();
+                        pending.Add(stderr);
+                    }
+                    finally
+                    {
+                        // 起動・pipe準備と登録を同じロックに収め、回収側へ完了待ち一式を渡す。
+                        completion = Task.WhenAll(pending);
+                        _durationProcesses.Add(process, completion);
+                    }
+                }
+                registration = cancellation.Token.Register(() => ProcessSupport.Observe(Task.Run(() => ProcessSupport.Kill(process))));
                 try { await completion.WaitAsync(_timeout, _clock, cancellation.Token).ConfigureAwait(false); }
                 catch (TimeoutException exception)
                 {
-                    await ProcessSupport.JoinAsync(cancellation.CancelAsync(), _clock, Remaining(), "probe.duration_cancel", process.Id).ConfigureAwait(false);
-                    await ProcessSupport.ReapBoundedAsync(process, _clock, Remaining()).ConfigureAwait(false);
-                    await ProcessSupport.JoinAsync(completion, _clock, Remaining(), "probe.duration_timeout", process.Id).ConfigureAwait(false);
+                    await ProcessSupport.JoinAsync(cancellation.CancelAsync(), _clock, Remaining(), "probe.duration_cancel", pid).ConfigureAwait(false);
+                    await StopIfOwnerAsync().ConfigureAwait(false);
+                    await ProcessSupport.JoinAsync(completion, _clock, Remaining(), "probe.duration_timeout", pid).ConfigureAwait(false);
                     throw new InputProbeTimeoutException(CoreText.InputDurationTimedOut,
-                        stderr.IsCompletedSuccessfully ? stderr.Result : "", exception);
+                        stderr!.IsCompletedSuccessfully ? stderr.Result : "", exception);
                 }
                 cancellation.Token.ThrowIfCancellationRequested();
-                TimeSpan? duration = ParseDuration(await stderr.ConfigureAwait(false));
+                TimeSpan? duration = ParseDuration(await stderr!.ConfigureAwait(false));
                 lock (_sync)
                 {
                     _durationCache.Add(key, duration);
@@ -212,21 +232,8 @@ public sealed class InputProbe : IAsyncDisposable
             }
             finally
             {
-                Task joined = completion ?? Task.WhenAll(new[] { stdout, stderr }.OfType<Task>());
-                bool complete = false;
-                try
-                {
-                    bool reaped = await ProcessSupport.ReapBoundedAsync(process, _clock, Remaining()).ConfigureAwait(false);
-                    try { complete = await ProcessSupport.JoinAsync(joined, _clock, Remaining(), "probe.duration_pipes", process.Id).ConfigureAwait(false) && reaped; }
-                    catch { complete = reaped && joined.IsCompleted; }
-                }
-                finally
-                {
-                    registration.Dispose();
-                    lock (_sync) _durationProcesses.Remove(process);
-                    if (complete) process.Dispose();
-                    else ProcessSupport.DisposeAfter(process, joined);
-                }
+                registration.Dispose();
+                await StopIfOwnerAsync().ConfigureAwait(false);
             }
         }
         finally { _durationGate.Release(); }
@@ -275,9 +282,13 @@ public sealed class InputProbe : IAsyncDisposable
         var deadline = new CleanupDeadline(_clock, StopTimeout);
         Task cancellation = Task.Run(async () => await _lifetime.CancelAsync().ConfigureAwait(false));
         Task backend = Task.Run(async () => await _backend.DisposeAsync().ConfigureAwait(false));
-        Process[] processes;
-        lock (_sync) processes = _durationProcesses.ToArray();
-        Task[] reaps = processes.Select(process => ProcessSupport.ReapBoundedAsync(process, _clock, deadline.Remaining)).ToArray();
+        KeyValuePair<Process, Task>[] processes;
+        lock (_sync)
+        {
+            processes = _durationProcesses.ToArray();
+            _durationProcesses.Clear();
+        }
+        Task[] reaps = processes.Select(pair => StopDurationProcessAsync(pair.Key, pair.Value, deadline.Remaining)).ToArray();
         await JoinIgnoringFailureAsync(cancellation, deadline, "probe.cancel").ConfigureAwait(false);
         await JoinIgnoringFailureAsync(backend, deadline, "probe.backend_dispose").ConfigureAwait(false);
         await JoinIgnoringFailureAsync(Task.WhenAll(reaps), deadline, "probe.duration_reap").ConfigureAwait(false);
@@ -290,6 +301,28 @@ public sealed class InputProbe : IAsyncDisposable
         if (resources.IsCompleted) _lifetime.Dispose();
         else ProcessSupport.Observe(resources.ContinueWith(_ => _lifetime.Dispose(), CancellationToken.None,
             TaskContinuationOptions.None, TaskScheduler.Default));
+    }
+
+    private async Task StopDurationProcessAsync(Process process, Task completion, TimeSpan timeout)
+    {
+        var deadline = new CleanupDeadline(_clock, timeout);
+        int pid = process.Id;
+        Task kill = Task.Run(() => ProcessSupport.Kill(process));
+        bool complete = false;
+        try
+        {
+            if (await ProcessSupport.JoinAsync(kill, _clock, deadline.Remaining, "probe.duration_kill", pid).ConfigureAwait(false))
+            {
+                try { complete = await ProcessSupport.JoinAsync(completion, _clock, deadline.Remaining, "probe.duration_pipes", pid).ConfigureAwait(false); }
+                catch { complete = completion.IsCompleted; }
+            }
+        }
+        finally
+        {
+            // 終了・pipe読取とOS操作がすべて終わるまでProcessを破棄しない。
+            if (complete) process.Dispose();
+            else ProcessSupport.DisposeAfter(process, kill, completion);
+        }
     }
 
     private async Task ClearAfterGateAsync(SemaphoreSlim gate, Action clear)

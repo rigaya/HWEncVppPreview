@@ -149,8 +149,9 @@ public sealed class DurationTests
     {
         using var files = new TestFiles();
         var clock = new FakeTimeProvider();
-        await using var probe = new InputProbe(clock, configureStartInfo: info => { if (IsDuration(info)) HoldDuration(info, files); });
+        var probe = new InputProbe(clock, configureStartInfo: info => { if (IsDuration(info)) HoldDuration(info, files); });
         var vm = Create(files, clock, probe);
+        Exception? failure = null;
         try
         {
             await PrepareAsync(vm, clock);
@@ -161,7 +162,25 @@ public sealed class DurationTests
             Assert.False(vm.HasDuration);
             Assert.Null(vm.PreviewImage);
         }
-        finally { await vm.DisposeAsync(); }
+        catch (Exception exception)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            // 偽時計が進まない失敗時も、同じDisposeの再待機を実時間で打ち切る。
+            try
+            {
+                try { await vm.DisposeAsync().AsTask().WaitAsync(SafetyTimeout); }
+                finally { await probe.DisposeAsync().AsTask().WaitAsync(SafetyTimeout); }
+            }
+            catch (Exception cleanupFailure) when (failure != null)
+            {
+                // 後始末の失敗で本体の検証失敗を隠さず、診断情報として保持する。
+                failure.Data["DurationCleanupFailure"] = cleanupFailure;
+            }
+        }
     }
 
     [AvaloniaFact]
