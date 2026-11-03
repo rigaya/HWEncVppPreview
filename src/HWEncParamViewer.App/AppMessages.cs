@@ -6,6 +6,7 @@ namespace HWEncParamViewer.App;
 public static class AppMessages
 {
     private static string T(string japanese, string english) => UiLanguage.Current == "ja" ? japanese : english;
+    public static string HdrAsSdr => T("HDR (SDRとして表示)", "HDR (shown as SDR)");
     public static string OneShot => T("都度起動", "One-shot");
     public static string Server => T("常駐", "Server");
     public static string SaveSettingsFailed => T("設定を保存できませんでした", "Could not save settings");

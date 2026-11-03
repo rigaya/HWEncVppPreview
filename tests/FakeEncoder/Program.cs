@@ -44,6 +44,10 @@ internal static class Program
             {
                 await Console.Out.WriteLineAsync("  --timestamp-passthrough  入力原点付きの時刻を出力する。\n  --opencl-task-threads <int>  テストでは受理するだけで画像を変えない。");
             }
+            if (Environment.GetEnvironmentVariable("FAKE_ENCODER_COLOR_CAPABILITIES") == "1")
+            {
+                await Console.Out.WriteLineAsync("  --colormatrix <string>  入力の色行列を引き継ぐ。\n  --colorprim <string>  入力の原色を引き継ぐ。\n  --transfer <string>  入力の伝達特性を引き継ぐ。\n  --colorrange <string>  入力の色範囲を引き継ぐ。\n  --chromaloc <string>  入力の色差の位置を引き継ぐ。");
+            }
             return 0;
         }
         if (!args.Contains("--preview-server", StringComparer.Ordinal))
@@ -244,6 +248,18 @@ internal static class Program
             }
         }
         string sar = Value(args, "--fake-sar") ?? "1:1";
+        // 色変換のテストでは、画素とは独立に出力ヘッダの色情報を指定できる。
+        var colorTags = new List<string>();
+        foreach (var (option, tag) in new[]
+        {
+            ("--fake-colormatrix", "XCOLORMATRIX"), ("--fake-colorprim", "XCOLORPRIM"),
+            ("--fake-transfer", "XTRANSFER"), ("--fake-colorrange", "XCOLORRANGE"),
+            ("--fake-chromaloc", "XCHROMALOC")
+        })
+        {
+            if (Value(args, option) is string value) colorTags.Add(tag + "=" + (tag == "XCOLORRANGE" ? value.ToUpperInvariant() : value));
+        }
+        string colorExtensions = colorTags.Count == 0 ? "" : " " + string.Join(" ", colorTags);
         int hangAfter = Number(args, "--fake-hang-after", -1);
         int crashAt = Number(args, "--fake-crash-at", -1);
         int badControlAt = Number(args, "--fake-bad-control-at", -1);
@@ -276,7 +292,7 @@ internal static class Program
         {
             if (count == null || count > 0)
             {
-                await WriteLineAsync($"YUV4MPEG2 W{width} H{height} F{outputFps}:1 Ip A{sar} C420jpeg XTIMEBASE=1:{outputFps} XPID={Environment.ProcessId} XSEEK={seek.ToString(CultureInfo.InvariantCulture)}");
+                await WriteLineAsync($"YUV4MPEG2 W{width} H{height} F{outputFps}:1 Ip A{sar} C420jpeg XTIMEBASE=1:{outputFps} XPID={Environment.ProcessId} XSEEK={seek.ToString(CultureInfo.InvariantCulture)}{colorExtensions}");
             }
             double? firstTime = null;
             double? previousTimestamp = null;

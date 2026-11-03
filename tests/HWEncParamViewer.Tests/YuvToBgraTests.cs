@@ -79,7 +79,15 @@ public sealed class YuvToBgraTests(ITestOutputHelper output)
         frame.Data[9 + cw * ch - 1] = 90;
         frame.Data[9 + 2 * cw * ch - 1] = 240;
         byte[] result = YuvToBgra.Convert(frame);
-        Assert.Equal(new byte[] { 0, 0, 254, 255 }, result[^4..]);
+        // 420jpegの右下は横・縦とも末尾色差の3/4、422のleftは横の末尾そのものになる。
+        double fraction = chroma == Y4mChroma.C420 ? 0.75 * 0.75 : 1.0;
+        double cb = (90 - 128) * fraction, cr = (240 - 128) * fraction;
+        double yy = (81 - 16) * 255.0 / 219;
+        byte Quantize(double value) => (byte)Math.Clamp((int)Math.Round(value, MidpointRounding.AwayFromZero), 0, 255);
+        double c = 255.0 / 224;
+        Assert.Equal(new byte[] { Quantize(yy + 1.772 * c * cb),
+            Quantize(yy - 2 * 0.114 * 0.886 / 0.587 * c * cb - 2 * 0.299 * 0.701 / 0.587 * c * cr),
+            Quantize(yy + 1.402 * c * cr), 255 }, result[^4..]);
         Assert.Equal(new byte[] { 76, 76, 76, 255 }, result[..4]);
     }
 

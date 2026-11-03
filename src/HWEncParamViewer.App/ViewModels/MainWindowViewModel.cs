@@ -809,6 +809,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             IsBeforeBusy = false;
             _displayedFrame = null;
             _beforeDisplayedFrame = null;
+            RefreshColorInfo();
             ClearInterval();
             ClearBeforeInterval();
             _cache.Clear();

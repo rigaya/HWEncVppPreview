@@ -20,6 +20,7 @@ public sealed partial class MainWindowViewModel
             OnPropertyChanged(nameof(Language));
             foreach (var line in FilterLines) line.RefreshLanguage();
             RefreshFilterCatalog();
+            RefreshColorInfo();
         }
         // UIの完了を同期的に待たず、言語の変更元が別スレッドでも安全に反映する。
         if (Dispatcher.UIThread.CheckAccess()) Refresh();

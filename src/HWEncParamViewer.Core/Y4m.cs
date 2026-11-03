@@ -58,6 +58,19 @@ public sealed class Y4mHeader
     /// <summary>X で始まる拡張タグ。キーは先頭の X を含む名前 (例: "XTIMEBASE")、値は = の右側 (= が無ければ空文字)。</summary>
     public IReadOnlyDictionary<string, string> ExtTags { get; init; } = new Dictionary<string, string>();
 
+    /// <summary>出力の色範囲。未指定ならnull。原文の値は変換側で解釈する。</summary>
+    public string? ColorRange => Extension("XCOLORRANGE");
+    /// <summary>出力の色行列。未指定ならnull。</summary>
+    public string? ColorMatrix => Extension("XCOLORMATRIX");
+    /// <summary>出力の原色。未指定ならnull。</summary>
+    public string? ColorPrimaries => Extension("XCOLORPRIM");
+    /// <summary>出力の伝達特性。未指定ならnull。</summary>
+    public string? Transfer => Extension("XTRANSFER");
+    /// <summary>出力の色差の位置。未指定ならnull。</summary>
+    public string? ChromaLocation => Extension("XCHROMALOC");
+
+    private string? Extension(string name) => ExtTags.TryGetValue(name, out string? value) ? value : null;
+
     /// <summary>フレームレート (F が無い / 0 のときは 0)。</summary>
     public double Fps => FpsDen > 0 ? (double)FpsNum / FpsDen : 0.0;
 

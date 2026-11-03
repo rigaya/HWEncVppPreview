@@ -1,7 +1,8 @@
 ﻿namespace HWEncParamViewer.Core;
 
 /// <summary>helpで確認できたプレビュー用の追加オプション。</summary>
-public sealed record PreviewCapabilities(bool TimestampPassthrough = false, bool OpenClTaskThreads = false);
+public sealed record PreviewCapabilities(bool TimestampPassthrough = false, bool OpenClTaskThreads = false,
+    bool ColorMatrix = false, bool ColorPrimaries = false, bool Transfer = false, bool ColorRange = false, bool ChromaLocation = false);
 
 /// <summary>生のフレーム時計と入力先頭基準の時計との対応。</summary>
 public sealed record PreviewClockMap(double? InputOriginSeconds, double PhysicalSeekSeconds, bool TrustedAbsolute)

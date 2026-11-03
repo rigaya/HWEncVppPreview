@@ -436,6 +436,9 @@
           <TextBlock Classes="subtle" Text="│" />
           <TextBlock Classes="subtle" Text="{Binding StatusText}" />
         </StackPanel>
+        <TextBlock Grid.Column="1" x:Name="ColorInfoLabel" Classes="subtle" Margin="10,0" VerticalAlignment="Center"
+                   Text="{Binding ColorInfoText}" ToolTip.Tip="{Binding ColorInfoText}"
+                   TextTrimming="CharacterEllipsis" />
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
           <ComboBox x:Name="LanguageSelector" Classes="small" MinWidth="90"
                     SelectedIndex="{Binding Language, Converter={x:Static loc:LanguageIndexConverter.Instance}}"

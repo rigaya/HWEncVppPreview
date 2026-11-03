@@ -47,7 +47,9 @@ public sealed partial class MainWindowViewModel
         get => _isShowingBefore;
         set
         {
-            if (!SetProperty(ref _isShowingBefore, value && CompareMode == PreviewCompareMode.Single) || !_isShowingBefore) return;
+            if (!SetProperty(ref _isShowingBefore, value && CompareMode == PreviewCompareMode.Single)) return;
+            RefreshColorInfo();
+            if (!_isShowingBefore) return;
             // Spaceは遅延だけを解除し、すでに実行中の元画像は取り消さない。
             if (BeforeImage == null)
             {
@@ -60,7 +62,7 @@ public sealed partial class MainWindowViewModel
     public Bitmap? BeforeImage
     {
         get => _beforeImage;
-        set { var previous = _beforeImage; if (SetProperty(ref _beforeImage, value)) previous?.Dispose(); }
+        set { var previous = _beforeImage; if (SetProperty(ref _beforeImage, value)) { previous?.Dispose(); RefreshColorInfo(); } }
     }
     public bool IsBeforeBusy { get => _isBeforeBusy; set => SetProperty(ref _isBeforeBusy, value); }
     public double BeforeDisplayWidth { get => _beforeDisplayWidth; set => SetProperty(ref _beforeDisplayWidth, value); }
@@ -386,6 +388,7 @@ public sealed partial class MainWindowViewModel
 
     private void RecalculateDisplaySizes()
     {
+        RefreshColorInfo();
         if (_displayedFrame is { } after)
         {
             DisplayWidth = DisplayWidthFor(after.Header);

@@ -48,7 +48,12 @@ public static class CommandBuilder
     /// <summary>正常に取得したhelpの索引だけから、追加引数の対応を判定する。</summary>
     public static PreviewCapabilities CapabilitiesFromHelp(HelpIndex? help) => help == null ? new() : new(
         help.OptionNames.Contains("--timestamp-passthrough", StringComparer.Ordinal),
-        help.OptionNames.Contains("--opencl-task-threads", StringComparer.Ordinal));
+        help.OptionNames.Contains("--opencl-task-threads", StringComparer.Ordinal),
+        help.OptionNames.Contains("--colormatrix", StringComparer.Ordinal),
+        help.OptionNames.Contains("--colorprim", StringComparer.Ordinal),
+        help.OptionNames.Contains("--transfer", StringComparer.Ordinal),
+        help.OptionNames.Contains("--colorrange", StringComparer.Ordinal),
+        help.OptionNames.Contains("--chromaloc", StringComparer.Ordinal));
     public static PreviewPlan Plan(PreviewRequest req)
     {
         if (req.Fps <= 0) throw new ArgumentException(CoreText.FpsPositive, nameof(req));
@@ -82,6 +87,12 @@ public static class CommandBuilder
     {
         var plan = Plan(req);
         var args = new List<string>();
+        // 入力の色情報を既定で引き継ぎ、後続の利用者の明示指定は上書きしない。
+        if (req.Capabilities.ColorMatrix) args.AddRange(new[] { "--colormatrix", "auto" });
+        if (req.Capabilities.ColorPrimaries) args.AddRange(new[] { "--colorprim", "auto" });
+        if (req.Capabilities.Transfer) args.AddRange(new[] { "--transfer", "auto" });
+        if (req.Capabilities.ColorRange) args.AddRange(new[] { "--colorrange", "auto" });
+        if (req.Capabilities.ChromaLocation) args.AddRange(new[] { "--chromaloc", "auto" });
         args.AddRange(req.InputArgs);
         args.Add("-i");
         args.Add(req.InputFile);
