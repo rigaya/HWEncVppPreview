@@ -258,6 +258,63 @@ public sealed class ZoomMathTests
         Assert.Equal("50%", ZoomMath.Format(ZoomState.Fit, new(800, 600), new(1600, 900)));
     }
 
+    // ---- 高 DPI (OS の表示倍率 150% など。拡大率は物理画素で数える) ----
+
+    [Fact]
+    public void ActualSizeAt150PercentMapsOneImagePixelToOneDevicePixel()
+    {
+        var viewport = new Size(800, 600);
+        var content = new Size(1920, 1080);
+        var actual = ZoomMath.ActualSize(ZoomState.Fit, viewport, content, 1.5);
+        Assert.Equal(1.0, actual.Scale);
+        // DIP では 1/1.5 の大きさに描く = 物理画素では 1920x1080
+        var rect = ZoomMath.ContentRect(actual, viewport, content, 1.5);
+        Assert.Equal(1920, rect.Width * 1.5, 9);
+        Assert.Equal(1080, rect.Height * 1.5, 9);
+        Assert.Equal("100%", ZoomMath.Format(actual, viewport, content, 1.5));
+        Assert.Equal(1.0, ZoomMath.DeviceScale(actual, viewport, content, 1.5), 9);
+    }
+
+    [Fact]
+    public void TheFitPercentageCountsDevicePixels()
+    {
+        // 800 DIP の幅に 1600 を合わせると DIP では 50%、150% 表示の物理画素では 75%
+        Assert.Equal("75%", ZoomMath.Format(ZoomState.Fit, new(800, 600), new(1600, 900), 1.5));
+    }
+
+    [Fact]
+    public void ZoomAndPanAt150PercentKeepTheDeviceScaleAndTheAnchor()
+    {
+        var viewport = new Size(1000, 700);
+        var content = new Size(1600, 900);
+        var cursor = new Point(320, 240);
+        var state = new ZoomState(false, 2, new(500, 350));
+        var zoomed = ZoomMath.ZoomAt(state, viewport, content, cursor, 1.25, 1.5);
+        Assert.Equal(2.5, zoomed.Scale, 9);
+        // カーソルの下の点は動かない
+        var before = ZoomMath.ContentRect(state, viewport, content, 1.5);
+        var after = ZoomMath.ContentRect(zoomed, viewport, content, 1.5);
+        double beforeScale = ZoomMath.EffectiveScale(state, viewport, content, 1.5);
+        double afterScale = ZoomMath.EffectiveScale(zoomed, viewport, content, 1.5);
+        AssertPoint(new Point((cursor.X - before.X) / beforeScale, (cursor.Y - before.Y) / beforeScale),
+            new Point((cursor.X - after.X) / afterScale, (cursor.Y - after.Y) / afterScale));
+
+        var moved = ZoomMath.Pan(zoomed, viewport, content, new Vector(30, -10), 1.5);
+        Assert.Equal(2.5, moved.Scale, 9);
+        var movedRect = ZoomMath.ContentRect(moved, viewport, content, 1.5);
+        AssertPoint(new Point(after.X + 30, after.Y - 10), movedRect.Position);
+    }
+
+    [Fact]
+    public void SnappingPutsTheOriginOnADevicePixelBoundary()
+    {
+        var snapped = ZoomMath.SnapToDevicePixels(new Rect(10.3, 20.45, 100, 50), 1.5);
+        Assert.Equal(0, snapped.X * 1.5 - Math.Round(snapped.X * 1.5), 9);
+        Assert.Equal(0, snapped.Y * 1.5 - Math.Round(snapped.Y * 1.5), 9);
+        Assert.True(Math.Abs(snapped.X - 10.3) <= 0.5 / 1.5 && Math.Abs(snapped.Y - 20.45) <= 0.5 / 1.5);
+        Assert.Equal(new Size(100, 50), snapped.Size);
+    }
+
     private static Point Project(Point imagePoint, ZoomState state, Size viewport, Size content)
     {
         var rect = ZoomMath.ContentRect(state, viewport, content);

@@ -70,11 +70,16 @@ public sealed class ZoomPanViewer : Control
     {
         base.OnAttachedToVisualTree(e);
         Localizer.Instance.PropertyChanged += LanguageTextChanged;
+        _scalingSource = TopLevel.GetTopLevel(this);
+        if (_scalingSource != null) _scalingSource.ScalingChanged += OnScalingChanged;
+        UpdateZoomText();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         Localizer.Instance.PropertyChanged -= LanguageTextChanged;
+        if (_scalingSource != null) _scalingSource.ScalingChanged -= OnScalingChanged;
+        _scalingSource = null;
         base.OnDetachedFromVisualTree(e);
     }
 
@@ -107,7 +112,20 @@ public sealed class ZoomPanViewer : Control
     public void ZoomToFit() => Zoom = ZoomState.Fit;
 
     /// <summary>等倍にする。</summary>
-    public void ZoomToActualSize() => Zoom = ZoomMath.ActualSize(Zoom, Bounds.Size, ContentSize);
+    public void ZoomToActualSize() => Zoom = ZoomMath.ActualSize(Zoom, Bounds.Size, ContentSize, PixelsPerDip);
+
+    /// <summary>OS の表示倍率 (150% なら 1.5)。拡大率はこれで割って DIP に直す (設計書 18.3)。</summary>
+    private double PixelsPerDip => TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+    private TopLevel? _scalingSource;
+
+    // 表示倍率の違うモニターへ移ったとき。拡大率は物理画素で持っているので、そのまま描き直す
+    private void OnScalingChanged(object? sender, EventArgs e)
+    {
+        UpdateZoomText();
+        InvalidateVisual();
+    }
+
+    private void UpdateZoomText() => ZoomText = ZoomMath.Format(Zoom, Bounds.Size, ContentSize, PixelsPerDip);
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
@@ -115,7 +133,7 @@ public sealed class ZoomPanViewer : Control
         if (change.Property == ZoomProperty || change.Property == ContentWidthProperty
             || change.Property == ContentHeightProperty || change.Property == BoundsProperty)
         {
-            ZoomText = ZoomMath.Format(Zoom, Bounds.Size, ContentSize);
+            UpdateZoomText();
         }
     }
 
@@ -123,8 +141,9 @@ public sealed class ZoomPanViewer : Control
     {
         var viewport = Bounds.Size;
         if (Background != null) context.FillRectangle(Background, new Rect(viewport));
-        var rect = ZoomMath.ContentRect(Zoom, viewport, ContentSize);
-        double scale = ZoomMath.EffectiveScale(Zoom, viewport, ContentSize);
+        double ppd = PixelsPerDip;
+        var rect = ZoomMath.SnapToDevicePixels(ZoomMath.ContentRect(Zoom, viewport, ContentSize, ppd), ppd);
+        double scale = ZoomMath.DeviceScale(Zoom, viewport, ContentSize, ppd);
         // 手動で等倍以上に拡大したときは画素をそのまま見せる (nearest)。
         // ウィンドウに合わせる表示は、倍率が 100% を超えても高品質に補間する (中途半端な倍率の nearest はムラになるため)
         var mode = !Zoom.IsFit && scale >= 1.0 ? BitmapInterpolationMode.None : BitmapInterpolationMode.HighQuality;
@@ -182,7 +201,7 @@ public sealed class ZoomPanViewer : Control
     private bool IsOnSplitLine(Point p)
     {
         if (!IsSplit) return false;
-        var rect = ZoomMath.ContentRect(Zoom, Bounds.Size, ContentSize);
+        var rect = ZoomMath.ContentRect(Zoom, Bounds.Size, ContentSize, PixelsPerDip);
         double splitX = rect.X + rect.Width * Math.Clamp(SplitPosition, 0, 1);
         return Math.Abs(p.X - splitX) <= SplitGrip;
     }
@@ -195,7 +214,7 @@ public sealed class ZoomPanViewer : Control
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             double factor = e.Delta.Y > 0 ? ZoomMath.WheelStep : 1.0 / ZoomMath.WheelStep;
-            Zoom = ZoomMath.ZoomAt(Zoom, Bounds.Size, ContentSize, e.GetPosition(this), factor);
+            Zoom = ZoomMath.ZoomAt(Zoom, Bounds.Size, ContentSize, e.GetPosition(this), factor, PixelsPerDip);
             return;
         }
         // ホイールはフレーム移動 (設計書 19.3)。下 (手前) へ回すと次のフレーム。
@@ -236,12 +255,12 @@ public sealed class ZoomPanViewer : Control
         switch (_drag)
         {
             case DragKind.Pan:
-                Zoom = ZoomMath.Pan(Zoom, Bounds.Size, ContentSize, p - _lastPointer);
+                Zoom = ZoomMath.Pan(Zoom, Bounds.Size, ContentSize, p - _lastPointer, PixelsPerDip);
                 _lastPointer = p;
                 e.Handled = true;
                 break;
             case DragKind.Split:
-                var rect = ZoomMath.ContentRect(Zoom, Bounds.Size, ContentSize);
+                var rect = ZoomMath.ContentRect(Zoom, Bounds.Size, ContentSize, PixelsPerDip);
                 if (rect.Width > 0) SplitPosition = Math.Clamp((p.X - rect.X) / rect.Width, 0, 1);
                 e.Handled = true;
                 break;
