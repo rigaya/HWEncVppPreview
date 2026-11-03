@@ -4,7 +4,7 @@ using HWEncParamViewer.Core;
 
 namespace HWEncParamViewer.App.ViewModels;
 
-public enum FilterParameterKind { Slider, Number, NumberOrChoice, Choice, Bool, Path, Text }
+public enum FilterParameterKind { Slider, Number, NumberOrChoice, Choice, Bool, Path, Text, FromTo }
 
 /// <summary>
 /// 語と数値の両方を取る欄 (<c>int|auto|off</c> など) の、語の1つ。語ごとのボタンと「数値」のボタンで、どれか1つを選ぶ (設計書 23.3)。
@@ -40,7 +40,8 @@ public sealed class FilterParameterViewModel : ViewModelBase
         Maximum = ParseNumber(schema.Range?.Maximum);
         string[] types = schema.Type?.Split('|') ?? [];
         bool numeric = types.Any(type => type is "int" or "float");
-        Kind = schema.IsNameOnly || schema.IsStructured || schema.IsDerivedDefault ? FilterParameterKind.Text
+        Kind = !schema.IsNameOnly && schema.IsFromTo && schema.Values.Count > 0 ? FilterParameterKind.FromTo
+            : schema.IsNameOnly || schema.IsStructured || schema.IsDerivedDefault ? FilterParameterKind.Text
             : types.Contains("bool") ? types.Length == 1 ? FilterParameterKind.Bool : FilterParameterKind.Choice
             : numeric && types.Any(type => type is not ("int" or "float")) ? FilterParameterKind.NumberOrChoice
             : numeric && Minimum.HasValue && Maximum.HasValue ? FilterParameterKind.Slider
@@ -56,8 +57,11 @@ public sealed class FilterParameterViewModel : ViewModelBase
         ResetCommand = new RelayCommand(() =>
         {
             _numberRequested = false;
+            _hasPendingFromTo = false;
+            _pendingFrom = _pendingTo = null;
             ValueText = null;
             RaiseChoiceState();
+            RaiseFromToState();
         });
         Words = Kind == FilterParameterKind.NumberOrChoice
             ? Array.AsReadOnly(schema.Values.Select(word => new ChoiceOptionViewModel(word, word == schema.DefaultValue, () =>
@@ -79,6 +83,70 @@ public sealed class FilterParameterViewModel : ViewModelBase
 
     // 「数値」を押したが、まだ数値を書いていない状態。行は変えずに、数値の欄だけを使えるようにする
     private bool _numberRequested;
+    private bool _hasPendingFromTo;
+    private string? _pendingFrom, _pendingTo;
+    private bool _conditionSatisfied = true, _isInactive;
+
+    /// <summary>明示値があるが、現在の条件では効かない項目。</summary>
+    public bool IsInactive { get => _isInactive; private set => SetProperty(ref _isInactive, value); }
+    internal bool IsConditionSatisfied => _conditionSatisfied;
+    internal HelpCondition? Condition => _schema.Condition;
+    internal void UpdateCondition(bool satisfied)
+    {
+        _conditionSatisfied = satisfied;
+        IsInactive = !satisfied && IsSet;
+    }
+
+    /// <summary>構造値の変換元と変換先の候補。両側が揃うまで行へ書かない。</summary>
+    public IReadOnlyList<string> FromChoices => Kind == FilterParameterKind.FromTo ? _schema.Values : Array.Empty<string>();
+    public IReadOnlyList<string> ToChoices => FromChoices;
+    public string? FromValue
+    {
+        get => _hasPendingFromTo ? _pendingFrom : ReadFromTo().From;
+        set => SetFromTo(true, value);
+    }
+    public string? ToValue
+    {
+        get => _hasPendingFromTo ? _pendingTo : ReadFromTo().To;
+        set => SetFromTo(false, value);
+    }
+
+    private (string? From, string? To) ReadFromTo()
+    {
+        string[] parts = (_valueText ?? _schema.DefaultValue)?.Split(':') ?? [];
+        return parts.Length == 2 ? (parts[0], parts[1]) : (null, null);
+    }
+
+    private void SetFromTo(bool from, string? value)
+    {
+        // 初期化時のnull通知で既存値を消さず、削除はリセットで行う。
+        if (Kind != FilterParameterKind.FromTo || value is null || !FromChoices.Contains(value)) return;
+        if (value == (from ? FromValue : ToValue)) return;
+        _pendingFrom = FromValue;
+        _pendingTo = ToValue;
+        if (from) _pendingFrom = value;
+        else _pendingTo = value;
+        _hasPendingFromTo = true;
+        RaiseFromToState();
+        if (_pendingFrom is null || _pendingTo is null) return;
+        string pair = _pendingFrom + ":" + _pendingTo;
+        ValueText = pair;
+        if (_valueText != pair)
+        {
+            // 書き戻せなかった場合は、行のテキストを正として選択を戻す。
+            _hasPendingFromTo = false;
+            _pendingFrom = _pendingTo = null;
+            RaiseFromToState();
+        }
+    }
+
+    private void RaiseFromToState()
+    {
+        if (Kind != FilterParameterKind.FromTo) return;
+        OnPropertyChanged(nameof(FromValue));
+        OnPropertyChanged(nameof(ToValue));
+    }
+
 
     /// <summary>NumberOrChoice の語の選択肢 (help の values:)。それ以外の種類では空。</summary>
     public IReadOnlyList<ChoiceOptionViewModel> Words { get; }
@@ -179,6 +247,9 @@ public sealed class FilterParameterViewModel : ViewModelBase
         ValidationMessage = null;
         if (_valueText == value) return;
         _valueText = value;
+        _hasPendingFromTo = false;
+        _pendingFrom = _pendingTo = null;
+        RaiseFromToState();
         OnPropertyChanged(nameof(ValueText));
         OnPropertyChanged(nameof(IsSet));
         OnPropertyChanged(nameof(NumberValue));

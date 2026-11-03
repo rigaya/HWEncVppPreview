@@ -101,6 +101,9 @@ CaptureCompletion("light_completion_value", ThemeVariant.Light, "--vpp-kfm mode=
 // V8: パラメータのフォーム (設計書 23.2)
 CaptureForm("dark_form", ThemeVariant.Dark, ["--vpp-nlmeans sigma=0.01,h=0.08", "--vpp-kfm mode=24", "--vpp-edgelevel"], 0);
 CaptureForm("light_form_choice", ThemeVariant.Light, ["--vpp-nlmeans sigma=0.01", "--vpp-kfm mode=24,thswitch=0.6"], 1);
+CaptureForm("dark_form_main", ThemeVariant.Dark, ["--vpp-kfm mode=24,ucf=true,is120=true"], 0);
+CaptureForm("dark_form_when_resize", ThemeVariant.Dark, ["--vpp-resize algo=fsr1,b=0.3"], 0);
+CaptureForm("dark_form_fromto", ThemeVariant.Dark, ["--vpp-colorspace matrix=bt709:smpte170m,hdr2sdr=hable"], 0);
 CaptureForm("dark_form_empty", ThemeVariant.Dark, [], -1);
 CaptureForm("dark_form_add", ThemeVariant.Dark, ["--vpp-nlmeans"], 0, openAdd: true);
 CaptureForm("dark_form_textmode", ThemeVariant.Dark, ["--vpp-nlmeans sigma=0.01,h=0.08", "--vpp-unknown a=1"], 1, textMode: true);
@@ -171,6 +174,8 @@ void CaptureCompletion(string name, ThemeVariant theme, string text, bool catego
 
 static string HelpDataPath(string file)
 {
+    // 実エンコーダの help で撮るときは UISNAPSHOT_HELP にそのファイルを指定する
+    if (Environment.GetEnvironmentVariable("UISNAPSHOT_HELP") is { Length: > 0 } overridePath) return overridePath;
     var directory = new DirectoryInfo(AppContext.BaseDirectory);
     while (directory != null && !Directory.Exists(Path.Combine(directory.FullName, "tests", "Data", "help"))) directory = directory.Parent;
     return Path.Combine(directory?.FullName ?? throw new DirectoryNotFoundException("tests/Data/help"), "tests", "Data", "help", file);

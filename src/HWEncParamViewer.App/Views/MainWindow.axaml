@@ -10,6 +10,103 @@
         Width="1440" Height="900" MinWidth="960" MinHeight="600"
         WindowStartupLocation="CenterScreen">
 
+  <Window.Resources>
+    <!-- パラメータの欄1つ分。よく使うものとその他の2つの一覧で使う -->
+    <DataTemplate x:Key="ParameterTemplate" x:DataType="vm:FilterParameterViewModel">
+      <Grid ColumnDefinitions="128,*,Auto" RowDefinitions="Auto,Auto,Auto" Margin="0,3">
+        <TextBlock Grid.Column="0" Classes="paramName" Classes.set="{Binding IsSet}" Text="{Binding Name}"
+                   ToolTip.Tip="{Binding Description}" TextTrimming="CharacterEllipsis" />
+
+        <!-- 欄の種類は Kind で切り替える (23.3) -->
+        <Panel Grid.Column="1">
+          <Grid ColumnDefinitions="*,88"
+                IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Slider}}">
+            <!-- 値は ViewModel から一方向。利用者の操作だけを code-behind で書き戻す (初期化時の補正で行を書き換えないため) -->
+            <Slider Grid.Column="0" Classes="param" Minimum="{Binding Minimum, FallbackValue=0}"
+                    Maximum="{Binding Maximum, FallbackValue=1}" SmallChange="{Binding Step}"
+                    LargeChange="{Binding Step}" TickFrequency="{Binding Step}" IsSnapToTickEnabled="True"
+                    Value="{Binding NumberValue, Mode=OneWay}" />
+            <TextBox Grid.Column="1" Classes="mono paramValue number" Margin="6,0,0,0"
+                     Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}" />
+          </Grid>
+          <TextBox Classes="mono paramValue number" Width="140" HorizontalAlignment="Left"
+                   Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}"
+                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Number}}" />
+          <!--
+            語と数値の両方を取るもの (int|auto|off など): 語ごとのボタンと「数値」のボタンから1つを選ぶ。
+            数値の欄は「数値」を選んでいるときだけ使える (語と数値を同時に指定できるように見せない)
+          -->
+          <StackPanel Orientation="Horizontal" Spacing="6"
+                      IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.NumberOrChoice}}">
+            <Border Classes="segGroup">
+              <StackPanel Orientation="Horizontal">
+                <ItemsControl ItemsSource="{Binding Words}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <StackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ChoiceOptionViewModel">
+                      <Button Classes="seg" Classes.active="{Binding IsSelected}" Content="{Binding Text}"
+                              Command="{Binding SelectCommand}" />
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Button Classes="seg" Classes.active="{Binding IsNumberSelected}" Content="{Binding Text.Number, Source={x:Static loc:Localizer.Instance}}"
+                        Command="{Binding SelectNumberCommand}" Click="NumberChoice_Click" />
+              </StackPanel>
+            </Border>
+            <TextBox Classes="mono paramValue number numberChoice" Width="110"
+                     Text="{Binding NumberText}" PlaceholderText="{Binding NumberPlaceholder}"
+                     IsEnabled="{Binding IsNumberSelected}" LostFocus="NumberChoice_LostFocus" />
+          </StackPanel>
+          <ComboBox Classes="param" MinWidth="180" ItemsSource="{Binding Choices}" SelectedItem="{Binding ChoiceValue}"
+                    IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Choice}}" />
+          <StackPanel Orientation="Horizontal" Spacing="6"
+                      IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.FromTo}}">
+            <ComboBox Classes="param" MinWidth="120" ItemsSource="{Binding FromChoices}" SelectedItem="{Binding FromValue}" />
+            <TextBlock Classes="subtle" Text="→" VerticalAlignment="Center" />
+            <ComboBox Classes="param" MinWidth="120" ItemsSource="{Binding ToChoices}" SelectedItem="{Binding ToValue}" />
+          </StackPanel>
+          <ToggleSwitch Classes="param" IsChecked="{Binding BoolValue}" OnContent="true" OffContent="false"
+                        IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Bool}}" />
+          <Grid ColumnDefinitions="*,Auto"
+                IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Path}}">
+            <TextBox Grid.Column="0" Classes="mono paramValue" Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}" />
+            <Button Grid.Column="1" Classes="icon" Content="…" Margin="4,0,0,0" Click="ParameterBrowse_Click"
+                    ToolTip.Tip="{Binding Text.BrowseFile, Source={x:Static loc:Localizer.Instance}}" />
+          </Grid>
+          <TextBox Classes="mono paramValue" Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}"
+                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Text}}" />
+        </Panel>
+
+        <!-- 書かれていないときも場所は空けておく (出たり消えたりで欄の幅が変わらないように) -->
+        <Button Grid.Column="2" Classes="icon flat reset" Content="↺" Margin="4,0,0,0" Command="{Binding ResetCommand}"
+                IsEnabled="{Binding IsSet}" ToolTip.Tip="{Binding Text.ResetHint, Source={x:Static loc:Localizer.Instance}}" />
+
+        <!-- 既定値と説明 -->
+        <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" ColumnDefinitions="Auto,*" Margin="0,1,0,0">
+          <TextBlock Grid.Column="0" Classes="paramDesc" Margin="0,0,10,0"
+                     IsVisible="{Binding DefaultText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <TextBlock.Text>
+              <MultiBinding StringFormat="{}{0} {1}">
+                <Binding Path="Text.DefaultLabel" Source="{x:Static loc:Localizer.Instance}" />
+                <Binding Path="DefaultText" />
+              </MultiBinding>
+            </TextBlock.Text>
+          </TextBlock>
+          <TextBlock Grid.Column="1" Classes="paramDesc" Text="{Binding Description}" ToolTip.Tip="{Binding Description}" />
+        </Grid>
+        <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Classes="paramError" Text="{Binding ValidationMessage}"
+                   IsVisible="{Binding ValidationMessage, Converter={x:Static ObjectConverters.IsNotNull}}" />
+        <!-- 効く条件 (help の when:) を満たさないのに行に書かれているもの -->
+        <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Classes="paramError" Text="{Binding Text.InactiveParameter, Source={x:Static loc:Localizer.Instance}}"
+                   IsVisible="{Binding IsInactive}" />
+      </Grid>
+    </DataTemplate>
+  </Window.Resources>
+
   <Window.KeyBindings>
     <KeyBinding Gesture="F5" Command="{Binding RefreshCommand}" />
     <KeyBinding Gesture="Ctrl+S" Command="{Binding SaveFiltersCommand}" />
@@ -287,94 +384,25 @@
                   </TextBlock.IsVisible>
                 </TextBlock>
 
-                <ItemsControl ItemsSource="{Binding Parameters}" IsVisible="{Binding IsFormAvailable}">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:FilterParameterViewModel">
-                      <Grid ColumnDefinitions="128,*,Auto" RowDefinitions="Auto,Auto,Auto" Margin="0,3">
-                        <TextBlock Grid.Column="0" Classes="paramName" Classes.set="{Binding IsSet}" Text="{Binding Name}"
-                                   ToolTip.Tip="{Binding Description}" TextTrimming="CharacterEllipsis" />
-
-                        <!-- 欄の種類は Kind で切り替える (23.3) -->
-                        <Panel Grid.Column="1">
-                          <Grid ColumnDefinitions="*,88"
-                                IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Slider}}">
-                            <!-- 値は ViewModel から一方向。利用者の操作だけを code-behind で書き戻す (初期化時の補正で行を書き換えないため) -->
-                            <Slider Grid.Column="0" Classes="param" Minimum="{Binding Minimum, FallbackValue=0}"
-                                    Maximum="{Binding Maximum, FallbackValue=1}" SmallChange="{Binding Step}"
-                                    LargeChange="{Binding Step}" TickFrequency="{Binding Step}" IsSnapToTickEnabled="True"
-                                    Value="{Binding NumberValue, Mode=OneWay}" />
-                            <TextBox Grid.Column="1" Classes="mono paramValue number" Margin="6,0,0,0"
-                                     Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}" />
-                          </Grid>
-                          <TextBox Classes="mono paramValue number" Width="140" HorizontalAlignment="Left"
-                                   Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}"
-                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Number}}" />
-                          <!--
-                            語と数値の両方を取るもの (int|auto|off など): 語ごとのボタンと「数値」のボタンから1つを選ぶ。
-                            数値の欄は「数値」を選んでいるときだけ使える (語と数値を同時に指定できるように見せない)
-                          -->
-                          <StackPanel Orientation="Horizontal" Spacing="6"
-                                      IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.NumberOrChoice}}">
-                            <Border Classes="segGroup">
-                              <StackPanel Orientation="Horizontal">
-                                <ItemsControl ItemsSource="{Binding Words}">
-                                  <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                      <StackPanel Orientation="Horizontal" />
-                                    </ItemsPanelTemplate>
-                                  </ItemsControl.ItemsPanel>
-                                  <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:ChoiceOptionViewModel">
-                                      <Button Classes="seg" Classes.active="{Binding IsSelected}" Content="{Binding Text}"
-                                              Command="{Binding SelectCommand}" />
-                                    </DataTemplate>
-                                  </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                                <Button Classes="seg" Classes.active="{Binding IsNumberSelected}" Content="{Binding Text.Number, Source={x:Static loc:Localizer.Instance}}"
-                                        Command="{Binding SelectNumberCommand}" Click="NumberChoice_Click" />
-                              </StackPanel>
-                            </Border>
-                            <TextBox Classes="mono paramValue number numberChoice" Width="110"
-                                     Text="{Binding NumberText}" PlaceholderText="{Binding NumberPlaceholder}"
-                                     IsEnabled="{Binding IsNumberSelected}" LostFocus="NumberChoice_LostFocus" />
-                          </StackPanel>
-                          <ComboBox Classes="param" MinWidth="180" ItemsSource="{Binding Choices}" SelectedItem="{Binding ChoiceValue}"
-                                    IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Choice}}" />
-                          <ToggleSwitch Classes="param" IsChecked="{Binding BoolValue}" OnContent="true" OffContent="false"
-                                        IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Bool}}" />
-                          <Grid ColumnDefinitions="*,Auto"
-                                IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Path}}">
-                            <TextBox Grid.Column="0" Classes="mono paramValue" Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}" />
-                            <Button Grid.Column="1" Classes="icon" Content="…" Margin="4,0,0,0" Click="ParameterBrowse_Click"
-                                    ToolTip.Tip="{Binding Text.BrowseFile, Source={x:Static loc:Localizer.Instance}}" />
-                          </Grid>
-                          <TextBox Classes="mono paramValue" Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}"
-                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Text}}" />
-                        </Panel>
-
-                        <!-- 書かれていないときも場所は空けておく (出たり消えたりで欄の幅が変わらないように) -->
-                        <Button Grid.Column="2" Classes="icon flat reset" Content="↺" Margin="4,0,0,0" Command="{Binding ResetCommand}"
-                                IsEnabled="{Binding IsSet}" ToolTip.Tip="{Binding Text.ResetHint, Source={x:Static loc:Localizer.Instance}}" />
-
-                        <!-- 既定値と説明 -->
-                        <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" ColumnDefinitions="Auto,*" Margin="0,1,0,0">
-                          <TextBlock Grid.Column="0" Classes="paramDesc" Margin="0,0,10,0"
-                                     IsVisible="{Binding DefaultText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                            <TextBlock.Text>
-                              <MultiBinding StringFormat="{}{0} {1}">
-                                <Binding Path="Text.DefaultLabel" Source="{x:Static loc:Localizer.Instance}" />
-                                <Binding Path="DefaultText" />
-                              </MultiBinding>
-                            </TextBlock.Text>
-                          </TextBlock>
-                          <TextBlock Grid.Column="1" Classes="paramDesc" Text="{Binding Description}" ToolTip.Tip="{Binding Description}" />
-                        </Grid>
-                        <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Classes="paramError" Text="{Binding ValidationMessage}"
-                                   IsVisible="{Binding ValidationMessage, Converter={x:Static ObjectConverters.IsNotNull}}" />
-                      </Grid>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                <!-- よく使うパラメータ (help の main:) と、値が書かれているもの (設計書 23.14) -->
+                <ItemsControl ItemsSource="{Binding MainParameters}" ItemTemplate="{StaticResource ParameterTemplate}"
+                              IsVisible="{Binding IsFormAvailable}" />
+                <!-- 残りは折りたたむ。main: のないオプションでは空になるので出さない -->
+                <Expander Classes="otherParams" Margin="0,6,0,0" HorizontalAlignment="Stretch">
+                  <Expander.IsVisible>
+                    <MultiBinding Converter="{x:Static BoolConverters.And}">
+                      <Binding Path="IsFormAvailable" />
+                      <Binding Path="!!OtherParameterCount" />
+                    </MultiBinding>
+                  </Expander.IsVisible>
+                  <Expander.Header>
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock Text="{Binding Text.OtherParameters, Source={x:Static loc:Localizer.Instance}}" />
+                      <TextBlock Text="{Binding OtherParameterCount, StringFormat=' ({0})'}" />
+                    </StackPanel>
+                  </Expander.Header>
+                  <ItemsControl ItemsSource="{Binding OtherParameters}" ItemTemplate="{StaticResource ParameterTemplate}" />
+                </Expander>
 
                 <!-- help の該当部分 (今までのヘルプ欄) -->
                 <Expander Header="{Binding Text.FullHelp, Source={x:Static loc:Localizer.Instance}}" Margin="0,8,0,0" HorizontalAlignment="Stretch">

@@ -6,6 +6,12 @@ namespace HWEncParamViewer.Core;
 /// <summary>数値範囲の両端。省略された端はnull。表記の精度を保つため文字列で保持する。</summary>
 public sealed record HelpValueRange(string? Minimum, string? Maximum);
 
+/// <summary>同じオプション内のパラメータに対する条件の種類。</summary>
+public enum HelpConditionKind { Present, Equals, NotEquals }
+
+/// <summary>パラメータの表示条件。候補の末尾の*は前方一致を表す。</summary>
+public sealed record HelpCondition(string Parameter, HelpConditionKind Kind, IReadOnlyList<string> Values);
+
 /// <summary>値の補完情報。書式外では名前以外を使わない。</summary>
 public record HelpValueSchema
 {
@@ -14,6 +20,8 @@ public record HelpValueSchema
     public string Description { get; init; } = "";
     public string? Type { get; init; }
     public bool IsStructured { get; init; }
+    public bool IsFromTo { get; init; }
+    public HelpCondition? Condition { get; init; }
     /// <summary>依存する既定値ではnull。自動入力せず説明を参照する。</summary>
     public string? DefaultValue { get; init; }
     public bool IsDerivedDefault { get; init; }
@@ -26,6 +34,8 @@ public sealed record HelpOptionSchema : HelpValueSchema
 {
     public string? Category { get; init; }
     public IReadOnlyList<HelpValueSchema> Parameters { get; init; } = Array.Empty<HelpValueSchema>();
+    /// <summary>よく使うパラメータの名前。helpに書かれた表示順を保持する。</summary>
+    public IReadOnlyList<string> MainParameters { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>
@@ -107,6 +117,7 @@ public sealed class HelpSchema
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (string line in lines.Skip(1))
         {
+            if (IsMainMetadata(line) || IsWhenMetadata(line)) continue;
             if (line.StartsWith("  [", StringComparison.Ordinal) || (line.Length > 0 && !char.IsWhiteSpace(line[0]))) yield break;
             int indent = line.Length - line.TrimStart(' ').Length;
             if (indent is < 1 or > 7 || !Regex.IsMatch(line, @"^ {1,7}[a-z0-9_][a-z0-9_-]*\s*=", RegexOptions.CultureInvariant)) continue;
@@ -123,6 +134,41 @@ public sealed class HelpSchema
         public List<string> Continuation { get; } = [];
         public List<string>? Values { get; set; }
         public bool Invalid { get; set; }
+        public string? ConditionLine { get; set; }
+        public int ConditionIndent { get; set; }
+        public int? ValuesIndent { get; set; }
+        public bool InvalidCondition { get; set; }
+    }
+
+    private static bool IsWhenMetadata(string line) => line.TrimStart().StartsWith("when:", StringComparison.Ordinal);
+
+    private static bool IsMainMetadata(string line) => line.TrimStart().StartsWith("main:", StringComparison.Ordinal);
+
+    private static IReadOnlyList<string> ReadMainParameters(string[] lines, IReadOnlyList<HelpValueSchema> parameters)
+    {
+        int mainLine = -1, paramsLine = -1;
+        for (int i = 1; i < lines.Length; i++)
+        {
+            string line = lines[i];
+            if (IsWhenMetadata(line)) continue;
+            if (!IsMainMetadata(line)
+                && (line.StartsWith("  [", StringComparison.Ordinal) || (line.Length > 0 && !char.IsWhiteSpace(line[0])))) break;
+            if (line == "    params" && paramsLine < 0) paramsLine = i;
+            if (!IsMainMetadata(line)) continue;
+            // 複数行や誤った配置を推測で補わず、印だけを無効にする。
+            if (mainLine >= 0) return Array.Empty<string>();
+            mainLine = i;
+        }
+        if (mainLine < 0 || paramsLine <= mainLine) return Array.Empty<string>();
+        if (lines.Skip(mainLine + 1).Take(paramsLine - mainLine - 1).Any(line => !string.IsNullOrWhiteSpace(line) && !IsWhenMetadata(line)))
+            return Array.Empty<string>();
+        var match = Regex.Match(lines[mainLine], @"^    main: (?<names>[a-z0-9_][a-z0-9_-]*(?:, *[a-z0-9_][a-z0-9_-]*)*)$", RegexOptions.CultureInvariant);
+        if (!match.Success) return Array.Empty<string>();
+        string[] names = match.Groups["names"].Value.Split(',').Select(name => name.Trim()).ToArray();
+        if (names.Distinct(StringComparer.Ordinal).Count() != names.Length
+            || names.Any(name => !parameters.Any(parameter => parameter.Name == name)))
+            return Array.Empty<string>();
+        return Array.AsReadOnly(names);
     }
 
     private static HelpOptionSchema ReadOption(HelpOptionSchema fallback, string category, string[] lines)
@@ -151,6 +197,19 @@ public sealed class HelpSchema
         bool inParameters = false;
         foreach (string line in lines.Skip(1))
         {
+            // 不正な印も説明文や型の検証へ混ぜず、既存の補完情報を維持する。
+            if (IsMainMetadata(line)) continue;
+            // 誤った字下げや重複も条件だけを無効にし、型や説明は維持する。
+            if (IsWhenMetadata(line))
+            {
+                if (inParameters && current is not null)
+                {
+                    if (current.ConditionLine is not null) current.InvalidCondition = true;
+                    current.ConditionLine = line;
+                    current.ConditionIndent = line.Length - line.TrimStart(' ').Length;
+                }
+                continue;
+            }
             if (line.StartsWith("  [", StringComparison.Ordinal) || (line.Length > 0 && !char.IsWhiteSpace(line[0]))) break;
             if (string.IsNullOrWhiteSpace(line)) continue;
             if (line == "    params") { inParameters = true; current = null; continue; }
@@ -172,23 +231,53 @@ public sealed class HelpSchema
             if (indent >= 8 && content.StartsWith("values:", StringComparison.Ordinal))
             {
                 if (current.Values is not null) current.Invalid = true;
+                if (current.ConditionLine is not null) current.InvalidCondition = true;
+                current.ValuesIndent = indent;
                 current.Values = content[7..].Split(',').Select(value => value.Trim()).ToList();
             }
-            else if (indent >= 8 || (!inParameters && indent == 5)) current.Continuation.Add(content);
+            else if (indent >= 8 || (!inParameters && indent == 5))
+            {
+                if (current.ConditionLine is not null) current.InvalidCondition = true;
+                current.Continuation.Add(content);
+            }
             else current.Invalid = true;
         }
         var parameters = fallback.Parameters.Select(parameter =>
             fields.TryGetValue(parameter.Name, out var field) && !duplicate.Contains(parameter.Name)
                 ? ReadValue(field) ?? parameter : parameter).ToArray();
+        // 全パラメータの型と候補を読み終えてから参照先を解決し、宣言順への依存を避ける。
+        parameters = parameters.Select(parameter => fields.TryGetValue(parameter.Name, out var field)
+            && !parameter.IsNameOnly ? parameter with { Condition = ReadCondition(field, parameters) } : parameter).ToArray();
+        IReadOnlyList<string> mainParameters = ReadMainParameters(lines, parameters);
         HelpValueSchema? value = ReadValue(option);
-        if (value is null) return fallback with { Parameters = Array.AsReadOnly(parameters) };
+        if (value is null) return fallback with { Parameters = Array.AsReadOnly(parameters), MainParameters = mainParameters };
         return new HelpOptionSchema
         {
             Name = fallback.Name, IsNameOnly = false, Category = category, Description = value.Description,
-            Type = value.Type, IsStructured = value.IsStructured, DefaultValue = value.DefaultValue,
+            Type = value.Type, IsStructured = value.IsStructured, IsFromTo = value.IsFromTo, DefaultValue = value.DefaultValue,
             IsDerivedDefault = value.IsDerivedDefault, Range = value.Range, Values = value.Values,
-            Parameters = Array.AsReadOnly(parameters)
+            Parameters = Array.AsReadOnly(parameters), MainParameters = mainParameters
         };
+    }
+
+    private static HelpCondition? ReadCondition(Field field, IReadOnlyList<HelpValueSchema> parameters)
+    {
+        if (field.ConditionLine is null || field.InvalidCondition || field.ConditionIndent < 8
+            || (field.ValuesIndent is int valuesIndent && valuesIndent != field.ConditionIndent)) return null;
+        var match = Regex.Match(field.ConditionLine,
+            @"^ {8,}when: (?<name>[a-z0-9_][a-z0-9_-]*)(?:(?<operator>!=|=)(?<values>[^\s,=*!=]+\*?(?:, *[^\s,=*!=]+\*?)*))?$",
+            RegexOptions.CultureInvariant);
+        if (!match.Success) return null;
+        string name = match.Groups["name"].Value;
+        HelpValueSchema? referenced = parameters.FirstOrDefault(parameter => parameter.Name == name);
+        if (referenced is null) return null;
+        if (!match.Groups["operator"].Success)
+            return new(name, HelpConditionKind.Present, Array.Empty<string>());
+        string[] values = match.Groups["values"].Value.Split(',').Select(value => value.Trim()).ToArray();
+        if (referenced.IsNameOnly || values.Any(value => !referenced.Values.Any(candidate =>
+            value.EndsWith('*') ? candidate.StartsWith(value[..^1], StringComparison.Ordinal) : candidate == value))) return null;
+        return new(name, match.Groups["operator"].Value == "=" ? HelpConditionKind.Equals : HelpConditionKind.NotEquals,
+            Array.AsReadOnly(values));
     }
 
     private static HelpValueSchema? ReadValue(Field field)
@@ -250,7 +339,7 @@ public sealed class HelpSchema
         return new HelpValueSchema
         {
             Name = field.Name, IsNameOnly = false, Description = string.Join("\n", new[] { text }.Concat(field.Continuation).Where(line => line.Length > 0)),
-            Type = type, IsStructured = structured, DefaultValue = defaultValue, IsDerivedDefault = derived,
+            Type = type, IsStructured = structured, IsFromTo = field.Declaration == "<from>:<to>", DefaultValue = defaultValue, IsDerivedDefault = derived,
             Range = range, Values = Array.AsReadOnly(values.ToArray())
         };
     }

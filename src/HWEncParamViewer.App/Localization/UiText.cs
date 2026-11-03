@@ -55,6 +55,8 @@ public sealed class UiText
     public string Number => T("数値", "Number");
     public string BrowseFile => T("ファイルを選択", "Choose file");
     public string ResetHint => T("デフォルトに戻す (行から消す)", "Reset to default (remove from the line)");
+    public string OtherParameters => T("その他のパラメータ", "Other parameters");
+    public string InactiveParameter => T("この設定では効きません", "Has no effect with the current settings");
     public string DefaultLabel => T("デフォルト", "Default");
     public string FullHelp => T("ヘルプ全文", "Full help");
     public string EmptyFiltersHint => T("フィルタを選んで追加します。追加するとデフォルトの設定ですぐにプレビューされ、パラメータを調整できます。", "Select a filter to add it. Preview starts with its defaults; then adjust its parameters.");
