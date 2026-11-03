@@ -27,7 +27,7 @@ public class CommandBuilderTests
         Assert.Equal(new[]
         {
             "--avhw", "-i", @"D:\my videos\in.ts", "--seek", "0:01:38.000", "--frames", "76",
-            "-c", "raw", "--y4m-timestamp", "-o", "-", "--vpp-nlmeans", "d=1",
+            "-c", "raw", "--y4m-timestamp", "-o", "-", "--vpp-nlmeans", "d=1", "--log-opt", "color=false",
         }, CommandBuilder.BuildOneShot(req));
     }
 
@@ -37,8 +37,27 @@ public class CommandBuilderTests
         Assert.Equal(new[]
         {
             "--avhw", "-i", @"D:\my videos\in.ts", "--seek", "0:01:38.000", "--frames", "76",
-            "--vpp-nlmeans", "d=1",
+            "--vpp-nlmeans", "d=1", "--log-opt", "color=false",
         }, CommandBuilder.BuildServer(Req(100.0)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PreviewDisablesColoredLogsAfterUserArguments(bool continuous)
+    {
+        var request = Req(100) with
+        {
+            Continuous = continuous,
+            InputArgs = new[] { "--avsw", "--log-opt", "color=true" },
+            VppArgs = new[] { "--log-opt", "addtime=true,color=true" },
+        };
+        foreach (string[] args in new[] { CommandBuilder.BuildOneShot(request), CommandBuilder.BuildServer(request) })
+        {
+            int last = Array.LastIndexOf(args, "--log-opt");
+            Assert.Equal("color=false", args[last + 1]);
+            Assert.True(last > Array.IndexOf(args, "addtime=true,color=true"));
+        }
     }
 
     [Fact]

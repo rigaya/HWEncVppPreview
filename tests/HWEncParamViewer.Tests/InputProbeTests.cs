@@ -27,7 +27,7 @@ public sealed class InputProbeTests
         Assert.Equal(8, first.BitDepth);
         Assert.Equal("420jpeg", first.ColorSpaceTag);
         var command = Assert.Single(commands);
-        Assert.Equal(new[] { "--avhw", "--log-level", "input=debug", "-i", "input.ts", "--frames", "300", "-c", "raw", "--y4m-timestamp", "-o", "-" }, command);
+        Assert.Equal(new[] { "--avhw", "--log-level", "input=debug", "-i", "input.ts", "--frames", "300", "-c", "raw", "--y4m-timestamp", "-o", "-", "--log-opt", "color=false" }, command);
     }
 
     [Fact]
