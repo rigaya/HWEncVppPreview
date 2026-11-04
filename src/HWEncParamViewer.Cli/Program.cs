@@ -231,6 +231,8 @@ public static class Program
     /// <summary>バックエンドへ透過的に委譲し、Controllerが選んだ画像と区間全体を対応付ける。</summary>
     private sealed class RecordingBackend(IPreviewBackend inner, string mode, Recording recording) : IPreviewBackend
     {
+        public Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
+            => inner.GetReadyEncoderAsync(encoderPath, cancellationToken);
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
         {
             recording.Mode = mode;

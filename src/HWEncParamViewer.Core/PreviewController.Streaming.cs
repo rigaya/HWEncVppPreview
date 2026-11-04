@@ -251,7 +251,10 @@ public sealed partial class PreviewController
             await _execution.WaitAsync(startToken.Token).ConfigureAwait(false);
             entered = true;
             session.Cancellation.Token.ThrowIfCancellationRequested();
-            var physical = session.PhysicalRequest;
+            string? readyEncoder;
+            (backend, readyEncoder) = await PrepareBackendAsync(backend, session.InitialRequest, false, session.Cancellation.Token).ConfigureAwait(false);
+            var physical = PhysicalAfterRequest(session.InitialRequest with { ReadyEncoder = readyEncoder }, false) with { Continuous = true };
+            session.PhysicalRequest = physical;
             double seek = CommandBuilder.Plan(physical).SeekSeconds ?? 0;
             var clock = new PreviewClockMap(physical.TimestampOriginSeconds, seek, true);
             // 物理seekと同じ計画の暖機境界を使い、暖機0の区間はseek直後から検証対象にする。
@@ -323,6 +326,14 @@ public sealed partial class PreviewController
                 {
                     lock (_sync) _unsupported.Add(session.PhysicalRequest.EncoderPath);
                     backend = _fallback;
+                    _cache.RemoveSegment(session.SegmentId);
+                    physical = PhysicalAfterRequest(session.InitialRequest with { ReadyEncoder = null }, false) with { Continuous = true };
+                    session.PhysicalRequest = physical;
+                    seek = CommandBuilder.Plan(physical).SeekSeconds ?? 0;
+                    clock = new PreviewClockMap(physical.TimestampOriginSeconds, seek, true);
+                    session.SegmentId = _cache.BeginSegment(physical, clock, PreviewWarmupPolicy.SafeStartSeconds(physical, false));
+                    _cache.PinCurrent(session.SegmentId, session.LatestRequest.TargetSeconds);
+                    sink = new StreamSink(this, session, watchdog);
                     watchdog.Touch();
                     return await RunTrackedBackendAsync(backend, session.PhysicalRequest, sink, session.Cancellation.Token).ConfigureAwait(false);
                 }
@@ -390,7 +401,8 @@ public sealed partial class PreviewController
     private sealed class StreamingSession(PreviewRequest physical, PreviewRequest logical, long version, bool navigation,
         CancellationTokenSource cancellation, CancellationToken externalToken)
     {
-        public PreviewRequest PhysicalRequest { get; } = physical;
+        public PreviewRequest InitialRequest { get; } = logical;
+        public PreviewRequest PhysicalRequest { get; set; } = physical;
         public PreviewRequest LatestRequest { get; set; } = logical;
         public long Version { get; set; } = version;
         public bool Navigation { get; set; } = navigation;

@@ -6,7 +6,7 @@ public sealed class PreviewWarmupPolicyTests
     private static PreviewRequest Request(double target = 10) => new()
     {
         EncoderPath = "encoder", InputFile = "input", Fps = 2, TargetSeconds = target, Continuous = true,
-        Capabilities = new(true), TimestampOriginSeconds = 1000,
+        Capabilities = new(true), TimestampOriginSeconds = 1000, ReadyEncoder = "QSVEnc",
     };
 
     [Fact]
@@ -221,6 +221,9 @@ public sealed class PreviewWarmupPolicyTests
 
     private sealed class PixelBackend : IPreviewBackend
     {
+        public Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
+            => Task.FromResult<string?>("QSVEnc");
+
         public System.Threading.Channels.Channel<double> Pauses { get; } = System.Threading.Channels.Channel.CreateUnbounded<double>();
         public List<PreviewRequest> Requests { get; } = new();
         public bool MismatchSecond { get; init; }

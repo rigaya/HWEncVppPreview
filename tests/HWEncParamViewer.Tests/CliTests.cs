@@ -148,7 +148,7 @@ public sealed class CliTests
     }
 
     [Theory]
-    [InlineData("", 9, 61)]
+    [InlineData("", 7, 121)]
     [InlineData("--vpp-kfm", 7, 121)]
     public async Task AbsoluteClockReportsActualPhysicalWindowAndDumpsRawTimestamps(string filter, double seek, int frames)
     {
@@ -205,18 +205,22 @@ public sealed class CliTests
     }
 
     [Theory]
-    [InlineData("oneshot", "", 0, 9)]
-    [InlineData("server", "", 0, 9)]
-    [InlineData("oneshot", "--vpp-tweak brightness=0.1", 0, 9)]
-    [InlineData("server", "--vpp-tweak brightness=0.1", 0, 9)]
-    [InlineData("oneshot", "--vpp-kfm", 2, 7)]
-    [InlineData("server", "--vpp-kfm", 2, 7)]
-    public async Task JsonReportsActualWarmupAndSafeStartForSpatialAndTemporalRequests(string mode, string filter, double warmup, double seek)
+    [InlineData("oneshot", "", 2, 7, "QSVEnc")]
+    [InlineData("server", "", 0, 9, "QSVEnc")]
+    [InlineData("oneshot", "--vpp-tweak brightness=0.1", 2, 7, "QSVEnc")]
+    [InlineData("server", "--vpp-tweak brightness=0.1", 0, 9, "QSVEnc")]
+    [InlineData("oneshot", "--vpp-kfm", 2, 7, "QSVEnc")]
+    [InlineData("server", "--vpp-kfm", 2, 7, "QSVEnc")]
+    [InlineData("server", "", 0, 9, "VCEEnc")]
+    [InlineData("server", "", 0, 9, "rkmppenc")]
+    [InlineData("server", "", 2, 7, "NVEnc")]
+    [InlineData("server", "", 2, 7, "")]
+    public async Task JsonReportsActualWarmupAndSafeStartForSpatialAndTemporalRequests(string mode, string filter, double warmup, double seek, string encoder)
     {
         var args = Args("--mode", mode, "--time", "10", "--pre-margin", "2", "--post-margin", "1",
             "--input-args", "--avhw");
         if (filter.Length > 0) args = args.Concat(new[] { "--vpp", filter }).ToArray();
-        var run = await RunProcessAsync(args, capabilities: true);
+        var run = await RunProcessAsync(args, capabilities: true, readyEncoder: encoder);
         Assert.Equal(0, run.ExitCode);
         using var json = ParseSingleLine(run.Output);
         var root = json.RootElement;
@@ -241,7 +245,7 @@ public sealed class CliTests
         return JsonDocument.Parse(lines[0]);
     }
 
-    private static async Task<ProcessResult> RunProcessAsync(string[] args, bool capabilities = false)
+    private static async Task<ProcessResult> RunProcessAsync(string[] args, bool capabilities = false, string? readyEncoder = null)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         string configuration = directory.Parent!.Name;
@@ -251,6 +255,7 @@ public sealed class CliTests
             OperatingSystem.IsWindows() ? "HWEncParamViewer.Cli.exe" : "HWEncParamViewer.Cli");
         var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         if (capabilities) start.Environment["FAKE_ENCODER_PREVIEW_CAPABILITIES"] = "1";
+        if (readyEncoder is not null) start.Environment["FAKE_ENCODER_READY_ENCODER"] = readyEncoder;
         foreach (string arg in args) start.ArgumentList.Add(arg);
         using var process = Process.Start(start)!;
         Task<string> output = process.StandardOutput.ReadToEndAsync();

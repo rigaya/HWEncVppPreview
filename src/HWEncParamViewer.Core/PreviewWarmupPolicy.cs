@@ -32,6 +32,8 @@ public static class PreviewWarmupPolicy
     public static double RequiredWarmupSeconds(PreviewRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        // この一覧はOpenCL実装だけの監査結果。CUDA実装や未確認の常駐、都度起動には流用しない。
+        if (!AllowsZeroWarmup(request.ReadyEncoder)) return DefaultWarmupSeconds;
         bool interlaceSeen = false;
         for (int index = 0; index < request.InputArgs.Count; index++)
         {
@@ -83,6 +85,8 @@ public static class PreviewWarmupPolicy
         // サイズだけではautoのSDK resizeへ入る可能性があるため、明示OpenCL指定との組合せに限定する。
         return outputResolution && !spatialResize ? DefaultWarmupSeconds : 0;
     }
+
+    internal static bool AllowsZeroWarmup(string? encoder) => encoder is "QSVEnc" or "VCEEnc" or "rkmppenc";
 
     private static bool ReadParameters(string option, string? argument, out Dictionary<string, string> values)
     {

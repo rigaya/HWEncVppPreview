@@ -38,6 +38,28 @@ public sealed class ServerBackend : IPreviewBackend
         _configure = configureStartInfo;
     }
 
+    public async Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
+    {
+        await _runGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            lock (_sync) ObjectDisposedException.ThrowIf(_disposed, this);
+            try
+            {
+                var session = await GetSessionAsync(encoderPath, null, cancellationToken).ConfigureAwait(false);
+                return session.ReadyEncoder;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (PreviewServerNotSupportedException) { throw; }
+            catch (Exception exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed, exception);
+            }
+        }
+        finally { _runGate.Release(); }
+    }
+
     public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink,
         CancellationToken cancellationToken = default)
     {
@@ -57,6 +79,9 @@ public sealed class ServerBackend : IPreviewBackend
             entered = true;
             execution.Token.ThrowIfCancellationRequested();
             session = await GetSessionAsync(request.EncoderPath, sink, execution.Token).ConfigureAwait(false);
+            // 計画後にプロセスが再起動しても、別実装へ暖機0を流用しない。
+            if (request.WarmupSeconds == 0 && !PreviewWarmupPolicy.AllowsZeroWarmup(session.ReadyEncoder))
+                throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed);
             long id = Interlocked.Increment(ref _nextId);
             Task<string> logTask = session.RegisterLog(id);
             requestLog = logTask;
@@ -201,7 +226,7 @@ public sealed class ServerBackend : IPreviewBackend
         throw new EndOfStreamException(CoreText.EncoderExitedBeforeEnd);
     }
 
-    private async Task<Session> GetSessionAsync(string path, IPreviewSink sink, CancellationToken token)
+    private async Task<Session> GetSessionAsync(string path, IPreviewSink? sink, CancellationToken token)
     {
         Session? session;
         lock (_sync) session = _session;
@@ -226,6 +251,7 @@ public sealed class ServerBackend : IPreviewBackend
             PreviewEvent? ready = await readyTask.WaitAsync(_readyTimeout, _timeProvider, token).ConfigureAwait(false);
             if (ready is not PreviewReady info || !info.Values.TryGetValue("version", out string? version) || version != "1")
                 throw new PreviewServerNotSupportedException(CoreText.ServerReadyUnavailable);
+            session.ReadyEncoder = info.Values.GetValueOrDefault("encoder");
             if (PerfTrace.Enabled) PerfTrace.Write("server.ready", new { pid = session.Process.Id });
             return session;
         }
@@ -361,6 +387,7 @@ public sealed class ServerBackend : IPreviewBackend
         }
         private IPreviewSink? _sink;
         public IPreviewSink? Sink { set => Volatile.Write(ref _sink, value); }
+        public string? ReadyEncoder { get; set; }
         public string Path { get; }
         public Process Process { get; }
         public PreviewProtocolReader Reader { get; }

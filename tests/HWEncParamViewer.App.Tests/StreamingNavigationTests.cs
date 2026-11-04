@@ -1096,6 +1096,9 @@ public sealed class StreamingNavigationTests
 
     private sealed class RecordingBackend(ConcurrentQueue<PreviewRequest> requests, Action<Y4mFrame>? observe = null) : IPreviewBackend
     {
+        public Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
+            => Task.FromResult<string?>("QSVEnc");
+
         private readonly OneShotBackend _inner = new();
         public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
         { requests.Enqueue(request); return _inner.RunAsync(request, observe == null ? sink : new ObservingSink(sink, observe), cancellationToken); }
@@ -1206,6 +1209,9 @@ public sealed class StreamingNavigationTests
 
     private sealed class GapNavigationBackend : IPreviewBackend
     {
+        public Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
+            => Task.FromResult<string?>("QSVEnc");
+
         public ConcurrentQueue<PreviewRequest> Requests { get; } = new();
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
         {

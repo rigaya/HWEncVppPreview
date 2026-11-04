@@ -883,6 +883,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     }
     private sealed class ObservedBackend(IPreviewBackend inner, string mode, MainWindowViewModel owner) : IPreviewBackend
     {
+        public Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
+            => inner.GetReadyEncoderAsync(encoderPath, cancellationToken);
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
         {
             var context = owner.ContextForPhysical(request);

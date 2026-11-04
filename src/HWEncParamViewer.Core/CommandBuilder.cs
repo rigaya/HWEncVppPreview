@@ -23,6 +23,8 @@ public sealed record PreviewRequest
     public double? SeekSecondsOverride { get; init; }
     /// <summary>物理要求で確定した暖機。論理要求や逆方向の既定値は従来の2秒。</summary>
     public double WarmupSeconds { get; internal init; } = PreviewWarmupPolicy.DefaultWarmupSeconds;
+    /// <summary>同じバックエンドから実受信したREADYのencoder。物理計画専用で画像内容のキーには含めない。</summary>
+    internal string? ReadyEncoder { get; init; }
 
     /// <summary>エンコーダのexeパス。引数配列には含めない（起動側が使う）。</summary>
     public string EncoderPath { get; init; } = "";
