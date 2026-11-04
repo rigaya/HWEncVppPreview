@@ -65,7 +65,7 @@ public static class Program
 
     private static async Task ExecuteAsync(Options options, CliResult result, TimeProvider clock, CancellationToken cancellationToken)
     {
-        var capabilities = await ReadCapabilitiesAsync(options.Encoder, clock, cancellationToken).ConfigureAwait(false);
+        var (capabilities, helpSchema) = await ReadHelpAsync(options.Encoder, clock, cancellationToken).ConfigureAwait(false);
         await using var probe = new InputProbe(timeProvider: clock, timeout: options.Watchdog);
         var input = await probe.ProbeAsync(options.Encoder, options.Input, options.InputArgs, cancellationToken, capabilities).ConfigureAwait(false);
         var request = new PreviewRequest
@@ -73,7 +73,7 @@ public static class Program
             EncoderPath = options.Encoder, InputFile = options.Input, InputArgs = options.InputArgs,
             VppArgs = options.VppArgs, TargetSeconds = options.Time, PreMarginSeconds = options.PreMargin,
             PostMarginSeconds = options.PostMargin, Fps = input.Fps,
-            Capabilities = capabilities, TimestampOriginSeconds = input.TimestampOriginSeconds,
+            Capabilities = capabilities, HelpSchema = helpSchema, TimestampOriginSeconds = input.TimestampOriginSeconds,
             TimestampOriginTrusted = input.TimestampOriginTrusted,
             InputDurationSeconds = input.Duration?.TotalSeconds,
         };
@@ -111,12 +111,19 @@ public static class Program
         result.TimestampPassthrough = physical?.Capabilities.TimestampPassthrough == true;
         result.TrustedAbsolute = winningSegment?.Clock.TrustedAbsolute == true && result.TimestampPassthrough;
         result.TimestampOriginSeconds = physical?.TimestampOriginSeconds;
+        // 実際に適用した暖機と安全範囲を、画素照合用ドライバから確認できるようにする。
+        result.WarmupSeconds = physical?.WarmupSeconds;
+        result.SafeStartSeconds = winningSegment?.SafeStartSeconds;
+        result.SafeEndSeconds = winningSegment?.SafeEndSeconds;
+        result.FirstOutputXts = recording.Frames.FirstOrDefault()?.Xts;
         // 暖機やlegacy再取得で変わった場合も、JSONは実際に取得した計画を返す。
         if (physical != null)
         {
             var actualPlan = CommandBuilder.Plan(physical);
             result.SeekSeconds = actualPlan.SeekSeconds;
             result.Frames = actualPlan.FrameCount;
+            double seek = actualPlan.SeekSeconds ?? 0;
+            result.PlannedSafeStartSeconds = seek > 0 ? seek + physical.WarmupSeconds : 0;
         }
         result.Mode = recording.Mode;
         result.FrameCount = recording.Frames.Count;
@@ -159,7 +166,7 @@ public static class Program
         if (options.DumpY4m != null) await DumpY4mAsync(options.DumpY4m, recording.Frames, input.Fps, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<PreviewCapabilities> ReadCapabilitiesAsync(string encoder, TimeProvider clock, CancellationToken token)
+    private static async Task<(PreviewCapabilities Capabilities, HelpSchema? Schema)> ReadHelpAsync(string encoder, TimeProvider clock, CancellationToken token)
     {
         try
         {
@@ -177,13 +184,13 @@ public static class Program
                 await process.WaitForExitAsync().ConfigureAwait(false);
                 await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
             }
-            if (process.ExitCode != 0) return new();
+            if (process.ExitCode != 0) return (new(), null);
             string help = await stdout.ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(help)) help = await stderr.ConfigureAwait(false);
-            return CommandBuilder.CapabilitiesFromHelp(new HelpIndex(help));
+            return (CommandBuilder.CapabilitiesFromHelp(new HelpIndex(help)), new HelpSchema(help));
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch { return new(); }
+        catch { return (new(), null); }
     }
 
     private static string Tail(string text) => text.Length <= 8192 ? text : text[^8192..];
@@ -336,6 +343,11 @@ public static class Program
         public bool TimestampPassthrough { get; set; }
         public bool TrustedAbsolute { get; set; }
         public double? TimestampOriginSeconds { get; set; }
+        public double? WarmupSeconds { get; set; }
+        public double? SafeStartSeconds { get; set; }
+        public double? SafeEndSeconds { get; set; }
+        public double? FirstOutputXts { get; set; }
+        public double? PlannedSafeStartSeconds { get; set; }
         public double? InputFps { get; set; }
         public int? Frames { get; set; }
         public double ElapsedMs { get; set; }

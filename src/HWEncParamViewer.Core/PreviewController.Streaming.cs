@@ -166,8 +166,12 @@ public sealed partial class PreviewController
             var current = active == null || active.SegmentId == 0 ? null : _cache.GetSegment(active.SegmentId);
             double frontier = current?.SafeEndSeconds ?? active?.LatestRequest.TargetSeconds ?? request.TargetSeconds;
             bool withinJump = active != null && request.TargetSeconds <= Math.Max(frontier, active.LatestRequest.TargetSeconds) + 3;
-            bool notBeforeRetained = current == null ? active == null || request.TargetSeconds >= active.LatestRequest.TargetSeconds
-                : request.TargetSeconds >= current.SafeStartSeconds - 1e-7;
+            double retainedStart = current?.SafeStartSeconds ?? (active == null ? request.TargetSeconds
+                : PreviewWarmupPolicy.SafeStartSeconds(active.PhysicalRequest, false));
+            if (current != null && current.Frames.Count > 0)
+                retainedStart = FrameCache.SafeStartIncludingFirst(retainedStart, current.Clock, current.Frames[0], request.Fps);
+            // 別segmentのcacheが目標を持っていても、このstreamに存在しないprefixへ需要を再結合しない。
+            bool notBeforeRetained = active != null && request.TargetSeconds >= retainedStart - 1e-7;
             if (compatible && withinJump && notBeforeRetained && (capable || cached != null))
             {
                 active!.Demand.TrySetResult();
@@ -250,8 +254,8 @@ public sealed partial class PreviewController
             var physical = session.PhysicalRequest;
             double seek = CommandBuilder.Plan(physical).SeekSeconds ?? 0;
             var clock = new PreviewClockMap(physical.TimestampOriginSeconds, seek, true);
-            // keyframe丸めで実暖機が短くなっても、計画seek+2を使い目標Tを表示可能にする近似。
-            session.SegmentId = _cache.BeginSegment(physical, clock, seek > 0 ? seek + 2 : 0);
+            // 物理seekと同じ計画の暖機境界を使い、暖機0の区間はseek直後から検証対象にする。
+            session.SegmentId = _cache.BeginSegment(physical, clock, PreviewWarmupPolicy.SafeStartSeconds(physical, false));
             _cache.PinCurrent(session.SegmentId, session.LatestRequest.TargetSeconds);
             using var watchdog = new OutputWatchdog(_clock, _watchdog);
             var sink = new StreamSink(this, session, watchdog);

@@ -64,7 +64,7 @@ public sealed class ServerBackend : IPreviewBackend
                 pid = session.Process.Id, request.TargetSeconds, continuous = request.Continuous,
                 frames = request.Continuous ? (int?)null : CommandBuilder.Plan(request).FrameCount,
                 timestampPassthrough = request.Capabilities.TimestampPassthrough,
-                seekSeconds = CommandBuilder.Plan(request).SeekSeconds, request.PreMarginSeconds, request.PostMarginSeconds });
+                seekSeconds = CommandBuilder.Plan(request).SeekSeconds, request.PreMarginSeconds, request.PostMarginSeconds, request.WarmupSeconds });
             await session.SendAsync(new { cmd = "run", id, args = CommandBuilder.BuildServer(request) }).ConfigureAwait(false);
             var readTask = Task.Run(() => ReadRequestAsync(session, id, request.CorrelationId, sink, execution.Token));
             session.LastRead = readTask;

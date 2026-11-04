@@ -12,6 +12,91 @@ public sealed class StreamingNavigationTests
     private static readonly TimeSpan Safety = TimeSpan.FromSeconds(20);
 
     [AvaloniaFact]
+    public async Task CachedReverseTargetBeforeStreamFirstFrameFinishesIdle()
+    {
+        using var capabilities = new CapabilityScope();
+        using var services = new Services();
+        var clock = new FakeTimeProvider();
+        var backend = new GapNavigationBackend();
+        await using var vm = new MainWindowViewModel(services, clock, backend, backend)
+        { EncoderPath = FakeEncoderPath(), InputPath = "gap-navigation.ts", CurrentSeconds = 103, InputArgsText = "--avhw" };
+        await vm.InitializeAsync(false).WaitAsync(Safety);
+        clock.Advance(TimeSpan.FromMilliseconds(150));
+        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Single(backend.Requests);
+        foreach (double target in new[] { 100d, 101d })
+        {
+            vm.CurrentSeconds = target;
+            await vm.WaitForPreparationAsync().WaitAsync(Safety);
+            await vm.WaitForIdleAsync().WaitAsync(Safety);
+            Assert.Null(vm.ErrorText);
+        }
+        Assert.Equal(3, backend.Requests.Count);
+        Assert.False(backend.Requests.ElementAt(1).Continuous);
+        Assert.Equal(5, backend.Requests.ElementAt(1).PreMarginSeconds);
+        Assert.True(backend.Requests.ElementAt(2).Continuous);
+        // 旧有限区間だけに100秒の画像がある。新streamの先頭100.1秒へ需要を再結合してはいけない。
+        vm.CurrentSeconds = 100;
+        await vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(3, backend.Requests.Count);
+        Assert.Equal(100, vm.CurrentSeconds);
+        Assert.NotNull(vm.PreviewImage);
+        Assert.Null(vm.ErrorText);
+        Assert.False(vm.IsBusy);
+    }
+
+    [AvaloniaTheory]
+    [InlineData("", 0, 9)]
+    [InlineData("--vpp-tweak brightness=0.1", 0, 9)]
+    [InlineData("--vpp-nlmeans", 2, 7)]
+    [InlineData("--vpp-kfm", 2, 7)]
+    public async Task WarmupPolicyKeepsBeforeIndependentAndRetainsCachedPreviousFrame(string filter, double warmup, double seek)
+    {
+        using var capabilities = new CapabilityScope();
+        using var services = new Services();
+        var clock = new FakeTimeProvider();
+        var foreground = new ConcurrentQueue<PreviewRequest>();
+        var background = new ConcurrentQueue<PreviewRequest>();
+        var first = new RecordingBackend(foreground);
+        var second = new RecordingBackend(background);
+        await using var vm = new MainWindowViewModel(services, clock, first, first, null, null, null, second, second)
+        { EncoderPath = FakeEncoderPath(), InputPath = "warmup.ts", CurrentSeconds = 10,
+            InputArgsText = "--avhw", IsShowingBefore = true };
+        if (filter.Length > 0) vm.FilterLines.Add(new FilterLineViewModel { Text = filter });
+        await vm.InitializeAsync(false).WaitAsync(Safety);
+        clock.Advance(TimeSpan.FromMilliseconds(150));
+        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        async Task WaitForBeforeAsync()
+        {
+            while (vm.BeforeImage == null)
+                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+        }
+        await WaitForBeforeAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        var after = Assert.Single(foreground);
+        Assert.Equal(warmup, after.WarmupSeconds);
+        Assert.Equal(seek, CommandBuilder.Plan(after).SeekSeconds);
+        Assert.NotNull(vm.PreviewImage);
+        Assert.Null(vm.ErrorText);
+        if (filter.Length > 0)
+        {
+            // 時間方向のAfterでも、空フィルタのBeforeへ暖機を引き継がない。
+            var before = Assert.Single(background);
+            Assert.Empty(before.VppArgs);
+            Assert.Equal(0, before.WarmupSeconds);
+            Assert.Equal(9, CommandBuilder.Plan(before).SeekSeconds);
+        }
+        // 暖機0でもGOP用の前余白は残り、直後の1枚戻りを追加取得なしで表示する。
+        vm.StepFrameCommand.Execute(-1);
+        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Single(foreground);
+        Assert.True(vm.CurrentSeconds < 10);
+        Assert.False(vm.IsBusy);
+        Assert.Null(vm.ErrorText);
+    }
+
+    [AvaloniaFact]
     public async Task ForwardDemandUsesOnePhysicalStreamAndPrefetchDoesNotChangeDisplayedTarget()
     {
         using var capabilities = new CapabilityScope();
@@ -1117,6 +1202,41 @@ public sealed class StreamingNavigationTests
         public void OnOutput() => inner.OnOutput();
         public ValueTask BeforeReadAsync(CancellationToken token) => inner.BeforeReadAsync(token);
         public void OnReadStateChanged(bool reading) => inner.OnReadStateChanged(reading);
+    }
+
+    private sealed class GapNavigationBackend : IPreviewBackend
+    {
+        public ConcurrentQueue<PreviewRequest> Requests { get; } = new();
+        public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
+        {
+            Requests.Enqueue(request);
+            var header = new Y4mHeader { Width = 64, Height = 36, FpsNum = 30, FpsDen = 1 };
+            sink.OnHeader(header);
+            double seek = CommandBuilder.Plan(request).SeekSeconds ?? 0;
+            // InputProbeと同じ30fpsで、streamは3枚、逆有限窓は9枚後ろへseek着地させる。
+            int start = (int)Math.Round(seek * 30) + (request.Continuous ? 3 : 9);
+            int count = request.Continuous ? int.MaxValue : CommandBuilder.Plan(request).FrameCount;
+            try
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var permission = sink.BeforeReadAsync(token);
+                    if (!permission.IsCompleted) sink.OnReadStateChanged(false);
+                    await permission;
+                    sink.OnReadStateChanged(true);
+                    sink.OnOutput();
+                    int tick = start + i;
+                    byte pixel = (byte)(tick % 251);
+                    sink.OnFrame(new(header, 1000 + tick / 30.0, 1.0 / 30,
+                        Enumerable.Repeat(pixel, header.FrameBytes).ToArray()));
+                }
+                return new(0, "");
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return new(-12, "", true); }
+        }
+        public ValueTask AbortAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class CapabilityScope : IDisposable

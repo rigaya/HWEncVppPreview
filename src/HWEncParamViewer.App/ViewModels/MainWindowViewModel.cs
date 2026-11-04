@@ -569,7 +569,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         // 物理offの結果を移動に再利用しても、診断用sourceはhelp由来の論理設定を維持する。
         var logical = _intervalLogicalRequest ?? _intervalRequest;
         var request = RetargetInterval(_intervalRequest, seconds) with { CorrelationId = generation,
-            InputArgs = logical.InputArgs, VppArgs = logical.VppArgs, Capabilities = _capabilities,
+            InputArgs = logical.InputArgs, VppArgs = logical.VppArgs, Capabilities = _capabilities, HelpSchema = HelpSchema,
             TimestampOriginTrusted = _inputInfo?.TimestampOriginTrusted ?? _intervalRequest.TimestampOriginTrusted };
         CheckBeforeInterval(request);
         var context = new RequestContext(generation, request, _clock.GetTimestamp(), editEpoch: _editEpoch);

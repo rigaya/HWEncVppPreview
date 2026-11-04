@@ -10,6 +10,8 @@ public sealed class ReversePrefetchTests
     {
         EncoderPath = "prefetch-stub", InputFile = "input", TargetSeconds = target, Fps = fps,
         Capabilities = new(true), TimestampOriginSeconds = 1000, Continuous = true,
+        // 従来の2秒暖機を検証するfixtureなので、時間方向の処理を明示する。
+        VppArgs = new[] { "--vpp-kfm" },
         PreMarginSeconds = 2, PostMarginSeconds = 0.5,
     };
 

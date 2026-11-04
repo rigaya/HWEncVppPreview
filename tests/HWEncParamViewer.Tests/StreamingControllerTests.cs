@@ -9,6 +9,8 @@ public sealed class StreamingControllerTests
     private static PreviewRequest Request(double target = 10) => new()
     {
         EncoderPath = "encoder", InputFile = "input", Fps = 2, TargetSeconds = target,
+        // 従来の2秒暖機を検証するfixtureなので、時間方向の処理を明示する。
+        VppArgs = new[] { "--vpp-kfm" },
         PreMarginSeconds = 2, PostMarginSeconds = 0.5, Continuous = true,
         Capabilities = new(true, true), TimestampOriginSeconds = 1000,
     };

@@ -237,13 +237,11 @@ public sealed partial class PreviewController : IAsyncDisposable
                 Capabilities = request.Capabilities with { TimestampPassthrough = false }, Continuous = false,
                 // 長寿命stream由来の固定seekや増大したmarginを引き継がず、最新目標の短い窓を取り直す。
                 SeekSecondsOverride = null, PreMarginSeconds = 3, PostMarginSeconds = 0.5,
+                WarmupSeconds = PreviewWarmupPolicy.DefaultWarmupSeconds,
                 InputArgs = request.InputArgs.Where(argument => !argument.Equals("--timestamp-passthrough", StringComparison.OrdinalIgnoreCase)).ToArray(),
                 VppArgs = request.VppArgs.Where(argument => !argument.Equals("--timestamp-passthrough", StringComparison.OrdinalIgnoreCase)).ToArray(),
             };
-        if (background || !request.Capabilities.TimestampPassthrough || !request.TimestampOriginSeconds.HasValue)
-            return request;
-        // 暖機2秒に加えて選択余地を1秒取る。VFRの正解フレームが目標より前でも安全区間に残す。
-        return request with { SeekSecondsOverride = Math.Max(0, request.TargetSeconds - Math.Max(3, request.PreMarginSeconds)) };
+        return PreviewWarmupPolicy.PreparePhysical(request, background);
     }
 
     private bool CanStartBackgroundCore() => _foregroundPending == 0 && (_stream == null || _stream.IsPaused);
@@ -727,9 +725,9 @@ public sealed partial class PreviewController : IAsyncDisposable
         private void UpdateSegment(bool reachedEnd)
         {
             if (Frames.Count == 0) return;
-            double start = _clock.PhysicalSeekSeconds;
+            double start = FrameCache.SafeStartIncludingFirst(PreviewWarmupPolicy.SafeStartSeconds(_physicalRequest, background),
+                _clock, Frames[0], request.Fps);
             bool guarded = !background && _physicalRequest.Capabilities.TimestampPassthrough && request.TimestampOriginSeconds.HasValue;
-            if (guarded && start > 0) start += 2;
             double end = _clock.ToInputSeconds(Frames[^1], Frames.Count - 1, request.Fps) + FrameSelector.Duration(Frames[^1], request.Fps);
             if (guarded && !reachedEnd) end -= 0.5;
             // 有限要求の早期画像は画素照合前なので、完了後にcacheが検証するまでは他区間と混ぜない。

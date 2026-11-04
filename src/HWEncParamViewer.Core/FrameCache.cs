@@ -247,6 +247,8 @@ public sealed class FrameCache
         lock (_gate)
         {
             if (!_segments.TryGetValue(segmentId, out var entry) || !MakeRoom(frame.Data.LongLength, segmentId)) return false;
+            if (entry.Frames.Count == 0)
+                entry.SafeStart = SafeStartIncludingFirst(entry.SafeStart, entry.Clock, frame, entry.Request.Fps);
             entry.Frames.Add(frame);
             entry.Bytes += frame.Data.LongLength;
             _sizeBytes += frame.Data.LongLength;
@@ -260,7 +262,15 @@ public sealed class FrameCache
 
     public void SetClock(long segmentId, PreviewClockMap clock)
     {
-        lock (_gate) { if (_segments.TryGetValue(segmentId, out var entry)) { entry.Clock = clock; entry.CanStitch = clock.TrustedAbsolute; } }
+        lock (_gate)
+        {
+            if (_segments.TryGetValue(segmentId, out var entry))
+            {
+                entry.Clock = clock;
+                entry.SafeStart = SafeStartIncludingFirst(entry.SafeStart, clock, entry.Frames.FirstOrDefault(), entry.Request.Fps);
+                entry.CanStitch = clock.TrustedAbsolute;
+            }
+        }
     }
 
     /// <summary>区間を終了し、有限の末尾ガードまたは自然EOFの末尾を確定する。</summary>
@@ -294,7 +304,7 @@ public sealed class FrameCache
         lock (_gate)
         {
             long id = ++_nextSegmentId;
-            var entry = new SegmentEntry(id, request, clock, safeStartSeconds)
+            var entry = new SegmentEntry(id, request, clock, SafeStartIncludingFirst(safeStartSeconds, clock, frames.FirstOrDefault(), request.Fps))
             { SafeEnd = safeEndSeconds, Bytes = bytes, ReachedInputEnd = reachedInputEnd, LastUse = ++_useSequence };
             entry.Frames.AddRange(frames);
             // 容量不足で保存できない場合も、残る旧区間との整合を先に確認する。
@@ -305,6 +315,14 @@ public sealed class FrameCache
             ValidateAfterChange(entry, closed: true);
             return _segments.ContainsKey(id) ? Snapshot(entry) : null;
         }
+    }
+
+    /// <summary>計画上の安全域より実際の先頭画像が遅い場合、存在しないprefixを安全域に含めない。</summary>
+    internal static double SafeStartIncludingFirst(double planned, PreviewClockMap clock, Y4mFrame? first, double fps)
+    {
+        if (first?.Xts is not double timestamp || !double.IsFinite(timestamp)) return planned;
+        double actual = clock.ToInputSeconds(first, 0, fps);
+        return double.IsFinite(actual) ? Math.Max(planned, actual) : planned;
     }
 
     public static bool SameContent(PreviewRequest a, PreviewRequest b) =>

@@ -3,7 +3,7 @@
 public sealed partial class PreviewController
 {
     private const double ReversePrefetchThresholdSeconds = 1.5;
-    private const double ReversePrefetchWarmupSeconds = 2;
+    private const double ReversePrefetchWarmupSeconds = PreviewWarmupPolicy.DefaultWarmupSeconds;
     private const double ReversePrefetchDisplaySeconds = 3;
     // 末尾処理のguardとは別に、安全な画素照合の重なりを0.5秒残す。
     private const double ReversePrefetchGuardSeconds = 0.5;

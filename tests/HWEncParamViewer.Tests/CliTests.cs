@@ -147,25 +147,27 @@ public sealed class CliTests
         Assert.Equal(0, fallback.Calls);
     }
 
-    [Fact]
-    public async Task AbsoluteClockReportsActualPhysicalWindowAndDumpsRawTimestamps()
+    [Theory]
+    [InlineData("", 9, 61)]
+    [InlineData("--vpp-kfm", 7, 121)]
+    public async Task AbsoluteClockReportsActualPhysicalWindowAndDumpsRawTimestamps(string filter, double seek, int frames)
     {
         string path = Path.Combine(Path.GetTempPath(), $"viewer-cli-physical-{Guid.NewGuid():N}.y4m");
         try
         {
             var run = await RunProcessAsync(Args("--mode", "oneshot", "--time", "10", "--pre-margin", "2",
-                "--post-margin", "1", "--dump-y4m", path), capabilities: true);
+                "--post-margin", "1", "--dump-y4m", path, "--vpp", filter), capabilities: true);
             Assert.Equal(0, run.ExitCode);
             using var json = ParseSingleLine(run.Output);
-            Assert.Equal(7, json.RootElement.GetProperty("seekSeconds").GetDouble());
-            Assert.Equal(121, json.RootElement.GetProperty("frames").GetInt32());
+            Assert.Equal(seek, json.RootElement.GetProperty("seekSeconds").GetDouble());
+            Assert.Equal(frames, json.RootElement.GetProperty("frames").GetInt32());
             Assert.Equal(1010, json.RootElement.GetProperty("selectedXts").GetDouble(), 6);
             using var stream = File.OpenRead(path);
             var reader = new Y4mReader(stream);
             var first = reader.ReadFrame();
             Assert.NotNull(first);
-            Assert.Equal("7", first.Header.ExtTags["XSEEK"]);
-            Assert.Equal(1007, first.Xts!.Value, 6);
+            Assert.Equal(seek.ToString(CultureInfo.InvariantCulture), first.Header.ExtTags["XSEEK"]);
+            Assert.Equal(1000 + seek, first.Xts!.Value, 6);
         }
         finally { File.Delete(path); }
     }
@@ -200,6 +202,30 @@ public sealed class CliTests
             Assert.InRange(json.RootElement.GetProperty("selectedXts").GetDouble(), 0, 3);
         }
         finally { File.Delete(path); }
+    }
+
+    [Theory]
+    [InlineData("oneshot", "", 0, 9)]
+    [InlineData("server", "", 0, 9)]
+    [InlineData("oneshot", "--vpp-tweak brightness=0.1", 0, 9)]
+    [InlineData("server", "--vpp-tweak brightness=0.1", 0, 9)]
+    [InlineData("oneshot", "--vpp-kfm", 2, 7)]
+    [InlineData("server", "--vpp-kfm", 2, 7)]
+    public async Task JsonReportsActualWarmupAndSafeStartForSpatialAndTemporalRequests(string mode, string filter, double warmup, double seek)
+    {
+        var args = Args("--mode", mode, "--time", "10", "--pre-margin", "2", "--post-margin", "1",
+            "--input-args", "--avhw");
+        if (filter.Length > 0) args = args.Concat(new[] { "--vpp", filter }).ToArray();
+        var run = await RunProcessAsync(args, capabilities: true);
+        Assert.Equal(0, run.ExitCode);
+        using var json = ParseSingleLine(run.Output);
+        var root = json.RootElement;
+        Assert.True(root.GetProperty("trustedAbsolute").GetBoolean());
+        Assert.Equal(warmup, root.GetProperty("warmupSeconds").GetDouble());
+        Assert.Equal(seek, root.GetProperty("seekSeconds").GetDouble());
+        // 2秒側の物理位置を保ちながら、どちらもGOPの1秒前余白から表示可能にする。
+        Assert.Equal(9, root.GetProperty("safeStartSeconds").GetDouble());
+        Assert.Equal(1010, root.GetProperty("selectedXts").GetDouble(), 5);
     }
 
     private static string[] Args(params string[] extra) => new[]
