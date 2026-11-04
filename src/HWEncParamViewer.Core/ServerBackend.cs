@@ -63,7 +63,8 @@ public sealed class ServerBackend : IPreviewBackend
             if (PerfTrace.Enabled) PerfTrace.Write("server.run_send", new { request.CorrelationId, id,
                 pid = session.Process.Id, request.TargetSeconds, continuous = request.Continuous,
                 frames = request.Continuous ? (int?)null : CommandBuilder.Plan(request).FrameCount,
-                timestampPassthrough = request.Capabilities.TimestampPassthrough });
+                timestampPassthrough = request.Capabilities.TimestampPassthrough,
+                seekSeconds = CommandBuilder.Plan(request).SeekSeconds, request.PreMarginSeconds, request.PostMarginSeconds });
             await session.SendAsync(new { cmd = "run", id, args = CommandBuilder.BuildServer(request) }).ConfigureAwait(false);
             var readTask = Task.Run(() => ReadRequestAsync(session, id, request.CorrelationId, sink, execution.Token));
             session.LastRead = readTask;
@@ -146,13 +147,21 @@ public sealed class ServerBackend : IPreviewBackend
                     await Task.Yield();
                 }
             }
-            if (session.Reader.ReadEvent() is not { } item) break;
+            long eventStart = PerfTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
+            var item = session.Reader.ReadEvent();
+            if (PerfTrace.Enabled) PerfTrace.Write("server.read", new { correlationId, id,
+                kind = item?.GetType().Name ?? "EOF", Xts = (item as PreviewFrame)?.Frame.Xts,
+                elapsedMs = Stopwatch.GetElapsedTime(eventStart).TotalMilliseconds });
+            if (item is null) break;
             switch (item)
             {
                 case PreviewBegin begin when !begun && begin.Id == id:
+                    if (PerfTrace.Enabled) PerfTrace.Write("server.begin", new { correlationId, id });
                     begun = true;
                     break;
                 case PreviewHeader header when begun:
+                    if (PerfTrace.Enabled) PerfTrace.Write("server.header", new { correlationId, id,
+                        header.Header.Width, header.Header.Height, header.Header.Fps, header.Header.FrameBytes });
                     if (!token.IsCancellationRequested) sink.OnHeader(header.Header);
                     break;
                 case PreviewFrame frame when begun:
@@ -161,6 +170,8 @@ public sealed class ServerBackend : IPreviewBackend
                         frames++;
                         bytes += frame.Frame.Data.LongLength;
                         lastFrameMs = Stopwatch.GetElapsedTime(readStart).TotalMilliseconds;
+                        PerfTrace.Write("server.frame", new { correlationId, id, index = frames - 1, frame.Frame.Xts,
+                            bytes = frame.Frame.Data.Length, elapsedMs = lastFrameMs });
                         if (firstFrameMs == null)
                         {
                             firstFrameMs = lastFrameMs;
@@ -168,7 +179,14 @@ public sealed class ServerBackend : IPreviewBackend
                                 elapsedMs = firstFrameMs });
                         }
                     }
-                    if (!token.IsCancellationRequested) sink.OnFrame(frame.Frame);
+                    if (!token.IsCancellationRequested)
+                    {
+                        // 受信後のキャッシュ更新と選択処理を、パイプ待ちから分けて観測する。
+                        long sinkStart = PerfTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
+                        sink.OnFrame(frame.Frame);
+                        if (PerfTrace.Enabled) PerfTrace.Write("server.sink_frame", new { correlationId, id,
+                            frame.Frame.Xts, elapsedMs = Stopwatch.GetElapsedTime(sinkStart).TotalMilliseconds });
+                    }
                     break;
                 case PreviewEnd end when begun && end.Id == id:
                     if (PerfTrace.Enabled) PerfTrace.Write("server.end", new { correlationId, id, end.Rc,
@@ -395,6 +413,7 @@ public sealed class ServerBackend : IPreviewBackend
                     {
                         long? begin = ParseId(line, "RGYPREVIEW BEGIN id=");
                         if (begin.HasValue) _currentLog = begin;
+                        if (PerfTrace.Enabled) PerfTrace.Write("server.stderr", new { pid = _pid, id = _currentLog, line });
                         if (_currentLog is long current && _logs.TryGetValue(current, out var log))
                         {
                             log.Text.AppendLine(line);

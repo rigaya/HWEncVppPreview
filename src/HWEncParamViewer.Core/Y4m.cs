@@ -208,6 +208,8 @@ public sealed class Y4mFrame
 /// </remarks>
 public sealed class Y4mReader
 {
+    private static long _nextTraceReaderId;
+    private readonly long _traceReaderId = PerfTrace.Enabled ? Interlocked.Increment(ref _nextTraceReaderId) : 0;
     private readonly Stream _stream;
 
     /// <summary>先頭のヘッダ行を読んで作る。ストリームが空なら Y4mFormatException。</summary>
@@ -238,6 +240,8 @@ public sealed class Y4mReader
     /// <summary>FRAME 行を読み済みとして、データ部を読む。</summary>
     internal Y4mFrame ReadFrameBody(string frameLine)
     {
+        bool trace = PerfTrace.Enabled;
+        long parseStart = trace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         if (frameLine != "FRAME" && !frameLine.StartsWith("FRAME ", StringComparison.Ordinal))
         {
             throw new Y4mFormatException(CoreText.Y4mFrameExpected(frameLine));
@@ -249,14 +253,22 @@ public sealed class Y4mReader
             else if (tok.StartsWith("Xdur=", StringComparison.Ordinal)) xdur = ParseDouble(tok[5..]);
         }
         int size = Header.FrameBytes;
+        double parseMs = trace ? System.Diagnostics.Stopwatch.GetElapsedTime(parseStart).TotalMilliseconds : 0;
+        long allocationStart = trace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         var data = new byte[size];
-        int got = 0;
+        double allocationMs = trace ? System.Diagnostics.Stopwatch.GetElapsedTime(allocationStart).TotalMilliseconds : 0;
+        long readStart = trace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+        int got = 0, readCalls = 0;
         while (got < size)
         {
             int n = _stream.Read(data, got, size - got);
+            if (trace) readCalls++;
             if (n <= 0) throw new Y4mTruncatedException(xts, size, got);
             got += n;
         }
+        // 読取時間にはパイプやエンコーダの出力待ちも含み、CPU時間とは区別する。
+        if (trace) PerfTrace.Write("y4m.frame", new { readerId = _traceReaderId, Xts = xts, Xdur = xdur,
+            bytes = size, parseMs, allocationMs, readMs = System.Diagnostics.Stopwatch.GetElapsedTime(readStart).TotalMilliseconds, readCalls });
         return new Y4mFrame(Header, xts, xdur, data);
     }
 

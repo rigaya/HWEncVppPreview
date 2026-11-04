@@ -409,6 +409,7 @@ public sealed partial class PreviewController
     private sealed class StreamSink(PreviewController owner, StreamingSession session, OutputWatchdog watchdog) : IPreviewSink
     {
         private readonly PreviewTimestampGuard _timestampGuard = new(session.PhysicalRequest.Fps);
+        private bool? _lastTraceReading;
         public void OnHeader(Y4mHeader header) { }
         public void OnOutput() => watchdog.Touch();
         public void OnReadStateChanged(bool reading)
@@ -416,6 +417,14 @@ public sealed partial class PreviewController
             if (reading) watchdog.Resume(); else watchdog.Suspend();
             lock (owner._sync)
             {
+                // IsPausedは需要更新側でも先に変わるため、計測上の読取状態は別に保持する。
+                if (PerfTrace.Enabled && _lastTraceReading != reading)
+                {
+                    _lastTraceReading = reading;
+                    PerfTrace.Write("core.read_state", new { correlationId = session.PhysicalRequest.CorrelationId,
+                        logicalCorrelationId = session.LatestRequest.CorrelationId, session.SegmentId, reading,
+                        session.LatestRequest.TargetSeconds });
+                }
                 session.IsPaused = !reading;
                 owner.PulseStreamState();
                 if (!reading)

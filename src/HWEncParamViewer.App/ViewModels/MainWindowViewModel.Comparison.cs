@@ -403,16 +403,16 @@ public sealed partial class MainWindowViewModel
     private double DisplayWidthFor(Y4mHeader header) => header.Width * (UseSar && header.SarNum > 0 && header.SarDen > 0
         ? (double)header.SarNum / header.SarDen : 1);
 
-    private static WriteableBitmap CreateBitmap(Y4mFrame frame, byte[] data)
+    private static WriteableBitmap CreateBitmap(Y4mFrame frame, byte[] data, long traceId = 0)
     {
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.bitmap.start", new { frame.Xts });
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.bitmap.start", new { traceId, frame.Xts });
         var header = frame.Header;
         var bitmap = new WriteableBitmap(new PixelSize(header.Width, header.Height), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
         try
         {
             using var locked = bitmap.Lock();
             for (int y = 0; y < header.Height; y++) Marshal.Copy(data, y * header.Width * 4, locked.Address + y * locked.RowBytes, header.Width * 4);
-            if (PerfTrace.Enabled) PerfTrace.Write("vm.bitmap.end", new { frame.Xts });
+            if (PerfTrace.Enabled) PerfTrace.Write("vm.bitmap.end", new { traceId, frame.Xts });
             return bitmap;
         }
         catch { bitmap.Dispose(); throw; }

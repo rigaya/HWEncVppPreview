@@ -564,6 +564,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         if (_intervalRequest == null) return;
         long generation = BeginIntent(navigation: true);
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.step.accepted", new { generation, seconds, direction, frame.Xts });
         SetTimeOnly(seconds);
         // 物理offの結果を移動に再利用しても、診断用sourceはhelp由来の論理設定を維持する。
         var logical = _intervalLogicalRequest ?? _intervalRequest;

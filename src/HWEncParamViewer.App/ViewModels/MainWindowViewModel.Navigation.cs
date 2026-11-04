@@ -210,16 +210,24 @@ public sealed partial class MainWindowViewModel
         };
     }
 
+    private long _nextImageTraceId;
+
     private void EnqueueImage(ImageWork image)
     {
+        // 計測時だけ識別子を付け、同じXtsのBefore/Afterや間引かれた仕事を区別する。
+        if (PerfTrace.Enabled) image = image with { TraceId = Interlocked.Increment(ref _nextImageTraceId) };
         TaskCompletionSource? completion = null;
         lock (_taskLock)
         {
             if (_disposed) return;
+            long? replacedTraceId = PerfTrace.Enabled ? (image.Before ? _pendingBeforeImage : _pendingAfterImage)?.TraceId : null;
             if (image.Before) _pendingBeforeImage = image;
             else if (_pendingAfterImage == null || image.Generation > _pendingAfterImage.Generation
                 || image.Generation == _pendingAfterImage.Generation && image.DisplayRevision >= _pendingAfterImage.DisplayRevision)
                 _pendingAfterImage = image;
+            if (PerfTrace.Enabled) PerfTrace.Write("vm.image.enqueue", new { image.TraceId, image.Generation,
+                image.Before, image.Frame.Xts, replacedTraceId,
+                accepted = ReferenceEquals(image.Before ? _pendingBeforeImage : _pendingAfterImage, image) });
             if (!_conversionActive)
             {
                 _conversionActive = true;
@@ -247,9 +255,9 @@ public sealed partial class MainWindowViewModel
                 }
                 try
                 {
-                    if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.start", new { image.Generation, image.Before, image.Frame.Xts });
+                    if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.start", new { image.TraceId, image.Generation, image.Before, image.Frame.Xts });
                     byte[] data = await _imageConverter(image.Frame, _lifetime.Token).ConfigureAwait(false);
-                    if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.end", new { image.Generation, image.Before, bytes = data.Length });
+                    if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.end", new { image.TraceId, image.Generation, image.Before, image.Frame.Xts, bytes = data.Length });
                     await PostAsync(() => ApplyImage(image, data)).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
@@ -304,23 +312,23 @@ public sealed partial class MainWindowViewModel
         if (image.Before)
         {
             if (!IsCurrent(image.Generation) || image.BeforeVersion != _beforeImageGeneration) return;
-            var bitmap = CreateBitmap(image.Frame, data);
+            var bitmap = CreateBitmap(image.Frame, data, image.TraceId);
             _beforeDisplayedFrame = image.Frame;
             RecalculateDisplaySizes();
             BeforeImage = bitmap;
-            if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
+            if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.TraceId, image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
             if (image.FinishBeforeBusy) IsBeforeBusy = false;
             return;
         }
         // replay前の変換は除外し、通常移動では実行中だった途中画像を表示する。
         if (image.Generation < _lastDisplayedAfter || image.Generation == _lastDisplayedAfter && image.DisplayRevision <= _lastDisplayedRevision) return;
-        var afterBitmap = CreateBitmap(image.Frame, data);
+        var afterBitmap = CreateBitmap(image.Frame, data, image.TraceId);
         _displayedFrame = image.Frame;
         _lastDisplayedAfter = image.Generation;
         _lastDisplayedRevision = image.DisplayRevision;
         RecalculateDisplaySizes();
         PreviewImage = afterBitmap;
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.TraceId, image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
         UpdateNavigationStatus();
     }
 
@@ -412,5 +420,5 @@ public sealed partial class MainWindowViewModel
     private sealed record ImageWork(Y4mFrame Frame, long Generation, long EditEpoch,
         bool Before = false, long BeforeVersion = 0, bool FinishBeforeBusy = false,
         double? DisplaySeconds = null, long? SegmentId = null, bool TrustedAbsolute = false,
-        RequestContext? RevisionContext = null, long DisplayRevision = 0);
+        RequestContext? RevisionContext = null, long DisplayRevision = 0, long TraceId = 0);
 }

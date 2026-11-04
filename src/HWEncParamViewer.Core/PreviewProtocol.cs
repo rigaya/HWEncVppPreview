@@ -35,6 +35,9 @@ public sealed record PreviewEnd(long Id, int Rc) : PreviewEvent;
 public sealed class PreviewProtocolReader
 {
     private const string Prefix = "RGYPREVIEW ";
+    private static long _nextTraceReaderId;
+    private readonly long _traceReaderId = PerfTrace.Enabled ? Interlocked.Increment(ref _nextTraceReaderId) : 0;
+    private long? _traceRequestId;
 
     private readonly Stream _stream;
     private bool _inRequest;
@@ -50,31 +53,68 @@ public sealed class PreviewProtocolReader
     /// <exception cref="Y4mTruncatedException">フレームの途中でストリームが切れた (サーバが落ちた等)</exception>
     public PreviewEvent? ReadEvent()
     {
-        var line = Y4mReader.ReadLine(_stream);
-        if (line == null) return null;
+        bool trace = PerfTrace.Enabled;
+        long eventStart = trace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+        PreviewEvent? result = null;
+        bool completed = false;
+        try
+        {
+            string? line = null;
+            bool lineCompleted = false;
+            long lineStart = trace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+            try
+            {
+                line = Y4mReader.ReadLine(_stream);
+                lineCompleted = true;
+            }
+            finally
+            {
+                if (trace) PerfTrace.Write("protocol.line", new { readerId = _traceReaderId, requestId = _traceRequestId,
+                    elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(lineStart).TotalMilliseconds,
+                    characters = line?.Length, completed = lineCompleted });
+            }
+            if (line == null) { completed = true; return null; }
 
-        if (line.StartsWith(Prefix, StringComparison.Ordinal))
-        {
-            return ParseControlLine(line);
+            if (line.StartsWith(Prefix, StringComparison.Ordinal))
+            {
+                result = ParseControlLine(line);
+                if (trace && result is PreviewBegin begin) _traceRequestId = begin.Id;
+                completed = true;
+                return result;
+            }
+            if (!_inRequest)
+            {
+                throw new PreviewProtocolException(CoreText.ProtocolLineOutsideBegin(Short(line)));
+            }
+            if (line.StartsWith("YUV4MPEG2", StringComparison.Ordinal))
+            {
+                // 1要求のヘッダは1回だけとし、計測の有無で検証順や読取順を変えない。
+                if (_y4m != null) throw new PreviewProtocolException(CoreText.DuplicateY4mHeader);
+                long headerStart = trace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+                var header = Y4mHeader.Parse(line);
+                if (trace) PerfTrace.Write("protocol.header", new { readerId = _traceReaderId, requestId = _traceRequestId,
+                    elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(headerStart).TotalMilliseconds, header.Width, header.Height });
+                _y4m = new Y4mReader(_stream, header);
+                result = new PreviewHeader(header);
+                completed = true;
+                return result;
+            }
+            if (line == "FRAME" || line.StartsWith("FRAME ", StringComparison.Ordinal))
+            {
+                if (_y4m == null) throw new PreviewProtocolException(CoreText.FrameBeforeY4mHeader);
+                result = new PreviewFrame(_y4m.ReadFrameBody(line));
+                completed = true;
+                return result;
+            }
+            throw new PreviewProtocolException(CoreText.ProtocolLineUnexpected(Short(line)));
         }
-        if (!_inRequest)
+        finally
         {
-            throw new PreviewProtocolException(CoreText.ProtocolLineOutsideBegin(Short(line)));
+            if (trace) PerfTrace.Write("protocol.event", new { readerId = _traceReaderId, requestId = _traceRequestId,
+                kind = completed ? result?.GetType().Name ?? "EOF" : "Error", completed,
+                elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(eventStart).TotalMilliseconds,
+                Xts = result is PreviewFrame frame ? frame.Frame.Xts : (double?)null });
         }
-        if (line.StartsWith("YUV4MPEG2", StringComparison.Ordinal))
-        {
-            // 1要求あたりヘッダは1回だけ。2回目が来たら新しいヘッダで読み直す方が害は小さいが、仕様違反なので弾く
-            if (_y4m != null) throw new PreviewProtocolException(CoreText.DuplicateY4mHeader);
-            var header = Y4mHeader.Parse(line);
-            _y4m = new Y4mReader(_stream, header);
-            return new PreviewHeader(header);
-        }
-        if (line == "FRAME" || line.StartsWith("FRAME ", StringComparison.Ordinal))
-        {
-            if (_y4m == null) throw new PreviewProtocolException(CoreText.FrameBeforeY4mHeader);
-            return new PreviewFrame(_y4m.ReadFrameBody(line));
-        }
-        throw new PreviewProtocolException(CoreText.ProtocolLineUnexpected(Short(line)));
     }
 
     private PreviewEvent ParseControlLine(string line)
