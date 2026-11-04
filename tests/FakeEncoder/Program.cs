@@ -10,7 +10,7 @@ namespace FakeEncoder;
 /// <summary>実GPUなしでパイプ出力と中断・障害を再現する。</summary>
 internal static class Program
 {
-    private sealed record Request(long Id, string[] Args, long Sequence);
+    private sealed record Request(long Id, string[] Args, long Sequence, bool IsProbe = false);
     private static readonly Stream Output = Console.OpenStandardOutput();
     private static readonly object Sync = new();
     private static CancellationTokenSource? _currentCancellation;
@@ -60,7 +60,8 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("FAKE_ENCODER_READY_NONE") != "1")
         {
             string encoder = Environment.GetEnvironmentVariable("FAKE_ENCODER_READY_ENCODER") ?? "fake";
-            await WriteLineAsync("RGYPREVIEW READY version=1" + (encoder.Length == 0 ? "" : " encoder=" + encoder));
+            await WriteLineAsync("RGYPREVIEW READY version=1" + (encoder.Length == 0 ? "" : " encoder=" + encoder)
+                + (Environment.GetEnvironmentVariable("FAKE_ENCODER_PROBE_SUPPORTED") == "1" ? " probe=1" : ""));
         }
         var channel = Channel.CreateBounded<Request>(new BoundedChannelOptions(1)
         {
@@ -92,6 +93,11 @@ internal static class Program
                     {
                         if (_currentId == id) _currentCancellation?.Cancel();
                         else _cancelledPending = id;
+                    }
+                    else if (command == "probe")
+                    {
+                        string[] probeArgs = root.GetProperty("args").EnumerateArray().Select(x => x.GetString()!).ToArray();
+                        channel.Writer.TryWrite(new Request(id, probeArgs, _sequence, IsProbe: true));
                     }
                     else if (command == "run")
                     {
@@ -172,6 +178,8 @@ internal static class Program
         int completed = 0;
         await foreach (var request in reader.ReadAllAsync())
         {
+            // 実サーバと同様に、先行runのENDを送信してからprobeへ進む。
+            if (request.IsProbe) { await ProbeAsync(request); continue; }
             using var cancellation = new CancellationTokenSource();
             lock (Sync)
             {
@@ -193,6 +201,40 @@ internal static class Program
             int dropAfter = EnvInt("FAKE_ENCODER_DROP_AFTER", 0);
             if (dropAfter > 0 && ++completed >= dropAfter) Environment.Exit(71);
         }
+    }
+
+    private static async Task ProbeAsync(Request request)
+    {
+        if (Environment.GetEnvironmentVariable("FAKE_ENCODER_PROBE_NONE") == "1") return;
+        int delay = EnvInt("FAKE_ENCODER_PROBE_DELAY_MS", 0);
+        if (delay > 0) await Task.Delay(delay);
+        string? reply = Environment.GetEnvironmentVariable("FAKE_ENCODER_PROBE_REPLY");
+        if (reply != null)
+        {
+            await WriteLineAsync(reply.Replace("{id}", request.Id.ToString(CultureInfo.InvariantCulture)));
+            return;
+        }
+        // これは通信回帰専用の簡易判定。実フィルタの監査結果はNativeのprobeで検証する。
+        int history = EnvInt("FAKE_ENCODER_PROBE_HISTORY", -1);
+        if (history < 0)
+        {
+            history = 0;
+            for (int index = 0; index < request.Args.Length; index++)
+            {
+                string option = request.Args[index];
+                string argument = index + 1 < request.Args.Length ? request.Args[index + 1] : "";
+                if (option is "--vpp-kfm" or "--vpp-afs" or "--vpp-deband" or "--vpp-unknown") history = 1;
+                if (option is "--vpp-nlmeans" or "--vpp-knn")
+                {
+                    foreach (string parameter in argument.Split(','))
+                        if (parameter.StartsWith("d=", StringComparison.Ordinal)
+                            && parameter[2..] != "0") history = 1;
+                }
+                if (option == "--vpp-resize" && !argument.StartsWith("algo=spline36", StringComparison.Ordinal)) history = 1;
+            }
+        }
+        int rc = EnvInt("FAKE_ENCODER_PROBE_RC", 0);
+        await WriteLineAsync($"RGYPREVIEW PROBE id={request.Id} history={history} rc={rc}");
     }
 
     private static async Task<int> EncodeAsync(string[] args, CancellationToken cancellationToken)

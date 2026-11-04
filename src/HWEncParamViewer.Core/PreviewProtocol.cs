@@ -14,6 +14,9 @@ public abstract record PreviewEvent;
 /// <summary>RGYPREVIEW READY。key=value を辞書で保持する (例: version)。</summary>
 public sealed record PreviewReady(IReadOnlyDictionary<string, string> Values) : PreviewEvent;
 
+/// <summary>RGYPREVIEW PROBE id=N history=0|1 rc=R。失敗時はhistoryを使用しない。</summary>
+public sealed record PreviewProbe(long Id, bool DependsOnHistory, int Rc) : PreviewEvent;
+
 /// <summary>RGYPREVIEW BEGIN id=N。</summary>
 public sealed record PreviewBegin(long Id) : PreviewEvent;
 
@@ -79,6 +82,7 @@ public sealed class PreviewProtocolReader
             {
                 result = ParseControlLine(line);
                 if (trace && result is PreviewBegin begin) _traceRequestId = begin.Id;
+                if (trace && result is PreviewProbe probe) _traceRequestId = probe.Id;
                 completed = true;
                 return result;
             }
@@ -127,6 +131,14 @@ public sealed class PreviewProtocolReader
         {
             case "READY":
                 return new PreviewReady(kv);
+            case "PROBE":
+                if (_inRequest || tokens.Skip(1).Any(token => token.IndexOf('=') <= 0)
+                    || tokens.Skip(1).Select(token => token.Split('=')[0]).Distinct(StringComparer.Ordinal).Count() != tokens.Length - 1)
+                    throw new PreviewProtocolException(CoreText.ServerEventMismatch);
+                int history = RequireInt(kv, "history", line);
+                if (kv.GetValueOrDefault("history") is not ("0" or "1"))
+                    throw new PreviewProtocolException(CoreText.ProtocolNumberInvalid("history", Short(line)));
+                return new PreviewProbe(RequireLong(kv, "id", line), history == 1, RequireInt(kv, "rc", line));
             case "BEGIN":
                 if (_inRequest) throw new PreviewProtocolException(CoreText.BeginBeforeEnd);
                 _inRequest = true;

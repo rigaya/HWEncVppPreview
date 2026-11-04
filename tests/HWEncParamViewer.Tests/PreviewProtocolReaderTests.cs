@@ -41,6 +41,42 @@ public class PreviewProtocolReaderTests
         Assert.Equal((12, 0), (end.Id, end.Rc));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ProbeBetweenRequestsDoesNotChangeY4mState(bool trickle)
+    {
+        var events = ReadAll(Concat("RGYPREVIEW READY version=1 probe=1\n",
+            "RGYPREVIEW PROBE id=9999999999 history=0 rc=0\n",
+            "RGYPREVIEW BEGIN id=2\n", "RGYPREVIEW END id=2 rc=0\n",
+            "RGYPREVIEW PROBE id=3 history=1 rc=-5\n"), trickle);
+        var first = Assert.IsType<PreviewProbe>(events[1]);
+        Assert.Equal(9999999999L, first.Id);
+        Assert.False(first.DependsOnHistory);
+        Assert.Equal(0, first.Rc);
+        var last = Assert.IsType<PreviewProbe>(events[^1]);
+        Assert.True(last.DependsOnHistory);
+        Assert.Equal(-5, last.Rc);
+    }
+
+    [Theory]
+    [InlineData("RGYPREVIEW PROBE id=1 history=2 rc=0\n")]
+    [InlineData("RGYPREVIEW PROBE id=1 history=-1 rc=0\n")]
+    [InlineData("RGYPREVIEW PROBE id=1 history=+0 rc=0\n")]
+    [InlineData("RGYPREVIEW PROBE id=1 history=0\n")]
+    [InlineData("RGYPREVIEW PROBE history=0 rc=0\n")]
+    [InlineData("RGYPREVIEW PROBE id=1 history=0 rc=bad\n")]
+    [InlineData("RGYPREVIEW PROBE id=1 history=1 history=0 rc=0\n")]
+    [InlineData("RGYPREVIEW PROBE id=1 history=0 rc=0 stray\n")]
+    [InlineData("RGYPREVIEW PROBE id=1 history=0 rc=0 =bad\n")]
+    public void InvalidProbeFieldsAreRejected(string line)
+        => Assert.Throws<PreviewProtocolException>(() => ReadAll(Concat(line)));
+
+    [Fact]
+    public void ProbeInsideRunIsRejected()
+        => Assert.Throws<PreviewProtocolException>(() => ReadAll(Concat(
+            "RGYPREVIEW BEGIN id=1\n", "RGYPREVIEW PROBE id=2 history=0 rc=0\n")));
+
     [Fact]
     public void フレームデータが改行や制御行そのもののバイト列でも壊れない()
     {

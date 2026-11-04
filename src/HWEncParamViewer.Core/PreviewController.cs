@@ -229,10 +229,10 @@ public sealed partial class PreviewController : IAsyncDisposable
         }
     }
 
-    private async Task<(IPreviewBackend Backend, string? Encoder)> PrepareBackendAsync(
+    private async Task<(IPreviewBackend Backend, bool? History)> PrepareBackendAsync(
         IPreviewBackend backend, PreviewRequest request, bool background, CancellationToken token)
     {
-        try { return (backend, await backend.GetReadyEncoderAsync(request.EncoderPath, token).ConfigureAwait(false)); }
+        try { return (backend, await backend.GetHistoryRequirementAsync(request, token).ConfigureAwait(false)); }
         catch (PreviewServerNotSupportedException) when (_enableFallback
             && ReferenceEquals(backend, background ? _backgroundPreferred : _preferred))
         {
@@ -384,9 +384,9 @@ public sealed partial class PreviewController : IAsyncDisposable
             IPreviewBackend backend;
             lock (_sync) backend = _unsupported.Contains(request.EncoderPath)
                 ? (background ? _backgroundFallback : _fallback) : (background ? _backgroundPreferred : _preferred);
-            string? readyEncoder;
-            (backend, readyEncoder) = await PrepareBackendAsync(backend, request, background, active.Token).ConfigureAwait(false);
-            physicalRequest = PhysicalAfterRequest(request with { ReadyEncoder = readyEncoder }, background) with { Continuous = false };
+            bool? history;
+            (backend, history) = await PrepareBackendAsync(backend, request, background, active.Token).ConfigureAwait(false);
+            physicalRequest = PhysicalAfterRequest(request with { DependsOnHistory = history }, background) with { Continuous = false };
             physicalKey = physicalRequest with
             { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
             sink = new SelectionSink(request, emit, background, physicalRequest);
@@ -465,7 +465,7 @@ public sealed partial class PreviewController : IAsyncDisposable
                 {
                     lock (_sync) _unsupported.Add(request.EncoderPath);
                     backend = background ? _backgroundFallback : _fallback;
-                    physicalRequest = PhysicalAfterRequest(request with { ReadyEncoder = null }, background) with { Continuous = false };
+                    physicalRequest = PhysicalAfterRequest(request with { DependsOnHistory = null }, background) with { Continuous = false };
                     physicalKey = physicalRequest with
                     { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
                     sink = new SelectionSink(request, emit, background, physicalRequest)

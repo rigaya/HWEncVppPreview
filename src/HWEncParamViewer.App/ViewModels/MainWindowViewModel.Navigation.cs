@@ -126,7 +126,7 @@ public sealed partial class MainWindowViewModel
                         // 順方向の論理2秒はCoreで物理3秒へ広げ、legacyの逆方向3秒は維持する。
                         PreMarginSeconds = actualReverse
                             ? capabilities.TimestampPassthrough && info.TimestampOriginSeconds.HasValue ? 5 : 3 : 2,
-                        Capabilities = capabilities, HelpSchema = HelpSchema, TimestampOriginSeconds = info.TimestampOriginSeconds,
+                        Capabilities = capabilities, TimestampOriginSeconds = info.TimestampOriginSeconds,
                         TimestampOriginTrusted = info.TimestampOriginTrusted,
                         InputDurationSeconds = info.Duration?.TotalSeconds ?? (HasDuration ? DurationSeconds : null),
                         Continuous = capabilities.TimestampPassthrough && info.TimestampOriginSeconds.HasValue && !actualReverse,

@@ -251,9 +251,9 @@ public sealed partial class PreviewController
             await _execution.WaitAsync(startToken.Token).ConfigureAwait(false);
             entered = true;
             session.Cancellation.Token.ThrowIfCancellationRequested();
-            string? readyEncoder;
-            (backend, readyEncoder) = await PrepareBackendAsync(backend, session.InitialRequest, false, session.Cancellation.Token).ConfigureAwait(false);
-            var physical = PhysicalAfterRequest(session.InitialRequest with { ReadyEncoder = readyEncoder }, false) with { Continuous = true };
+            bool? history;
+            (backend, history) = await PrepareBackendAsync(backend, session.InitialRequest, false, session.Cancellation.Token).ConfigureAwait(false);
+            var physical = PhysicalAfterRequest(session.InitialRequest with { DependsOnHistory = history }, false) with { Continuous = true };
             session.PhysicalRequest = physical;
             double seek = CommandBuilder.Plan(physical).SeekSeconds ?? 0;
             var clock = new PreviewClockMap(physical.TimestampOriginSeconds, seek, true);
@@ -327,7 +327,7 @@ public sealed partial class PreviewController
                     lock (_sync) _unsupported.Add(session.PhysicalRequest.EncoderPath);
                     backend = _fallback;
                     _cache.RemoveSegment(session.SegmentId);
-                    physical = PhysicalAfterRequest(session.InitialRequest with { ReadyEncoder = null }, false) with { Continuous = true };
+                    physical = PhysicalAfterRequest(session.InitialRequest with { DependsOnHistory = null }, false) with { Continuous = true };
                     session.PhysicalRequest = physical;
                     seek = CommandBuilder.Plan(physical).SeekSeconds ?? 0;
                     clock = new PreviewClockMap(physical.TimestampOriginSeconds, seek, true);

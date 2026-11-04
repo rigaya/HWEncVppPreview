@@ -213,8 +213,8 @@ public sealed class CliTests
     [InlineData("server", "--vpp-kfm", 2, 7, "QSVEnc")]
     [InlineData("server", "", 0, 9, "VCEEnc")]
     [InlineData("server", "", 0, 9, "rkmppenc")]
-    [InlineData("server", "", 2, 7, "NVEnc")]
-    [InlineData("server", "", 2, 7, "")]
+    [InlineData("server", "", 0, 9, "NVEnc")]
+    [InlineData("server", "", 0, 9, "")]
     public async Task JsonReportsActualWarmupAndSafeStartForSpatialAndTemporalRequests(string mode, string filter, double warmup, double seek, string encoder)
     {
         var args = Args("--mode", mode, "--time", "10", "--pre-margin", "2", "--post-margin", "1",
@@ -255,7 +255,11 @@ public sealed class CliTests
             OperatingSystem.IsWindows() ? "HWEncParamViewer.Cli.exe" : "HWEncParamViewer.Cli");
         var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         if (capabilities) start.Environment["FAKE_ENCODER_PREVIEW_CAPABILITIES"] = "1";
-        if (readyEncoder is not null) start.Environment["FAKE_ENCODER_READY_ENCODER"] = readyEncoder;
+        if (readyEncoder is not null)
+        {
+            start.Environment["FAKE_ENCODER_READY_ENCODER"] = readyEncoder;
+            start.Environment["FAKE_ENCODER_PROBE_SUPPORTED"] = "1";
+        }
         foreach (string arg in args) start.ArgumentList.Add(arg);
         using var process = Process.Start(start)!;
         Task<string> output = process.StandardOutput.ReadToEndAsync();

@@ -1096,8 +1096,10 @@ public sealed class StreamingNavigationTests
 
     private sealed class RecordingBackend(ConcurrentQueue<PreviewRequest> requests, Action<Y4mFrame>? observe = null) : IPreviewBackend
     {
-        public Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
-            => Task.FromResult<string?>("QSVEnc");
+        public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
+            // 試験専用の追加入力指定は未監査として、従来の2秒fixtureを維持する。
+            => Task.FromResult<bool?>(request.InputArgs.Any(value => value.StartsWith("--fake-", StringComparison.Ordinal))
+                || request.VppArgs.Any(value => value is "--vpp-kfm" or "--vpp-nlmeans"));
 
         private readonly OneShotBackend _inner = new();
         public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
@@ -1209,8 +1211,8 @@ public sealed class StreamingNavigationTests
 
     private sealed class GapNavigationBackend : IPreviewBackend
     {
-        public Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
-            => Task.FromResult<string?>("QSVEnc");
+        public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult<bool?>(false);
 
         public ConcurrentQueue<PreviewRequest> Requests { get; } = new();
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)

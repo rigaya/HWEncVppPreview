@@ -9,8 +9,6 @@ public sealed record PreviewRequest
     public long CorrelationId { get; init; }
     /// <summary>helpで確認できた、プレビュー時に付加するオプション。</summary>
     public PreviewCapabilities Capabilities { get; init; } = new();
-    /// <summary>読み込んだhelpの既定値。条件付き暖機の判定だけに使い、実行引数や画像内容のキーには含めない。</summary>
-    public HelpSchema? HelpSchema { get; init; }
     /// <summary>フィルタなし・seekなしの先頭Xts。未取得なら要求を跨ぐ時計として使わない。</summary>
     public double? TimestampOriginSeconds { get; init; }
     /// <summary>原点がwrap近傍ならfalse。数値を保持したまま要求単位の相対時計へ戻す。</summary>
@@ -23,8 +21,8 @@ public sealed record PreviewRequest
     public double? SeekSecondsOverride { get; init; }
     /// <summary>物理要求で確定した暖機。論理要求や逆方向の既定値は従来の2秒。</summary>
     public double WarmupSeconds { get; internal init; } = PreviewWarmupPolicy.DefaultWarmupSeconds;
-    /// <summary>同じバックエンドから実受信したREADYのencoder。物理計画専用で画像内容のキーには含めない。</summary>
-    internal string? ReadyEncoder { get; init; }
+    /// <summary>当該引数で実受信したprobeの履歴依存判定。物理計画専用で画像内容のキーには含めない。</summary>
+    internal bool? DependsOnHistory { get; init; }
 
     /// <summary>エンコーダのexeパス。引数配列には含めない（起動側が使う）。</summary>
     public string EncoderPath { get; init; } = "";

@@ -19,9 +19,9 @@ public sealed record PreviewRunResult(int ExitCode, string StandardError, bool I
 
 public interface IPreviewBackend : IAsyncDisposable
 {
-    /// <summary>実際に受信したREADYのencoder。常駐未対応や都度起動はnullとし、パス名から推定しない。</summary>
-    Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
-        => Task.FromResult<string?>(null);
+    /// <summary>当該引数のprobe結果。falseだけが履歴非依存、未対応・都度起動・判定不能はnull。</summary>
+    Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult<bool?>(null);
     Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default);
     /// <summary>watchdog等で回復不能になった実行を、プロセスツリーごと停止する。</summary>
     ValueTask AbortAsync();

@@ -6,88 +6,19 @@ public sealed class PreviewWarmupPolicyTests
     private static PreviewRequest Request(double target = 10) => new()
     {
         EncoderPath = "encoder", InputFile = "input", Fps = 2, TargetSeconds = target, Continuous = true,
-        Capabilities = new(true), TimestampOriginSeconds = 1000, ReadyEncoder = "QSVEnc",
+        Capabilities = new(true), TimestampOriginSeconds = 1000, DependsOnHistory = false,
     };
 
-    [Fact]
-    public void AuditedChainsAndInputModesCanSkipWarmup()
-    {
-        string[] options = "--crop --vpp-pad --vpp-colorspace --vpp-tweak --vpp-curves --vpp-unsharp --vpp-edgelevel --vpp-warpsharp --vpp-pmd --vpp-denoise-dct --vpp-nnedi --vpp-transform --vpp-rotate --vpp-nnedi-upscale --vpp-hqdering --vpp-dehalo --vpp-finedehalo".Split(' ');
-        foreach (string mode in new[] { "--avhw", "--avsw" })
-        {
-            var request = Request() with { InputArgs = new[] { mode } };
-            Assert.Equal(0, PreviewWarmupPolicy.RequiredWarmupSeconds(request));
-            Assert.Equal(0, PreviewWarmupPolicy.RequiredWarmupSeconds(request with { VppArgs = options }));
-            foreach (string option in options)
-                Assert.Equal(0, PreviewWarmupPolicy.RequiredWarmupSeconds(request with { VppArgs = new[] { option, "enable=true" } }));
-        }
-    }
-
-    [Fact]
-    public void UnknownMixedAndHiddenOptionsKeepWarmup()
-    {
-        foreach (string option in "--vpp-kfm --vpp-afs --vpp-nlmeans --vpp-knn --vpp-deband --vpp-smooth --vpp-resize --vpp-onnx --vpp-anime4k-shader --vpp-unknown --output-res stray".Split(' '))
-        {
-            Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with { VppArgs = new[] { option } }));
-            Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with { VppArgs = new[] { "--vpp-tweak", "brightness=0.1", option } }));
-            Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with { InputArgs = new[] { "--avhw", option } }));
-        }
-        Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with { VppArgs = new[] { "--vpp-tweak", "brightness=0.1", "extra" } }));
-    }
-
-    private static HelpSchema Schema(string option, string? defaultValue) => new(
-        "VPP Options:\n  [denoise] Denoise\n   " + option + " [<param>=<value>]\n    params\n"
-        + "      d=<int> Temporal radius" + (defaultValue is null ? "" : " (default: " + defaultValue + ")") + "\n");
-
     [Theory]
-    [InlineData("--vpp-knn")]
-    [InlineData("--vpp-nlmeans")]
-    public void SpatialDOverridesHelpAndUnknownDefaultsStayConservative(string option)
+    [InlineData(false, 0)]
+    [InlineData(true, 2)]
+    [InlineData(null, 2)]
+    public void OnlyActualProbeResultControlsWarmup(bool? history, double expected)
     {
-        foreach (string value in new[] { "d=0", "d=+0", "d=\"0\"", "\"d=0\"", "d=0,search_t=7" })
-            Assert.Equal(0, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with
-            { VppArgs = new[] { option, value }, HelpSchema = Schema(option, "2") }));
-        foreach (string value in new[] { "d=1", "d=-1", "d=0.0", "d=NaN", "d=", "d=0,d=0", "d=0,D=2", "d=\"0", "d=0,", "d=0,,search_t=7", "d=\"0,1\"" })
-            Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with { VppArgs = new[] { option, value } }));
-        Assert.Equal(0, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with
-        { VppArgs = new[] { option }, HelpSchema = Schema(option, "0") }));
-        Assert.Equal(0, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with
-        { VppArgs = new[] { option, "search_t=7" }, HelpSchema = Schema(option, "0") }));
-        foreach (string? value in new string?[] { null, "derived", "bad", "2" })
-            Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with
-            { VppArgs = new[] { option }, HelpSchema = Schema(option, value) }));
-        Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with
-        { VppArgs = new[] { option }, HelpSchema = Schema("--vpp-other", "0") }));
-        Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with
-        { VppArgs = new[] { option, "d=0", "--vpp-kfm" } }));
-    }
-
-    [Fact]
-    public void OnlyExplicitSpatialResizeCanAccompanyResolution()
-    {
-        foreach (string algo in "bilinear bicubic spline16 spline36 spline64 lanczos2 lanczos3 lanczos4 lanczos5 lanczos6 lanczos7 lanczos8 mitchell catmull-rom hermite gauss fsr1 nis jinc36 jinc64 jinc144 jinc256 area dpid".Split(' '))
-        {
-            Assert.Equal(0, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with
-            { VppArgs = new[] { "--vpp-resize", "algo=" + algo, "--output-res", "1280x720" } }));
-            Assert.Equal(0, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with
-            { VppArgs = new[] { "--output-res", "1280x720", "--vpp-resize", "algo=\"" + algo + "\"" } }));
-        }
-        foreach (string value in new[] { "algo=auto", "algo=mfx_ai_superres", "algo=advanced", "algo=libplacebo-spline36", "algo=unknown", "sharpness=0.5", "algo=spline36,algo=nis", "algo=\"spline36", "algo=spline36 extra" })
-            Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with { VppArgs = new[] { "--vpp-resize", value } }));
-        foreach (string value in new[] { "1280x720", "0x720", "1280x0", "1280x720,ignore_sar=true", "1280:720", "1280x720 extra" })
-            Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with { VppArgs = new[] { "--output-res", value } }));
-        Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with
-        { VppArgs = new[] { "--vpp-resize", "algo=spline36", "--output-res" } }));
-    }
-
-    [Fact]
-    public void InterlaceConsumesExactlyOneValidValue()
-    {
-        foreach (string value in new[] { "tff", "bff" })
-            Assert.Equal(0, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with { InputArgs = new[] { "--avhw", "--interlace", value } }));
-        foreach (var args in new[] { new[] { "--interlace" }, new[] { "--interlace", "auto" }, new[] { "--interlace", "tff", "extra" },
-            new[] { "--interlace", "tff", "--interlace", "bff" }, new[] { "--interlace", "--avhw" } })
-            Assert.Equal(2, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with { InputArgs = args }));
+        // 未知CLIも既定値もViewerで再解釈せず、Nativeの引数解析結果だけを採用する。
+        foreach (string[] filters in new[] { Array.Empty<string>(), new[] { "--vpp-unknown" }, new[] { "--vpp-nlmeans", "d=1" } })
+            Assert.Equal(expected, PreviewWarmupPolicy.RequiredWarmupSeconds(Request() with
+            { DependsOnHistory = history, VppArgs = filters, InputArgs = new[] { "--unknown-input" } }));
     }
 
     [Fact]
@@ -96,7 +27,7 @@ public sealed class PreviewWarmupPolicyTests
         foreach (double target in new[] { 0, 0.3, 2, 3, 10.1234, 3600 })
         foreach (double pre in new[] { 0, 2, 3.1234, 5 })
         {
-            var logical = Request(target) with { PreMarginSeconds = pre, VppArgs = new[] { "--vpp-kfm" } };
+            var logical = Request(target) with { PreMarginSeconds = pre, VppArgs = new[] { "--vpp-kfm" }, DependsOnHistory = true };
             var physical = PreviewWarmupPolicy.PreparePhysical(logical, false);
             var old = logical with { SeekSecondsOverride = Math.Max(0, target - Math.Max(3, pre)) };
             Assert.Equal(CommandBuilder.Plan(old), CommandBuilder.Plan(physical));
@@ -137,7 +68,7 @@ public sealed class PreviewWarmupPolicyTests
         Assert.Equal(7, PreviewWarmupPolicy.SafeStartSeconds(reverse, false));
         foreach (var req in new[] { Request() with { Capabilities = new() }, Request() with { TimestampOriginSeconds = null } })
             Assert.Equal(CommandBuilder.Plan(req), CommandBuilder.Plan(PreviewWarmupPolicy.PreparePhysical(req, false)));
-        var unknown = Request() with { VppArgs = new[] { "unknown" }, Continuous = false };
+        var unknown = Request() with { VppArgs = new[] { "unknown" }, DependsOnHistory = true, Continuous = false };
         var background = PreviewWarmupPolicy.PreparePhysical(unknown, true);
         Assert.Equal(CommandBuilder.Plan(unknown), CommandBuilder.Plan(background));
         Assert.Equal(8, PreviewWarmupPolicy.SafeStartSeconds(background, true));
@@ -221,8 +152,8 @@ public sealed class PreviewWarmupPolicyTests
 
     private sealed class PixelBackend : IPreviewBackend
     {
-        public Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
-            => Task.FromResult<string?>("QSVEnc");
+        public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult<bool?>(false);
 
         public System.Threading.Channels.Channel<double> Pauses { get; } = System.Threading.Channels.Channel.CreateUnbounded<double>();
         public List<PreviewRequest> Requests { get; } = new();

@@ -10,6 +10,7 @@ public sealed class ServerBackend : IPreviewBackend
 {
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _readyTimeout;
+    private readonly TimeSpan _probeTimeout;
     private readonly TimeSpan _cancelTimeout;
     private readonly TimeSpan _stopTimeout;
     private readonly ServerRestartPolicy _restartPolicy;
@@ -25,39 +26,79 @@ public sealed class ServerBackend : IPreviewBackend
 
     public ServerBackend(TimeProvider? timeProvider = null, TimeSpan? readyTimeout = null,
         TimeSpan? cancelTimeout = null, ServerRestartPolicy? restartPolicy = null,
-        Action<ProcessStartInfo>? configureStartInfo = null, TimeSpan? stopTimeout = null)
+        Action<ProcessStartInfo>? configureStartInfo = null, TimeSpan? stopTimeout = null, TimeSpan? probeTimeout = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
         _readyTimeout = readyTimeout ?? TimeSpan.FromSeconds(3);
+        _probeTimeout = probeTimeout ?? TimeSpan.FromSeconds(3);
         _cancelTimeout = cancelTimeout ?? TimeSpan.FromSeconds(5);
         _stopTimeout = stopTimeout ?? TimeSpan.FromSeconds(5);
         if (_stopTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(stopTimeout));
+        if (_probeTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(probeTimeout));
         if (_readyTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(readyTimeout));
         if (_cancelTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(cancelTimeout));
         _restartPolicy = restartPolicy ?? new ServerRestartPolicy();
         _configure = configureStartInfo;
     }
 
-    public async Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
+    public async Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
     {
         await _runGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Session? session = null;
         try
         {
             lock (_sync) ObjectDisposedException.ThrowIf(_disposed, this);
-            try
-            {
-                var session = await GetSessionAsync(encoderPath, null, cancellationToken).ConfigureAwait(false);
-                return session.ReadyEncoder;
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (PreviewServerNotSupportedException) { throw; }
-            catch (Exception exception)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed, exception);
-            }
+            session = await GetSessionAsync(request.EncoderPath, null, cancellationToken).ConfigureAwait(false);
+            return await ProbeHistoryAsync(session, request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            if (session != null) await DropSessionAsync(session).ConfigureAwait(false);
+            throw;
+        }
+        catch (ObjectDisposedException) { throw; }
+        catch (Exception exception)
+        {
+            // 未完了のprobeの応答を、次のrunのBEGINとして読まないようsessionごと破棄する。
+            if (session != null) await DropSessionAsync(session).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed, exception);
         }
         finally { _runGate.Release(); }
+    }
+
+    private static string HistoryKey(PreviewRequest request) => JsonSerializer.Serialize(CommandBuilder.BuildServer(request with
+    {
+        TargetSeconds = 0, PreMarginSeconds = 0, PostMarginSeconds = 0, SeekSecondsOverride = null, Continuous = false,
+    }));
+
+    private async Task<bool?> ProbeHistoryAsync(Session session, PreviewRequest request, CancellationToken token)
+    {
+        if (!session.SupportsProbe) return null;
+        long lookupStarted = PerfTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
+        string key = HistoryKey(request);
+        if (session.HistoryRequirements.TryGetValue(key, out bool history))
+        {
+            if (PerfTrace.Enabled) PerfTrace.Write("server.probe_cache_hit", new { correlationId = request.CorrelationId, pid = session.Process.Id, history = history ? 1 : 0, elapsedMs = Stopwatch.GetElapsedTime(lookupStarted).TotalMilliseconds });
+            return history;
+        }
+        long id = Interlocked.Increment(ref _nextId);
+        long started = PerfTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
+        if (PerfTrace.Enabled) PerfTrace.Write("server.probe_send", new { correlationId = request.CorrelationId, id, pid = session.Process.Id });
+        // run gateはENDとstderr末尾の回収まで保持されるため、映像の途中へprobeを混ぜない。
+        await session.SendAsync(new { cmd = "probe", id, args = CommandBuilder.BuildServer(request) }, _probeTimeout)
+            .WaitAsync(token).ConfigureAwait(false);
+        var read = Task.Run(session.Reader.ReadEvent);
+        session.LastRead = read;
+        PreviewEvent? response = await read.WaitAsync(_probeTimeout, _timeProvider, token).ConfigureAwait(false);
+        if (response is not PreviewProbe probe || probe.Id != id)
+            throw new PreviewProtocolException(CoreText.ServerEventMismatch);
+        if (PerfTrace.Enabled) PerfTrace.Write("server.probe_receive", new { correlationId = request.CorrelationId, id,
+            pid = session.Process.Id, history = probe.DependsOnHistory ? 1 : 0, rc = probe.Rc,
+            elapsedMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds });
+        if (probe.Rc != 0) return null;
+        session.HistoryRequirements.Add(key, probe.DependsOnHistory);
+        return probe.DependsOnHistory;
     }
 
     public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink,
@@ -79,9 +120,21 @@ public sealed class ServerBackend : IPreviewBackend
             entered = true;
             execution.Token.ThrowIfCancellationRequested();
             session = await GetSessionAsync(request.EncoderPath, sink, execution.Token).ConfigureAwait(false);
-            // 計画後にプロセスが再起動しても、別実装へ暖機0を流用しない。
-            if (request.WarmupSeconds == 0 && !PreviewWarmupPolicy.AllowsZeroWarmup(session.ReadyEncoder))
-                throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed);
+            // 計画後に再起動した場合も、同じ引数のprobeが新sessionで確定するまで暖機0を送らない。
+            if (request.WarmupSeconds == 0 && (!session.HistoryRequirements.TryGetValue(HistoryKey(request), out bool history) || history))
+            {
+                try
+                {
+                    if (await ProbeHistoryAsync(session, request, execution.Token).ConfigureAwait(false) != false)
+                        throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception exception)
+                {
+                    await DropSessionAsync(session).ConfigureAwait(false);
+                    throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed, exception);
+                }
+            }
             long id = Interlocked.Increment(ref _nextId);
             Task<string> logTask = session.RegisterLog(id);
             requestLog = logTask;
@@ -251,7 +304,7 @@ public sealed class ServerBackend : IPreviewBackend
             PreviewEvent? ready = await readyTask.WaitAsync(_readyTimeout, _timeProvider, token).ConfigureAwait(false);
             if (ready is not PreviewReady info || !info.Values.TryGetValue("version", out string? version) || version != "1")
                 throw new PreviewServerNotSupportedException(CoreText.ServerReadyUnavailable);
-            session.ReadyEncoder = info.Values.GetValueOrDefault("encoder");
+            session.SupportsProbe = info.Values.GetValueOrDefault("probe") == "1";
             if (PerfTrace.Enabled) PerfTrace.Write("server.ready", new { pid = session.Process.Id });
             return session;
         }
@@ -387,7 +440,8 @@ public sealed class ServerBackend : IPreviewBackend
         }
         private IPreviewSink? _sink;
         public IPreviewSink? Sink { set => Volatile.Write(ref _sink, value); }
-        public string? ReadyEncoder { get; set; }
+        public bool SupportsProbe { get; set; }
+        public Dictionary<string, bool> HistoryRequirements { get; } = new(StringComparer.Ordinal);
         public string Path { get; }
         public Process Process { get; }
         public PreviewProtocolReader Reader { get; }

@@ -65,7 +65,7 @@ public static class Program
 
     private static async Task ExecuteAsync(Options options, CliResult result, TimeProvider clock, CancellationToken cancellationToken)
     {
-        var (capabilities, helpSchema) = await ReadHelpAsync(options.Encoder, clock, cancellationToken).ConfigureAwait(false);
+        var capabilities = await ReadHelpAsync(options.Encoder, clock, cancellationToken).ConfigureAwait(false);
         await using var probe = new InputProbe(timeProvider: clock, timeout: options.Watchdog);
         var input = await probe.ProbeAsync(options.Encoder, options.Input, options.InputArgs, cancellationToken, capabilities).ConfigureAwait(false);
         var request = new PreviewRequest
@@ -73,7 +73,7 @@ public static class Program
             EncoderPath = options.Encoder, InputFile = options.Input, InputArgs = options.InputArgs,
             VppArgs = options.VppArgs, TargetSeconds = options.Time, PreMarginSeconds = options.PreMargin,
             PostMarginSeconds = options.PostMargin, Fps = input.Fps,
-            Capabilities = capabilities, HelpSchema = helpSchema, TimestampOriginSeconds = input.TimestampOriginSeconds,
+            Capabilities = capabilities, TimestampOriginSeconds = input.TimestampOriginSeconds,
             TimestampOriginTrusted = input.TimestampOriginTrusted,
             InputDurationSeconds = input.Duration?.TotalSeconds,
         };
@@ -166,7 +166,7 @@ public static class Program
         if (options.DumpY4m != null) await DumpY4mAsync(options.DumpY4m, recording.Frames, input.Fps, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<(PreviewCapabilities Capabilities, HelpSchema? Schema)> ReadHelpAsync(string encoder, TimeProvider clock, CancellationToken token)
+    private static async Task<PreviewCapabilities> ReadHelpAsync(string encoder, TimeProvider clock, CancellationToken token)
     {
         try
         {
@@ -184,13 +184,13 @@ public static class Program
                 await process.WaitForExitAsync().ConfigureAwait(false);
                 await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
             }
-            if (process.ExitCode != 0) return (new(), null);
+            if (process.ExitCode != 0) return new();
             string help = await stdout.ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(help)) help = await stderr.ConfigureAwait(false);
-            return (CommandBuilder.CapabilitiesFromHelp(new HelpIndex(help)), new HelpSchema(help));
+            return CommandBuilder.CapabilitiesFromHelp(new HelpIndex(help));
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch { return (new(), null); }
+        catch { return new(); }
     }
 
     private static string Tail(string text) => text.Length <= 8192 ? text : text[^8192..];
@@ -231,8 +231,8 @@ public static class Program
     /// <summary>バックエンドへ透過的に委譲し、Controllerが選んだ画像と区間全体を対応付ける。</summary>
     private sealed class RecordingBackend(IPreviewBackend inner, string mode, Recording recording) : IPreviewBackend
     {
-        public Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
-            => inner.GetReadyEncoderAsync(encoderPath, cancellationToken);
+        public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
+            => inner.GetHistoryRequirementAsync(request, cancellationToken);
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
         {
             recording.Mode = mode;

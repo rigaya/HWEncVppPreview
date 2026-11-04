@@ -111,8 +111,8 @@ public sealed class IdleReuseTests(ITestOutputHelper output)
 
     private sealed class GapBackend : IPreviewBackend
     {
-        public Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
-            => Task.FromResult<string?>("QSVEnc");
+        public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult<bool?>(false);
 
         public Channel<double> Pauses { get; } = Channel.CreateUnbounded<double>();
         public List<PreviewRequest> Requests { get; } = new();

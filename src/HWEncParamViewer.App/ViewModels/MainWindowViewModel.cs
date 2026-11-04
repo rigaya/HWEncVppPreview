@@ -569,7 +569,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         // 物理offの結果を移動に再利用しても、診断用sourceはhelp由来の論理設定を維持する。
         var logical = _intervalLogicalRequest ?? _intervalRequest;
         var request = RetargetInterval(_intervalRequest, seconds) with { CorrelationId = generation,
-            InputArgs = logical.InputArgs, VppArgs = logical.VppArgs, Capabilities = _capabilities, HelpSchema = HelpSchema,
+            InputArgs = logical.InputArgs, VppArgs = logical.VppArgs, Capabilities = _capabilities,
             TimestampOriginTrusted = _inputInfo?.TimestampOriginTrusted ?? _intervalRequest.TimestampOriginTrusted };
         CheckBeforeInterval(request);
         var context = new RequestContext(generation, request, _clock.GetTimestamp(), editEpoch: _editEpoch);
@@ -883,8 +883,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     }
     private sealed class ObservedBackend(IPreviewBackend inner, string mode, MainWindowViewModel owner) : IPreviewBackend
     {
-        public Task<string?> GetReadyEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
-            => inner.GetReadyEncoderAsync(encoderPath, cancellationToken);
+        public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
+            => inner.GetHistoryRequirementAsync(request, cancellationToken);
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
         {
             var context = owner.ContextForPhysical(request);
