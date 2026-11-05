@@ -306,7 +306,15 @@ public sealed class FrameCache
             entry.Frames.AddRange(frames);
             // 容量不足で保存できない場合も、残る旧区間との整合を先に確認する。
             ValidateOverlap(entry, closed: true);
-            if (!MakeRoom(bytes, null)) return null;
+            if (!MakeRoom(bytes, null))
+            {
+                // 比較による診断と、容量不足で実区間を保存できない結果を区別する。
+                if (PerfTrace.Enabled) PerfTrace.Write("cache.store_rejected", new { entry.Id, request.CorrelationId,
+                    reason = "capacity_after_overlap_check", bytes, capacityBytes = _capacityBytes, cacheBytes = _sizeBytes,
+                    entry.CanStitch, sourceCanStitch = !_stitchDisabled.Any(source => SameContent(source, request)),
+                    entry.SafeStart, entry.SafeEnd });
+                return null;
+            }
             _segments.Add(id, entry);
             _sizeBytes += bytes;
             ValidateAfterChange(entry, closed: true);
@@ -380,7 +388,14 @@ public sealed class FrameCache
             int required = closed ? 2 : 3;
             if (matches.Count < required)
             {
-                if (closed) { RejectStitch(entry); return; }
+                if (closed)
+                {
+                    if (PerfTrace.Enabled) PerfTrace.Write("cache.overlap_reject", new { entry.Id, peerId = previous.Id,
+                        entry.Request.CorrelationId, reason = "insufficient_timestamp_matches", matches = matches.Count,
+                        required, overlapStart = start, overlapEnd = end });
+                    RejectStitch(entry, "insufficient_timestamp_matches");
+                    return;
+                }
                 pending = true;
                 continue;
             }
@@ -389,7 +404,14 @@ public sealed class FrameCache
             {
                 var pair = matches[sample];
                 if (!pair.Current.Frame.Data.AsSpan().SequenceEqual(pair.Old.Frame.Data))
-                { RejectStitch(entry); return; }
+                {
+                    if (PerfTrace.Enabled) PerfTrace.Write("cache.overlap_reject", new { entry.Id, peerId = previous.Id,
+                        entry.Request.CorrelationId, reason = "pixel_mismatch", matches = matches.Count, required,
+                        overlapStart = start, overlapEnd = end, currentXts = pair.Current.Frame.Xts,
+                        previousXts = pair.Old.Frame.Xts });
+                    RejectStitch(entry, "pixel_mismatch");
+                    return;
+                }
             }
             entry.ValidatedPeers.Add(previous.Id);
         }
@@ -408,8 +430,11 @@ public sealed class FrameCache
         return low;
     }
 
-    private SegmentEntry RejectStitch(SegmentEntry entry)
+    private SegmentEntry RejectStitch(SegmentEntry entry, string reason = "ambiguous_navigation")
     {
+        if (PerfTrace.Enabled && !_stitchDisabled.Any(source => SameContent(source, entry.Request)))
+            PerfTrace.Write("cache.stitch_reject", new { entry.Id, entry.Request.CorrelationId, reason,
+                entry.SafeStart, entry.SafeEnd, frames = entry.Frames.Count, cacheBytes = _sizeBytes });
         entry.CanStitch = false;
         if (!_stitchDisabled.Any(source => SameContent(source, entry.Request))) _stitchDisabled.Add(entry.Request);
         // olderのlate overlap検査からでも、最も新しい要求を残す。未挿入の新要求も候補に含める。
@@ -455,8 +480,24 @@ public sealed class FrameCache
         var segment = _segments.Values.Where(x => x.Id != protectedSegment && x.Id != _currentSegmentId && !_activeSegments.Contains(x.Id))
             .OrderBy(x => x.LastUse).FirstOrDefault();
         var legacy = _lru.Last;
-        if (legacy != null && (segment == null || legacy.Value.LastUse <= segment.LastUse)) { Remove(legacy); return true; }
-        if (segment != null) { RemoveSegmentCore(segment.Id); return true; }
+        if (legacy != null && (segment == null || legacy.Value.LastUse <= segment.LastUse))
+        {
+            if (PerfTrace.Enabled) PerfTrace.Write("cache.evict_legacy", new { legacy.Value.PhysicalRequest.CorrelationId,
+                legacy.Value.PhysicalRequest.TargetSeconds, bytes = legacy.Value.Bytes,
+                currentSegmentId = _currentSegmentId, currentSeconds = _currentSeconds, protectedSegment });
+            Remove(legacy);
+            return true;
+        }
+        if (segment != null)
+        {
+            if (PerfTrace.Enabled) PerfTrace.Write("cache.evict", new { segment.Id, segment.Request.CorrelationId,
+                segment.SafeStart, segment.SafeEnd, bytes = segment.Bytes, currentSegmentId = _currentSegmentId,
+                currentSeconds = _currentSeconds, protectedSegment, distanceStart = segment.SafeStart - _currentSeconds,
+                distanceEnd = segment.SafeEnd - _currentSeconds, sameContent = _currentSegmentId is long currentId
+                    && _segments.TryGetValue(currentId, out var current) && SameContent(current.Request, segment.Request) });
+            RemoveSegmentCore(segment.Id);
+            return true;
+        }
         return false;
     }
 
