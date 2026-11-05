@@ -588,7 +588,8 @@ public sealed class StreamingNavigationTests
         };
         var first = Enumerable.Range(23, 6).Select(index => PhaseFrame(index, 0, index == 28 ? (byte)228 : null)).ToArray();
         var second = Enumerable.Range(24, 7).Select(index => PhaseFrame(index, 0.00834, index == 24 ? (byte)224 : null)).ToArray();
-        Assert.NotNull(cache.StoreSegment(request, first, new(1000, 0, true), 1, 27.0 / 24));
+        // 位相の違う27番も共通safe域へ含める。28番の暖機画像228は引き続き範囲外。
+        Assert.NotNull(cache.StoreSegment(request, first, new(1000, 0, true), 1, 27.0 / 24 + 0.00834));
         Assert.NotNull(cache.StoreSegment(request with { TargetSeconds = 28.0 / 24 }, second,
             new(1000, 0, true), 1.04, 30.0 / 24 + 0.00834));
         var requests = new ConcurrentQueue<PreviewRequest>();
@@ -1041,8 +1042,9 @@ public sealed class StreamingNavigationTests
             TargetSeconds = 1.008, Capabilities = new(true, true), TimestampOriginSeconds = 1000 };
         var header = new Y4mHeader { Width = 64, Height = 36, FpsNum = 24, FpsDen = 1 };
         Y4mFrame Frame(double time) => new(header, 1000 + time, null, new byte[header.FrameBytes]);
+        // 先頭実frameでsafeStartが繰り上がっても、曖昧な密VFR部分が共通safe域内に残るようにする。
         var old = Assert.IsType<PreviewSegmentSnapshot>(cache.StoreSegment(request,
-            new[] { Frame(1.008), Frame(1.05), Frame(1.09) }, new(1000, 0, true), 0.9, 1.1));
+            new[] { Frame(0.95), Frame(1.008), Frame(1.05), Frame(1.09) }, new(1000, 0, true), 0.9, 1.1));
         var current = Assert.IsType<PreviewSegmentSnapshot>(cache.StoreSegment(request,
             new[] { Frame(1), Frame(1.004), Frame(1.008), Frame(1.05), Frame(1.09) }, new(1000, 0, true), 0.9, 1.1));
         Assert.True(current.CanStitch);

@@ -81,6 +81,90 @@ public sealed class NavigationFrameViewTests
     }
 
     [Fact]
+    public void IdenticalRffTimestampsKeepValidatedSegmentsConnected()
+    {
+        // futsutsuka_08.tsのafs実出力。Xdurなしで、16.678msの隣はヘッダfpsの半duration以内に入る。
+        double[] timestamps = { 42869.754833, 42869.771511, 42869.804878 };
+        var request = Request() with { Fps = 30000.0 / 1001, TimestampOriginSeconds = 42355.407667 };
+        var header = Y4mHeader.Parse("YUV4MPEG2 W2 H2 F30000:1001 C420");
+        Y4mFrame[] Frames() => timestamps.Select((time, index) => new Y4mFrame(header, time, null,
+            Enumerable.Repeat((byte)index, 6).ToArray())).ToArray();
+        var cache = new FrameCache();
+        var firstFrames = Frames();
+        var first = cache.StoreSegment(request, firstFrames, new(42355.407667, 0, true), 514.3, 514.5)!;
+        cache.StoreSegment(request, Frames(), new(42355.407667, 0, true), 514.3, 514.5);
+        Assert.True(cache.CanStitch(request));
+        var view = cache.GetNavigationFrames(request);
+        Assert.True(cache.CanStitch(request));
+        Assert.Equal(3, view.Count);
+        Assert.All(view, frame => Assert.True(frame.Segment.CanStitch));
+        Assert.All(view, frame => Assert.Equal(first.SegmentId, frame.SegmentId));
+        Assert.Equal(timestamps, view.Select(frame => frame.Frame.Xts!.Value));
+        Assert.Equal(new byte[] { 0, 1, 2 }, view.Select(frame => frame.Frame.Data[0]));
+    }
+
+    [Fact]
+    public void RffFrameAfterOverlapEndUsesItsOwnRepresentative()
+    {
+        // 古いsafe域の末尾と16.678ms後の隣を、同じ代表へ押し込めない。
+        double[] timestamps = { 42869.721467, 42869.754833, 42869.771511 };
+        const double origin = 42355.407667;
+        var request = Request() with { Fps = 30000.0 / 1001, TimestampOriginSeconds = origin };
+        var header = Y4mHeader.Parse("YUV4MPEG2 W2 H2 F30000:1001 C420");
+        Y4mFrame[] Frames(int count) => timestamps.Take(count).Select((time, index) => new Y4mFrame(header,
+            time, null, Enumerable.Repeat((byte)index, 6).ToArray())).ToArray();
+        var cache = new FrameCache();
+        var first = cache.StoreSegment(request, Frames(2), new(origin, 0, true), 514.3, timestamps[1] - origin)!;
+        cache.StoreSegment(request, Frames(3), new(origin, 0, true), 514.3, 514.5);
+        Assert.True(cache.CanStitch(request));
+        var view = cache.GetNavigationFrames(request);
+        Assert.True(cache.CanStitch(request));
+        Assert.Equal(timestamps, view.Select(frame => frame.Frame.Xts!.Value));
+        Assert.Equal(new byte[] { 0, 1, 2 }, view.Select(frame => frame.Frame.Data[0]));
+        Assert.All(view, frame => Assert.True(frame.Segment.CanStitch));
+        Assert.NotNull(cache.GetSegment(first.SegmentId));
+    }
+
+    [Fact]
+    public void RffFrameBeforePeerSafeStartRemainsDistinctFromItsNextNeighbor()
+    {
+        // 残った実操作の拒否。最初の時刻は旧safeStartより5.5ms手前にある。
+        double[] timestamps = { 42851.403167, 42851.419844, 42851.453211 };
+        const double origin = 42355.407667;
+        var request = Request() with { Fps = 30000.0 / 1001, TimestampOriginSeconds = origin };
+        var header = Y4mHeader.Parse("YUV4MPEG2 W2 H2 F30000:1001 C420");
+        Y4mFrame[] Frames() => timestamps.Select((time, index) => new Y4mFrame(header, time, null,
+            Enumerable.Repeat((byte)index, 6).ToArray())).ToArray();
+        var cache = new FrameCache();
+        var old = cache.StoreSegment(request, Frames(), new(origin, 0, true), 496.001, 496.1)!;
+        cache.StoreSegment(request, Frames(), new(origin, 0, true), 495.9, 496.1);
+        Assert.True(cache.CanStitch(request));
+        var view = cache.GetNavigationFrames(request);
+        Assert.True(cache.CanStitch(request));
+        Assert.Equal(timestamps, view.Select(frame => frame.Frame.Xts!.Value));
+        Assert.Equal(new byte[] { 0, 1, 2 }, view.Select(frame => frame.Frame.Data[0]));
+        Assert.All(view, frame => Assert.True(frame.Segment.CanStitch));
+        Assert.NotNull(cache.GetSegment(old.SegmentId));
+    }
+
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 2)]
+    public void CandidateRequiresSafeSupportFromSomeGroupMember(bool bridgeSupports, int expectedCount)
+    {
+        var first = Segment(1, new[] { Frame(1.000) }, 0.9, 1.010);
+        var bridge = Segment(2, new[] { Frame(1.008) }, 0.9, bridgeSupports ? 1.1 : 1.010);
+        var latest = Segment(3, new[] { Frame(1.016) }, 1.011, 1.1);
+        var view = FrameSelector.MergeNavigationFrames(new[]
+        {
+            new PreviewFrameReference(first, 0), new(bridge, 0), new(latest, 0),
+        });
+        Assert.Equal(expectedCount, view.Count);
+        Assert.All(view, frame => Assert.True(frame.Segment.CanStitch));
+        Assert.Same(first.Frames[0], view[0].Frame);
+    }
+
+    [Fact]
     public void RepresentativeShiftCannotCrossDenseVfrNeighbors()
     {
         var old = Segment(1, new[] { Frame(1.008, 2) });

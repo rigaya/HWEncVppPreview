@@ -85,10 +85,23 @@ public static class FrameSelector
             double half = Duration(frame.Frame, frame.Segment.PhysicalRequest.Fps) / 2 + 1e-9;
             double time = frame.InputSeconds;
             List<PreviewFrameReference>? match = null;
-            // 同一とみなせる代表は候補自身の半duration以内に限る。全代表の総当たりを避ける。
+            // 密VFRの隣を先に採らず、半duration以内で最も近い代表を選んでから安全性を判定する。
+            // ValidateOverlapと同じ最近傍対応にし、同じXtsがあれば距離0の代表を優先する。
+            List<PreviewFrameReference>? nearest = null;
+            double nearestDistance = double.PositiveInfinity;
             for (int i = Bound(groups, time - half, upper: false); i < groups.Count && groups[i][0].InputSeconds <= time + half; ++i)
             {
-                var group = groups[i];
+                // どの結合元も安全域として持たない時刻を、境界の隣フレームへ対応付けない。
+                // 距離は代表だけで測り、後から結合したmemberを介した近接の推移結合はしない。
+                if (!groups[i].Any(member => PreviewSafeRange.Contains(time, member.Segment.SafeStartSeconds, member.Segment.SafeEndSeconds))) continue;
+                // 同一区間の別フレームに使った代表は、このフレームの対応候補から除く。
+                if (groups[i].Any(member => FromSameSegment(member, frame) && !ReferenceEquals(member.Frame, frame.Frame))) continue;
+                double distance = Math.Abs(groups[i][0].InputSeconds - time);
+                if (distance < nearestDistance) { nearest = groups[i]; nearestDistance = distance; }
+            }
+            if (nearest != null)
+            {
+                var group = nearest;
                 double representative = group[0].InputSeconds;
                 var neighbors = bounds[frame];
                 bool preservesOrder = !(representative < time - 1e-9 && neighbors.Before is double before && representative <= before + 1e-9)
@@ -101,9 +114,8 @@ public static class FrameSelector
                     return Array.AsReadOnly(safe.Where(candidate => FromSameSegment(candidate, latest))
                         .Select(candidate => new PreviewFrameReference(candidate.Segment with { CanStitch = false }, candidate.FrameIndex)).OrderBy(candidate => candidate.InputSeconds).ToArray());
                 }
-                if (preservesOrder && equivalent
-                    && !group.Any(member => FromSameSegment(member, frame) && !ReferenceEquals(member.Frame, frame.Frame)))
-                { match = group; break; }
+                if (preservesOrder && equivalent)
+                { match = group; }
             }
             if (match != null) match.Add(frame);
             else groups.Insert(Bound(groups, time, upper: true), new() { frame });
