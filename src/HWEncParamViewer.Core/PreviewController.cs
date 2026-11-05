@@ -769,7 +769,7 @@ public sealed partial class PreviewController : IAsyncDisposable
             if (!background && _physicalRequest.Capabilities.TimestampPassthrough && Segment is { } segment)
             {
                 double time = segment.Clock.ToInputSeconds(Frames[_candidate], _candidate, request.Fps);
-                if (time < segment.SafeStartSeconds - 1e-7 || time > segment.SafeEndSeconds + 1e-7)
+                if (!PreviewSafeRange.Contains(time, segment.SafeStartSeconds, segment.SafeEndSeconds))
                 { TargetNotReached = true; return; }
             }
             _confirmed = true;

@@ -371,7 +371,7 @@ public sealed partial class MainWindowViewModel
             {
                 var frame = frames[next];
                 double seconds = clock.ToInputSeconds(frame, next, request.Fps);
-                if (context.Segment is { } segment && (seconds < segment.SafeStartSeconds - 1e-8 || seconds > segment.SafeEndSeconds + 1e-8)) return null;
+                if (context.Segment is { } segment && !PreviewSafeRange.Contains(seconds, segment.SafeStartSeconds, segment.SafeEndSeconds)) return null;
                 return ResolveNeighbor(frame, seconds);
             }
         }

@@ -315,7 +315,7 @@ public sealed partial class MainWindowViewModel
         if (_beforeIntervalRequest is { } previous && SameBeforeInput(previous, request)
             && ContainsBeforeFrameTarget(previous, _beforeIntervalFrames, request.TargetSeconds, _beforeIntervalSegment)
             && (_beforeIntervalSegment is not { } held
-                || request.TargetSeconds >= held.SafeStartSeconds - 1e-8 && request.TargetSeconds <= held.SafeEndSeconds + 1e-8))
+                || PreviewSafeRange.Contains(request.TargetSeconds, held.SafeStartSeconds, held.SafeEndSeconds)))
         { frames = _beforeIntervalFrames; return true; }
         frames = Array.Empty<Y4mFrame>();
         return false;
@@ -323,8 +323,7 @@ public sealed partial class MainWindowViewModel
 
     private bool ContainsBeforeFrameTarget(PreviewRequest request, IReadOnlyList<Y4mFrame> frames, double target, PreviewSegmentSnapshot? segment)
     {
-        bool inside = segment == null || target >= segment.SafeStartSeconds - 1e-8
-            && target <= segment.SafeEndSeconds + 1e-8;
+        bool inside = segment == null || PreviewSafeRange.Contains(target, segment.SafeStartSeconds, segment.SafeEndSeconds);
         if (inside && ContainsFrameTarget(request, frames, target, segment?.Clock)
             && (segment == null || FrameSelector.Select(segment, target, request.Fps) >= 0)) return true;
         // 自然終端が確定した既知Durationへの移動だけは、Afterと同じ最終画像を共有する。
@@ -333,7 +332,7 @@ public sealed partial class MainWindowViewModel
             || Math.Abs(target - end) > 1e-8) return false;
         var last = frames[^1];
         double lastSeconds = segment.Clock.ToInputSeconds(last, frames.Count - 1, request.Fps);
-        return lastSeconds >= segment.SafeStartSeconds - 1e-8 && lastSeconds <= segment.SafeEndSeconds + 1e-8
+        return PreviewSafeRange.Contains(lastSeconds, segment.SafeStartSeconds, segment.SafeEndSeconds)
             && lastSeconds <= end + 1e-8 && lastSeconds + FrameSelector.Duration(last, request.Fps) >= end - 1e-8;
     }
 

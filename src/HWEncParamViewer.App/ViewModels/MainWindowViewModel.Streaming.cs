@@ -189,7 +189,7 @@ public sealed partial class MainWindowViewModel
     }
 
     private bool FrameIsSafe(double seconds) => _intervalSegment == null
-        || seconds >= _intervalSegment.SafeStartSeconds - 1e-8 && seconds <= _intervalSegment.SafeEndSeconds + 1e-8;
+        || PreviewSafeRange.Contains(seconds, _intervalSegment.SafeStartSeconds, _intervalSegment.SafeEndSeconds);
 
     private PreviewClockMap IntervalClock(PreviewRequest request, IReadOnlyList<Y4mFrame> frames)
         => _intervalSegment != null && SameImageSource(_intervalSegment.PhysicalRequest, request)

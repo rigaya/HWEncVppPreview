@@ -172,7 +172,7 @@ public sealed partial class PreviewController
                 var connected = _cache.GetConnectedSafeRange(active.LatestRequest);
                 bool mayAdopt = navigation && (!bypassCache || reuseActiveStream)
                     && FrameCache.SameContent(active.PhysicalRequest, request) && connected != null
-                    && request.TargetSeconds >= connected.Value.Start - 1e-7 && request.TargetSeconds <= connected.Value.End + 1e-7;
+                    && PreviewSafeRange.Contains(request.TargetSeconds, connected.Value.Start, connected.Value.End);
                 if (!mayAdopt)
                 {
                     // 先読みは同じ接続範囲内のcache移動なら微小逆移動も保持する。
@@ -189,13 +189,13 @@ public sealed partial class PreviewController
             if (current != null && current.Frames.Count > 0)
                 retainedStart = FrameCache.SafeStartIncludingFirst(retainedStart, current.Clock, current.Frames[0], request.Fps);
             // 別segmentのcacheが目標を持っていても、このstreamに存在しないprefixへ需要を再結合しない。
-            bool notBeforeRetained = active != null && request.TargetSeconds >= retainedStart - 1e-7;
+            bool notBeforeRetained = active != null && PreviewSafeRange.Contains(request.TargetSeconds, retainedStart, double.PositiveInfinity);
             // 正方向の隣不足を明示した需要だけが、信頼済みの中心を持つ同じ生存streamへ合流できる。
             // 未知の隣時刻は予測せず、通常のcache bypassや明示更新は新しい実取得を維持する。
             bool neighborReuse = reuseActiveStream && bypassCache && navigation && capable && request.TimestampOriginTrusted
                 && active is { Ended: false } && current is { IsActive: true, Clock.TrustedAbsolute: true }
                 && withinJump && notBeforeRetained && FrameCache.SameContent(active.PhysicalRequest, request)
-                && request.TargetSeconds <= current.SafeEndSeconds + 1e-7;
+                && PreviewSafeRange.Contains(request.TargetSeconds, double.NegativeInfinity, current.SafeEndSeconds);
             double centerSeconds = double.NaN;
             if (neighborReuse)
             {
@@ -422,8 +422,7 @@ public sealed partial class PreviewController
         int selected = FrameSelector.Select(segment, request.TargetSeconds, request.Fps);
         double last = segment.Clock.ToInputSeconds(segment.Frames[^1], segment.Frames.Count - 1, request.Fps);
         double tolerance = FrameSelector.Duration(segment.Frames[^1], request.Fps) / 2;
-        bool covered = request.TargetSeconds >= segment.SafeStartSeconds - 1e-7
-            && request.TargetSeconds <= segment.SafeEndSeconds + 1e-7;
+        bool covered = PreviewSafeRange.Contains(request.TargetSeconds, segment.SafeStartSeconds, segment.SafeEndSeconds);
         bool confirmed = covered && selected >= 0 && (last > request.TargetSeconds + tolerance
             || Math.Abs(segment.Clock.ToInputSeconds(segment.Frames[selected], selected, request.Fps) - request.TargetSeconds) < 1e-8
             || (session.IsPaused && request.TargetSeconds < last + tolerance - 1e-8)
@@ -518,7 +517,7 @@ public sealed partial class PreviewController
                 if (needs && budget) return ValueTask.CompletedTask;
                 // 需要を満たせない容量では、永久pauseではなく失敗として回復可能にする。
                 if (!budget && !session.Satisfied && (segment == null
-                    || session.LatestRequest.TargetSeconds > segment.SafeEndSeconds + 1e-7
+                    || PreviewSafeRange.IsAfter(session.LatestRequest.TargetSeconds, segment.SafeEndSeconds)
                     || session.LatestRequest.TargetSeconds >= last + FrameSelector.Duration(segment.Frames[^1], session.LatestRequest.Fps) / 2 - 1e-8
                     || FrameSelector.Select(segment, session.LatestRequest.TargetSeconds, session.LatestRequest.Fps) < 0))
                     throw new InvalidOperationException(CoreText.TargetCacheFull);

@@ -104,7 +104,7 @@ public sealed class FrameCache
                 && SameContent(current.Request, request) && !current.CanStitch)
             { segment = null!; return false; }
             var entry = _segments.Values.Where(x => x.Clock.TrustedAbsolute && x.CanStitch && SameContent(x.Request, request)
-                && x.Frames.Count > 0 && targetSeconds >= x.SafeStart - 1e-7 && targetSeconds <= x.SafeEnd + 1e-7
+                && x.Frames.Count > 0 && PreviewSafeRange.Contains(targetSeconds, x.SafeStart, x.SafeEnd)
                 && FrameSelector.Select(Snapshot(x), targetSeconds, request.Fps) >= 0)
                 .OrderByDescending(x => x.LastUse).FirstOrDefault();
             if (entry == null) { segment = null!; return false; }
@@ -192,21 +192,21 @@ public sealed class FrameCache
             if (_currentSegmentId is long id && _segments.TryGetValue(id, out var current)
                 && SameContent(current.Request, request) && !current.CanStitch) return null;
             if (!_segments.Values.Any(entry => SameContent(entry.Request, request) && entry.Clock.TrustedAbsolute
-                && entry.CanStitch && entry.SafeStart <= request.TargetSeconds && entry.SafeEnd >= request.TargetSeconds)) return null;
+                && entry.CanStitch && PreviewSafeRange.Contains(request.TargetSeconds, entry.SafeStart, entry.SafeEnd))) return null;
             var ranges = _segments.Values.Where(entry => SameContent(entry.Request, request) && entry.Clock.TrustedAbsolute && entry.CanStitch
                 && entry.SafeEnd >= entry.SafeStart && entry.Frames.Count > 0).OrderBy(entry => entry.SafeStart).ToArray();
             double start = double.NaN, end = double.NaN;
             foreach (var range in ranges)
             {
-                if (double.IsNaN(start) || range.SafeStart > end + 1e-7)
+                if (double.IsNaN(start) || PreviewSafeRange.IsAfter(range.SafeStart, end))
                 {
-                    if (!double.IsNaN(start) && request.TargetSeconds >= start - 1e-7 && request.TargetSeconds <= end + 1e-7) return (start, end);
+                    if (!double.IsNaN(start) && PreviewSafeRange.Contains(request.TargetSeconds, start, end)) return (start, end);
                     start = range.SafeStart;
                     end = range.SafeEnd;
                 }
                 else end = Math.Max(end, range.SafeEnd);
             }
-            return !double.IsNaN(start) && request.TargetSeconds >= start - 1e-7 && request.TargetSeconds <= end + 1e-7 ? (start, end) : null;
+            return !double.IsNaN(start) && PreviewSafeRange.Contains(request.TargetSeconds, start, end) ? (start, end) : null;
         }
     }
 
@@ -351,7 +351,7 @@ public sealed class FrameCache
             if (entry.ValidatedPeers.Contains(previous.Id)) continue;
             double start = Math.Max(entry.SafeStart, previous.SafeStart);
             double end = Math.Min(entry.SafeEnd, previous.SafeEnd);
-            if (start > end + 1e-7) continue;
+            if (PreviewSafeRange.IsAfter(start, end)) continue;
             var current = Snapshot(entry);
             var old = Snapshot(previous);
             var matches = new List<(PreviewFrameReference Current, PreviewFrameReference Old)>();
@@ -361,7 +361,7 @@ public sealed class FrameCache
             for (int i = 0; i < current.Frames.Count; ++i)
             {
                 var frame = new PreviewFrameReference(current, i);
-                if (!frame.IsSafe || frame.InputSeconds < start - 1e-7 || frame.InputSeconds > end + 1e-7) continue;
+                if (!frame.IsSafe || !PreviewSafeRange.Contains(frame.InputSeconds, start, end)) continue;
                 PreviewFrameReference? nearest = null;
                 double distance = double.PositiveInfinity;
                 double half = FrameSelector.Duration(frame.Frame, current.PhysicalRequest.Fps) / 2 + 1e-9;

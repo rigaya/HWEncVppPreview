@@ -55,5 +55,5 @@ public sealed record PreviewFrameReference(PreviewSegmentSnapshot Segment, int F
     public PreviewClockMap Clock => Segment.Clock;
     public long SegmentId => Segment.SegmentId;
     public double InputSeconds => Clock.ToInputSeconds(Frame, FrameIndex, Segment.PhysicalRequest.Fps);
-    public bool IsSafe => InputSeconds >= Segment.SafeStartSeconds - 1e-7 && InputSeconds <= Segment.SafeEndSeconds + 1e-7;
+    public bool IsSafe => PreviewSafeRange.Contains(InputSeconds, Segment.SafeStartSeconds, Segment.SafeEndSeconds);
 }

@@ -16,7 +16,7 @@ public sealed partial class PreviewController
             || !_cache.CanStitch(logical)) return;
         var range = _cache.GetConnectedSafeRange(logical);
         if (range == null || !double.IsFinite(range.Value.End)
-            || logical.TargetSeconds < range.Value.Start - 1e-7 || logical.TargetSeconds > range.Value.End + 1e-7
+            || !PreviewSafeRange.Contains(logical.TargetSeconds, range.Value.Start, range.Value.End)
             || range.Value.End - logical.TargetSeconds > ForwardPrefetchThresholdSeconds + 1e-7
             || logical.InputDurationSeconds is double duration && range.Value.End >= duration - 1e-7) return;
         double boundary = range.Value.End;
@@ -52,13 +52,12 @@ public sealed partial class PreviewController
         if (!session.IsForwardPrefetch || !navigation || bypassCache || cached == null || IsLegacySource(request)
             || !FrameCache.SameContent(session.PhysicalRequest, request) || !_cache.CanStitch(request)) return false;
         var range = _cache.GetConnectedSafeRange(session.LatestRequest);
-        if (range == null || request.TargetSeconds < range.Value.Start - 1e-7 || request.TargetSeconds > range.Value.End + 1e-7)
+        if (range == null || !PreviewSafeRange.Contains(request.TargetSeconds, range.Value.Start, range.Value.End))
             return false;
         // 先読み側に照合済みの実中心があれば通常streamへ合流し、それまでは旧表示区間を保つ。
         // 接続済み範囲内のcache移動は順逆を問わず保持し、逆先読みの実行枠要求は別経路で判定する。
         if (physicalSegment is { CanStitch: true, Clock.TrustedAbsolute: true }
-            && request.TargetSeconds >= physicalSegment.SafeStartSeconds - 1e-7
-            && request.TargetSeconds <= physicalSegment.SafeEndSeconds + 1e-7
+            && PreviewSafeRange.Contains(request.TargetSeconds, physicalSegment.SafeStartSeconds, physicalSegment.SafeEndSeconds)
             && FrameSelector.Select(physicalSegment, request.TargetSeconds, request.Fps) >= 0) return false;
         session.LatestRequest = request;
         session.Version = ++_version;

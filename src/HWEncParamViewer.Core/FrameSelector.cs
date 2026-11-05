@@ -32,7 +32,7 @@ public static class FrameSelector
         var indices = Enumerable.Range(0, segment.Frames.Count).Where(index =>
         {
             double time = segment.Clock.ToInputSeconds(segment.Frames[index], index, requestedFps);
-            return time >= segment.SafeStartSeconds - 1e-7 && time <= segment.SafeEndSeconds + 1e-7;
+            return PreviewSafeRange.Contains(time, segment.SafeStartSeconds, segment.SafeEndSeconds);
         }).ToArray();
         // 入力時計へ写像してから選ぶことで、prefix削除後や表示可能範囲の抽出後も番号を失わない。
         bool missing = segment.Frames.All(frame => frame.Xts == null);
