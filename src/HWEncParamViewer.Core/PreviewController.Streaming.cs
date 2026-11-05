@@ -240,8 +240,9 @@ public sealed partial class PreviewController
             }
 
             if (active != null) CancelStreamCore("submit_incompatible_or_before_retained");
-            // 不一致後も今の物理stream内では動けるが、新しい要求へ旧区間を接続しない。
-            if (!capable || !_cache.CanStitch(request)) return false;
+            // 照合失敗は物理区間の混在だけを禁じる。新しい1本のstreamは継続できる。
+            // 区間の破棄と接続禁止はFrameCache側で維持し、逆・順の先読みも再開しない。
+            if (!capable) return false;
             _scheduled?.Cancel();
             long version = ++_version;
             if (!navigation) { _lastEditVersion = version; _active?.Cancel(); _backgroundActive?.Cancel(); }

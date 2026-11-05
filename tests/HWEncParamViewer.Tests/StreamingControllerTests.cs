@@ -430,7 +430,9 @@ public sealed class StreamingControllerTests
         controller.Submit(request with { TargetSeconds = 30 }, navigation: true);
         await controller.WaitForIdleAsync();
         Assert.Equal(3, backend.Calls);
-        Assert.False(backend.Requests[^1].Continuous);
+        // 区間間の照合が失敗しても、新しい1本のstream内では連続取得を維持する。
+        Assert.True(backend.Requests[^1].Continuous);
+        Assert.False(cache.CanStitch(request));
         Assert.True(images[^1].Segment!.Clock.TrustedAbsolute);
         Assert.InRange(images[^1].Segment!.Clock.ToInputSeconds(images[^1].Frame, 0, 24), 29.9, 30.1);
         controller.Submit(request with { InputFile = "fresh" });
