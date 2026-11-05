@@ -808,20 +808,28 @@ public sealed class StreamingNavigationTests
         Assert.Null(vm.ErrorText);
         Assert.False(vm.IsBusy);
         Assert.Equal(10, vm.CurrentSeconds);
-        Assert.True(backend.Requests.First().Capabilities.TimestampPassthrough);
-        Assert.False(backend.Requests.Last().Capabilities.TimestampPassthrough);
-        Assert.False(backend.Requests.Last().Continuous);
-        Assert.DoesNotContain("--timestamp-passthrough", backend.Requests.Last().InputArgs);
-        Assert.DoesNotContain("--timestamp-passthrough", backend.Requests.Last().VppArgs);
-        int replayRequests = backend.Requests.Count;
+        // Beforeは負のCorrelationIdで同じqueueに記録されるため、前景の同世代replayだけを検査する。
+        var foregroundRequests = backend.Requests.Where(request => request.CorrelationId > 0).ToArray();
+        var initialRequest = Assert.Single(foregroundRequests, request => request.Continuous);
+        var replayRequest = Assert.Single(foregroundRequests, request =>
+            request.CorrelationId == initialRequest.CorrelationId && !request.Continuous);
+        Assert.Equal(2, foregroundRequests.Length);
+        Assert.True(initialRequest.Capabilities.TimestampPassthrough);
+        Assert.False(replayRequest.Capabilities.TimestampPassthrough);
+        Assert.False(replayRequest.Continuous);
+        Assert.DoesNotContain("--timestamp-passthrough", replayRequest.InputArgs);
+        Assert.DoesNotContain("--timestamp-passthrough", replayRequest.VppArgs);
+        int replayRequests = foregroundRequests.Length;
         vm.StepFrameCommand.Execute(1);
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Equal(10 + 1.0 / 30, vm.CurrentSeconds, 6);
-        Assert.Equal(replayRequests, backend.Requests.Count);
+        Assert.Equal(replayRequests, backend.Requests.Count(request => request.CorrelationId > 0));
         vm.CurrentSeconds = 20;
         await vm.WaitForPreparationAsync().WaitAsync(Safety);
         await vm.WaitForIdleAsync().WaitAsync(Safety);
-        Assert.All(backend.Requests.Skip(replayRequests), request => Assert.False(request.Capabilities.TimestampPassthrough));
+        var laterForegroundRequests = backend.Requests.Where(request => request.CorrelationId > 0).Skip(replayRequests).ToArray();
+        Assert.NotEmpty(laterForegroundRequests);
+        Assert.All(laterForegroundRequests, request => Assert.False(request.Capabilities.TimestampPassthrough));
         Assert.False(vm.IsBusy);
         Assert.Null(vm.ErrorText);
     }
