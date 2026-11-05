@@ -223,15 +223,13 @@ public sealed class FrameCache
         }
     }
 
-    /// <summary>現在の表示位置を保護し、通常時は後ろ2秒より古いprefixを捨てる。</summary>
+    /// <summary>現在の表示位置を保護し、古いprefixは容量不足時のMakeRoomによる回収まで保持する。</summary>
     public void PinCurrent(long? segmentId, double currentSeconds)
     {
         lock (_gate)
         {
             _currentSegmentId = segmentId;
             _currentSeconds = currentSeconds;
-            if (segmentId is long id && _activeSegments.Contains(id) && _segments.TryGetValue(id, out var entry))
-                TrimPrefix(entry, currentSeconds - 2);
         }
     }
 
@@ -254,7 +252,6 @@ public sealed class FrameCache
             _sizeBytes += frame.Data.LongLength;
             entry.SafeEnd = entry.Clock.ToInputSeconds(frame, entry.Frames.Count - 1, entry.Request.Fps) + FrameSelector.Duration(frame, entry.Request.Fps);
             entry.LastUse = ++_useSequence;
-            if (_currentSegmentId == segmentId) TrimPrefix(entry, _currentSeconds - 2);
             ValidateAfterChange(entry, closed: false);
             return _segments.ContainsKey(segmentId);
         }
@@ -429,6 +426,7 @@ public sealed class FrameCache
         foreach (var node in _entries.Where(pair => pair.Key.MatchesSource(entry.Request)).Select(pair => pair.Value).ToArray()) Remove(node);
     }
 
+    // 固定秒数では削らず、容量不足時だけ非保護区間、続いて表示位置より古いprefixを回収する。
     private bool MakeRoom(long bytes, long? appendingSegment)
     {
         if (bytes < 0 || bytes > _capacityBytes || _capacityBytes == 0) return false;
@@ -460,12 +458,6 @@ public sealed class FrameCache
         if (legacy != null && (segment == null || legacy.Value.LastUse <= segment.LastUse)) { Remove(legacy); return true; }
         if (segment != null) { RemoveSegmentCore(segment.Id); return true; }
         return false;
-    }
-
-    private void TrimPrefix(SegmentEntry entry, double beforeSeconds)
-    {
-        while (entry.Frames.Count > 1 && entry.Clock.ToInputSeconds(entry.Frames[1], 1, entry.Request.Fps) <= beforeSeconds)
-            RemoveFirst(entry);
     }
 
     private void RemoveFirst(SegmentEntry entry)

@@ -38,7 +38,7 @@ public sealed class RangeFrameCacheTests
     }
 
     [Fact]
-    public void RollingActivePinDropsPrefixAtFrameGranularityWithinBudget()
+    public void RollingActivePinReclaimsPrefixAtFrameGranularityOnlyForBudget()
     {
         var cache = new FrameCache(60);
         long id = cache.BeginSegment(Request(0), new(1000, 0, true), 0);
@@ -51,8 +51,9 @@ public sealed class RangeFrameCacheTests
         var segment = cache.GetSegment(id)!;
         Assert.True(segment.IsActive);
         Assert.Equal(1049.5, segment.Frames[^1].Xts);
-        Assert.InRange(segment.Frames.Count, 1, 6);
-        Assert.True(segment.SafeStartSeconds >= 47);
+        // 固定2秒ではなく60bytesの予算（6bytes×10枚）まで過去を保持する。
+        Assert.Equal(10, segment.Frames.Count);
+        Assert.Equal(45, segment.SafeStartSeconds);
     }
 
     [Fact]
