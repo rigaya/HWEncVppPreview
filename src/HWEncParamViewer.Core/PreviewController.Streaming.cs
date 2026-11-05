@@ -144,6 +144,9 @@ public sealed partial class PreviewController
     {
         if (_stream is not { } stream) return;
         if (PerfTrace.Enabled) PerfTrace.Write("core.stream.cancel", new { reason, stream.PhysicalRequest.CorrelationId, stream.SegmentId, stream.IsPaused });
+        // 意図的に取り消す自分の順先読みだけ、同じ境界での再起動を許す。
+        if (ReferenceEquals(_lastForwardPrefetch, stream.InitialRequest))
+            _lastForwardPrefetch = null;
         stream.Cancellation.Cancel();
         stream.ReadAllowed.TrySetResult();
         stream.Demand.TrySetResult();
@@ -163,6 +166,22 @@ public sealed partial class PreviewController
             if (!bypassCache && !IsLegacySource(request) && _cache.TryGetAt(request, request.TargetSeconds, out var available)) cached = available;
 
             var current = active == null || active.SegmentId == 0 ? null : _cache.GetSegment(active.SegmentId);
+            if (active != null && TryKeepForwardPrefetchCore(active, request, cached, current, bypassCache, navigation, externalToken)) return true;
+            if (active is { IsForwardPrefetch: true })
+            {
+                var connected = _cache.GetConnectedSafeRange(active.LatestRequest);
+                bool mayAdopt = navigation && (!bypassCache || reuseActiveStream)
+                    && FrameCache.SameContent(active.PhysicalRequest, request) && connected != null
+                    && request.TargetSeconds >= connected.Value.Start - 1e-7 && request.TargetSeconds <= connected.Value.End + 1e-7;
+                if (!mayAdopt)
+                {
+                    // 先読みは同じ接続範囲内のcache移動なら微小逆移動も保持する。
+                    // 内容変更・明示更新・範囲外移動は通常streamの小jump許可へ流さず再取得へ戻す。
+                    CancelStreamCore("forward_prefetch_left_range");
+                    active = null;
+                    current = null;
+                }
+            }
             double frontier = current?.SafeEndSeconds ?? active?.LatestRequest.TargetSeconds ?? request.TargetSeconds;
             bool withinJump = active != null && request.TargetSeconds <= Math.Max(frontier, active.LatestRequest.TargetSeconds) + 3;
             double retainedStart = current?.SafeStartSeconds ?? (active == null ? request.TargetSeconds
@@ -171,7 +190,8 @@ public sealed partial class PreviewController
                 retainedStart = FrameCache.SafeStartIncludingFirst(retainedStart, current.Clock, current.Frames[0], request.Fps);
             // 別segmentのcacheが目標を持っていても、このstreamに存在しないprefixへ需要を再結合しない。
             bool notBeforeRetained = active != null && request.TargetSeconds >= retainedStart - 1e-7;
-            // 隣の時刻は予測せず、中心がこの物理区間に残る場合だけbypass例外を許す。
+            // 正方向の隣不足を明示した需要だけが、信頼済みの中心を持つ同じ生存streamへ合流できる。
+            // 未知の隣時刻は予測せず、通常のcache bypassや明示更新は新しい実取得を維持する。
             bool neighborReuse = reuseActiveStream && bypassCache && navigation && capable && request.TimestampOriginTrusted
                 && active is { Ended: false } && current is { IsActive: true, Clock.TrustedAbsolute: true }
                 && withinJump && notBeforeRetained && FrameCache.SameContent(active.PhysicalRequest, request)
@@ -195,7 +215,9 @@ public sealed partial class PreviewController
                 && FrameCache.SameContent(active.PhysicalRequest, request);
             if (compatible && withinJump && notBeforeRetained && (capable || cached != null))
             {
-                active!.Demand.TrySetResult();
+                // 照合済み区間に実需要が合流した後は、通常の表示・隣待ち・読取需要へ戻す。
+                active!.IsForwardPrefetch = false;
+                active.Demand.TrySetResult();
                 active.Demand = NewSignal();
                 active.LatestRequest = request;
                 active.Satisfied = false;
@@ -280,7 +302,7 @@ public sealed partial class PreviewController
             var clock = new PreviewClockMap(physical.TimestampOriginSeconds, seek, true);
             // 物理seekと同じ計画の暖機境界を使い、暖機0の区間はseek直後から検証対象にする。
             session.SegmentId = _cache.BeginSegment(physical, clock, PreviewWarmupPolicy.SafeStartSeconds(physical, false));
-            _cache.PinCurrent(session.SegmentId, session.LatestRequest.TargetSeconds);
+            if (!session.IsForwardPrefetch) _cache.PinCurrent(session.SegmentId, session.LatestRequest.TargetSeconds);
             using var watchdog = new OutputWatchdog(_clock, _watchdog);
             var sink = new StreamSink(this, session, watchdog);
             if (PerfTrace.Enabled) PerfTrace.Write("core.backend_start", new { physical.CorrelationId, version = session.Version,
@@ -298,7 +320,7 @@ public sealed partial class PreviewController
                 _cache.RemoveSegment(session.SegmentId);
                 lock (_sync)
                 {
-                    if (ReferenceEquals(_stream, session)) Notify(session.Version, session.Navigation,
+                    if (!session.IsForwardPrefetch && ReferenceEquals(_stream, session)) Notify(session.Version, session.Navigation,
                         () => Failed?.Invoke(new(session.LatestRequest, CoreText.OutputTimedOut)
                             { TimedOut = true, Diagnostic = LegacyFailureDiagnostic(session.LatestRequest, stoppedException, stoppedResult) }), true);
                 }
@@ -308,7 +330,7 @@ public sealed partial class PreviewController
             try { result = await run.ConfigureAwait(false); }
             catch (OperationCanceledException) when (session.NeedsLegacyReplay)
             { result = new(-12, "", true); }
-            if (session.NeedsLegacyReplay && !scheduled.IsCancellationRequested && !session.ExternalToken.IsCancellationRequested)
+            if (!session.IsForwardPrefetch && session.NeedsLegacyReplay && !scheduled.IsCancellationRequested && !session.ExternalToken.IsCancellationRequested)
             {
                 Task? replay = QueueLegacyReplay(session.LatestRequest, session.Version, session.Navigation,
                     false, _lastEditVersion, session.ExternalToken);
@@ -324,10 +346,10 @@ public sealed partial class PreviewController
                 {
                     session.Ended = naturalEnd;
                     TryPublishDemand(session, finish: true);
-                    if (ReferenceEquals(_stream, session) && session.LastNotifiedVersion != session.Version)
+                    if (!session.IsForwardPrefetch && ReferenceEquals(_stream, session) && session.LastNotifiedVersion != session.Version)
                         Notify(session.Version, session.Navigation, () => Failed?.Invoke(new(session.LatestRequest,
                             CoreText.FrameUnavailable, result)), true);
-                    else if (ReferenceEquals(_stream, session) && _cache.GetSegment(session.SegmentId) is { } segment)
+                    else if (!session.IsForwardPrefetch && ReferenceEquals(_stream, session) && _cache.GetSegment(session.SegmentId) is { } segment)
                         Notify(session.Version, session.Navigation, () => Completed?.Invoke(new(session.LatestRequest,
                             result, false, !session.Satisfied)
                             { Frames = segment.Frames, Segment = segment }), true);
@@ -336,7 +358,7 @@ public sealed partial class PreviewController
             else if (!session.Cancellation.IsCancellationRequested && !result.IsCancelled)
             {
                 _cache.RemoveSegment(session.SegmentId);
-                Notify(session.Version, session.Navigation, () => Failed?.Invoke(new(session.LatestRequest,
+                if (!session.IsForwardPrefetch) Notify(session.Version, session.Navigation, () => Failed?.Invoke(new(session.LatestRequest,
                     CoreText.EncoderExited(result.ExitCode), result)), true);
             }
 
@@ -353,7 +375,7 @@ public sealed partial class PreviewController
                     seek = CommandBuilder.Plan(physical).SeekSeconds ?? 0;
                     clock = new PreviewClockMap(physical.TimestampOriginSeconds, seek, true);
                     session.SegmentId = _cache.BeginSegment(physical, clock, PreviewWarmupPolicy.SafeStartSeconds(physical, false));
-                    _cache.PinCurrent(session.SegmentId, session.LatestRequest.TargetSeconds);
+                    if (!session.IsForwardPrefetch) _cache.PinCurrent(session.SegmentId, session.LatestRequest.TargetSeconds);
                     sink = new StreamSink(this, session, watchdog);
                     watchdog.Touch();
                     return await RunTrackedBackendAsync(backend, session.PhysicalRequest, sink, session.Cancellation.Token).ConfigureAwait(false);
@@ -365,7 +387,7 @@ public sealed partial class PreviewController
         {
             // 失敗したprefixの末尾を完成済み範囲として再利用しない。
             _cache.RemoveSegment(session.SegmentId);
-            Notify(session.Version, session.Navigation, () => Failed?.Invoke(new(session.LatestRequest, exception.Message,
+            if (!session.IsForwardPrefetch) Notify(session.Version, session.Navigation, () => Failed?.Invoke(new(session.LatestRequest, exception.Message,
                 Exception: exception) { Diagnostic = LegacyFailureDiagnostic(session.LatestRequest, exception) }), true);
         }
         finally
@@ -394,6 +416,8 @@ public sealed partial class PreviewController
         if (!ReferenceEquals(_stream, session) || _disposed || session.ExternalToken.IsCancellationRequested) return;
         var segment = _cache.GetSegment(session.SegmentId);
         if (segment == null || segment.Frames.Count == 0) return;
+        // 先読みは受理済み表示を置き換えない。画像・完了・Before用の通知は実需要への合流後だけ送る。
+        if (session.IsForwardPrefetch) return;
         var request = session.LatestRequest;
         int selected = FrameSelector.Select(segment, request.TargetSeconds, request.Fps);
         double last = segment.Clock.ToInputSeconds(segment.Frames[^1], segment.Frames.Count - 1, request.Fps);
@@ -415,7 +439,7 @@ public sealed partial class PreviewController
             session.Demand.TrySetResult();
         }
         // 中心確定後も隣の1枚を待つVMへ区間を知らせ、先読み2秒のpauseまで表示を止めない。
-        // 隣需要の状態はVMが持つため、中心確定後の受信更新を送り、既存の最新値集約に任せる。
+        // 隣需要の状態はVMが持つため、中心確定後も区間更新を送り、VMの最新値集約に任せる。
         if (notifyFrame || session.IsPaused || finish || confirmed)
             Notify(session.Version, session.Navigation, () => SegmentUpdated?.Invoke(new(request, segment,
                 session.IsPaused, confirmed)), true);
@@ -429,6 +453,8 @@ public sealed partial class PreviewController
         public PreviewRequest LatestRequest { get; set; } = logical;
         public long Version { get; set; } = version;
         public bool Navigation { get; set; } = navigation;
+        // 先読み中は物理境界と論理位置を分け、表示pin・画像・完了通知を変更しない。
+        public bool IsForwardPrefetch { get; set; }
         public CancellationTokenSource Cancellation { get; } = cancellation;
         public CancellationToken ExternalToken { get; set; } = externalToken;
         public Task PhysicalCompletion { get; set; } = Task.CompletedTask;
@@ -483,9 +509,10 @@ public sealed partial class PreviewController
                 double last = segment?.Frames.Count > 0
                     ? segment.Clock.ToInputSeconds(segment.Frames[^1], segment.Frames.Count - 1, session.LatestRequest.Fps)
                     : double.NegativeInfinity;
-                bool needs = !trusted || last < session.LatestRequest.TargetSeconds + 2;
+                double demand = session.IsForwardPrefetch ? session.InitialRequest.TargetSeconds : session.LatestRequest.TargetSeconds;
+                bool needs = !trusted || last < demand + 2;
                 // 暖機境界とVFRの位相が重なると、安全な候補がないまま先読みに到達する。永久pauseにしない。
-                if (!needs && segment != null && FrameSelector.Select(segment, session.LatestRequest.TargetSeconds, session.LatestRequest.Fps) < 0)
+                if (!session.IsForwardPrefetch && !needs && segment != null && FrameSelector.Select(segment, session.LatestRequest.TargetSeconds, session.LatestRequest.Fps) < 0)
                     throw new InvalidOperationException(CoreText.FrameUnavailable);
                 bool budget = !needs || session.LastFrameBytes == 0 || owner._cache.CanAppend(session.SegmentId, session.LastFrameBytes);
                 if (needs && budget) return ValueTask.CompletedTask;
@@ -501,6 +528,14 @@ public sealed partial class PreviewController
         }
         private void RequestReplay(string reason)
         {
+            if (session.IsForwardPrefetch)
+            {
+                // 先読みの不良時計だけで、表示済みの前景を取り直したり失敗通知へ変えない。
+                owner._cache.RemoveSegment(session.SegmentId);
+                session.Cancellation.Cancel();
+                session.ReadAllowed.TrySetResult();
+                return;
+            }
             session.NeedsLegacyReplay = true;
             owner.MarkLegacySource(session.LatestRequest, reason);
             session.Cancellation.Cancel();

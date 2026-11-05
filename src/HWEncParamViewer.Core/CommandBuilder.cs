@@ -5,6 +5,10 @@ namespace HWEncParamViewer.Core;
 /// <summary>プレビュー要求 (設計書 3.3)。</summary>
 public sealed record PreviewRequest
 {
+    // 通常要求と順先読みで共通に使う、論理窓の既定余白。
+    internal const double DefaultPreMarginSeconds = 2.0;
+    internal const double DefaultPostMarginSeconds = 0.5;
+
     /// <summary>呼び出し側の要求識別子。通知へ引き継ぐが、エンコード引数と画像キャッシュのキーには含めない。</summary>
     public long CorrelationId { get; init; }
     /// <summary>helpで確認できた、プレビュー時に付加するオプション。</summary>
@@ -32,9 +36,9 @@ public sealed record PreviewRequest
     /// <summary>目標時刻 T (秒)。</summary>
     public double TargetSeconds { get; init; }
     /// <summary>前マージン Mb (秒)。</summary>
-    public double PreMarginSeconds { get; init; } = 2.0;
+    public double PreMarginSeconds { get; init; } = DefaultPreMarginSeconds;
     /// <summary>後マージン Ma (秒)。</summary>
-    public double PostMarginSeconds { get; init; } = 0.5;
+    public double PostMarginSeconds { get; init; } = DefaultPostMarginSeconds;
     /// <summary>入力のフレームレート。--frames の算出に使う。</summary>
     public double Fps { get; init; }
     /// <summary>vpp 引数 (OptionTextParser の出力)。</summary>

@@ -619,8 +619,14 @@ public sealed class StreamingNavigationTests
         Assert.DoesNotContain((byte)224, shown);
         Assert.DoesNotContain((byte)228, shown);
         Assert.Equal(13, shown.Count);
-        var prefetch = Assert.Single(requests);
-        Assert.True(prefetch.CorrelationId < long.MinValue / 2);
+        // 終端の順先読みと、逆境界の従来先読みを別々に検証する。
+        Assert.Equal(2, requests.Count);
+        var forward = Assert.Single(requests, request => request.CorrelationId > 0);
+        Assert.True(forward.Continuous);
+        Assert.True(forward.Capabilities.TimestampPassthrough);
+        Assert.Equal(30.0 / 24 + 0.00834, forward.TargetSeconds, 6);
+        var prefetch = Assert.Single(requests, request => request.CorrelationId < long.MinValue / 2);
+        Assert.False(prefetch.Continuous);
         Assert.Equal(1, prefetch.TargetSeconds, 6);
         Assert.Equal(5, prefetch.PreMarginSeconds);
         Assert.Equal(1, prefetch.PostMarginSeconds);

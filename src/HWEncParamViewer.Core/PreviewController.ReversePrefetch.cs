@@ -32,6 +32,7 @@ public sealed partial class PreviewController
             {
                 _reverseSteps = 0;
                 _reverseDistance = 0;
+                if (direction > 0) TryStartForwardPrefetchCore(logical);
                 return;
             }
             ++_reverseSteps;
@@ -70,6 +71,7 @@ public sealed partial class PreviewController
         if (_stream is { } stream && !stream.Cancellation.IsCancellationRequested)
         {
             if (!stream.IsPaused || !(_reverseSteps >= 5 || _reverseSteps >= 2 && _reverseDistance >= 0.2 - 1e-8)) return;
+            // 順先読みを含む生存streamは、ここで逆先読みの実行条件が成立して初めて取り消す。
             // 協調cancel→ENDでAfterの実行枠を空けてから、同じbackendで有限取得する。
             CancelStreamCore("reverse_prefetch");
         }
@@ -100,6 +102,7 @@ public sealed partial class PreviewController
         }
         _reversePrefetch = null;
         _lastNavigationRequest = null;
+        _lastForwardPrefetch = null;
         _reverseSteps = 0;
         _reverseDistance = 0;
     }
