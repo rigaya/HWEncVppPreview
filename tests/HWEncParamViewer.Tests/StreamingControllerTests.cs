@@ -16,6 +16,24 @@ public sealed class StreamingControllerTests
     };
 
     [Fact]
+    public async Task ConfirmedDemandPublishesFollowingFrameBeforeReadPause()
+    {
+        var backend = new StreamingBackend();
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        var updates = new List<PreviewSegmentUpdate>();
+        var frames = new List<PreviewFrameResult>();
+        controller.SegmentUpdated += updates.Add;
+        controller.FrameReady += frames.Add;
+        controller.Submit(Request());
+        await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        // 中心だけの確定では隣を選べないため、次の1枚もpause前の更新に含まれる必要がある。
+        Assert.Contains(updates, update => !update.IsReadPaused && update.DemandSatisfied
+            && update.Segment.Frames.Any(frame => frame.Xts == 1010.5));
+        // 区間更新を増やしても、先読みの画像をFrameReadyとして余分に表示しない。
+        Assert.Equal(1010, Assert.Single(frames).Frame.Xts);
+    }
+
+    [Fact]
     public async Task ForwardDemandSharesPhysicalStreamAndDoesNotPublishPrefetch()
     {
         var backend = new StreamingBackend();

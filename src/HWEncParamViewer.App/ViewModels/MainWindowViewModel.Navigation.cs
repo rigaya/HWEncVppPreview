@@ -142,8 +142,11 @@ public sealed partial class MainWindowViewModel
                     CheckBeforeInterval(request);
                     RegisterContext(context);
                     StatusText = AppMessages.Processing;
-                    // safe viewに隣が無い場合、中心だけのcache hitや同stream再利用では隣需要を満たせない。
-                    _controller.Submit(request, bypassCache || requirePhysicalRefetch, navigation: actualNavigation);
+                    // 隣不足では旧cache hitを避ける。正方向だけ、生存中の同じ物理streamへ合流を明示する。
+                    bool reuseNeighbor = requirePhysicalRefetch && !bypassCache && actualNavigation && !actualReverse
+                        && neighbor is { Direction: > 0 } && request.Continuous;
+                    _controller.Submit(request, bypassCache || requirePhysicalRefetch, navigation: actualNavigation,
+                        reuseActiveStream: reuseNeighbor);
                     Track(ReleaseContextAsync(context));
                     QueueDuration(encoder, input, inputArgs);
                 }).ConfigureAwait(false);

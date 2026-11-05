@@ -140,9 +140,10 @@ public sealed partial class PreviewController
         _streamStateChanged = NewSignal();
     }
 
-    private void CancelStreamCore()
+    private void CancelStreamCore(string reason = "unspecified")
     {
         if (_stream is not { } stream) return;
+        if (PerfTrace.Enabled) PerfTrace.Write("core.stream.cancel", new { reason, stream.PhysicalRequest.CorrelationId, stream.SegmentId, stream.IsPaused });
         stream.Cancellation.Cancel();
         stream.ReadAllowed.TrySetResult();
         stream.Demand.TrySetResult();
@@ -150,7 +151,7 @@ public sealed partial class PreviewController
     }
 
     private bool TrySubmitStreaming(PreviewRequest request, bool bypassCache, bool bypassDebounce,
-        bool navigation, CancellationToken externalToken)
+        bool navigation, CancellationToken externalToken, bool reuseActiveStream)
     {
         lock (_sync)
         {
@@ -161,8 +162,6 @@ public sealed partial class PreviewController
             PreviewSegmentSnapshot? cached = null;
             if (!bypassCache && !IsLegacySource(request) && _cache.TryGetAt(request, request.TargetSeconds, out var available)) cached = available;
 
-            bool compatible = active != null && navigation && !bypassCache
-                && FrameCache.SameContent(active.PhysicalRequest, request);
             var current = active == null || active.SegmentId == 0 ? null : _cache.GetSegment(active.SegmentId);
             double frontier = current?.SafeEndSeconds ?? active?.LatestRequest.TargetSeconds ?? request.TargetSeconds;
             bool withinJump = active != null && request.TargetSeconds <= Math.Max(frontier, active.LatestRequest.TargetSeconds) + 3;
@@ -172,6 +171,28 @@ public sealed partial class PreviewController
                 retainedStart = FrameCache.SafeStartIncludingFirst(retainedStart, current.Clock, current.Frames[0], request.Fps);
             // 別segmentのcacheが目標を持っていても、このstreamに存在しないprefixへ需要を再結合しない。
             bool notBeforeRetained = active != null && request.TargetSeconds >= retainedStart - 1e-7;
+            // 隣の時刻は予測せず、中心がこの物理区間に残る場合だけbypass例外を許す。
+            bool neighborReuse = reuseActiveStream && bypassCache && navigation && capable && request.TimestampOriginTrusted
+                && active is { Ended: false } && current is { IsActive: true, Clock.TrustedAbsolute: true }
+                && withinJump && notBeforeRetained && FrameCache.SameContent(active.PhysicalRequest, request)
+                && request.TargetSeconds <= current.SafeEndSeconds + 1e-7;
+            double centerSeconds = double.NaN;
+            if (neighborReuse)
+            {
+                int center = FrameSelector.Select(current!, request.TargetSeconds, request.Fps);
+                if (center >= 0)
+                {
+                    centerSeconds = current!.Clock.ToInputSeconds(current.Frames[center], center, request.Fps);
+                    neighborReuse = Math.Abs(centerSeconds - request.TargetSeconds)
+                        <= FrameSelector.Duration(current.Frames[center], request.Fps) / 2 + 1e-7;
+                }
+                else neighborReuse = false;
+                // 次の1枚分の予算を確保できないpauseには合流せず、従来の再取得へ戻す。
+                if (neighborReuse && active!.IsPaused && active.LastFrameBytes > 0)
+                    neighborReuse = _cache.CanAppend(active.SegmentId, active.LastFrameBytes);
+            }
+            bool compatible = active != null && navigation && (!bypassCache || neighborReuse)
+                && FrameCache.SameContent(active.PhysicalRequest, request);
             if (compatible && withinJump && notBeforeRetained && (capable || cached != null))
             {
                 active!.Demand.TrySetResult();
@@ -196,7 +217,7 @@ public sealed partial class PreviewController
                 return true;
             }
 
-            if (active != null) CancelStreamCore();
+            if (active != null) CancelStreamCore("submit_incompatible_or_before_retained");
             // 不一致後も今の物理stream内では動けるが、新しい要求へ旧区間を接続しない。
             if (!capable || !_cache.CanStitch(request)) return false;
             _scheduled?.Cancel();
@@ -393,7 +414,9 @@ public sealed partial class PreviewController
                 { Segment = segment }), true);
             session.Demand.TrySetResult();
         }
-        if (notifyFrame || session.IsPaused || finish)
+        // 中心確定後も隣の1枚を待つVMへ区間を知らせ、先読み2秒のpauseまで表示を止めない。
+        // 隣需要の状態はVMが持つため、中心確定後の受信更新を送り、既存の最新値集約に任せる。
+        if (notifyFrame || session.IsPaused || finish || confirmed)
             Notify(session.Version, session.Navigation, () => SegmentUpdated?.Invoke(new(request, segment,
                 session.IsPaused, confirmed)), true);
     }

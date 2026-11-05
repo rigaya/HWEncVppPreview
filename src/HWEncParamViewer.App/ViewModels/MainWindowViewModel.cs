@@ -488,7 +488,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private void StepFrame(int direction)
     {
         if (direction != 0) RecordNavigationIntent();
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.step", new { direction, pending = _pendingNeighbor != null, target = CurrentSeconds });
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.step", new { direction, pending = _pendingNeighbor != null, reverseWait = _reversePrefetchWait != null, target = CurrentSeconds });
         LeaveReversePrefetchWaitForForwardStep(direction);
         if (direction == 0 || _pendingNeighbor != null)
         {

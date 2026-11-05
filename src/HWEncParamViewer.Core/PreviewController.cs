@@ -99,13 +99,14 @@ public sealed partial class PreviewController : IAsyncDisposable
     public event Action<PreviewFailure>? Failed;
 
     /// <summary>引数リストを複製し、最新要求として登録する。イベント購読はSubmitより前に行う。</summary>
-    /// <param name="bypassCache">trueなら過去の画像を使わず実行する。直前の要求が後からキャッシュへ保存されても再実行を保証する。</param>
+    /// <param name="bypassCache">trueなら過去の画像を使わず実行する。reuseActiveStreamの明示例外を除き、直前の要求が後から保存されても再実行を保証する。</param>
     /// <param name="bypassDebounce">内部の追加要求を即座に実行する場合だけtrue。通常の編集操作は既定の待機時間を使う。</param>
     /// <param name="navigation">移動要求なら待機を省き、有限要求は完了後に最新へ進む。連続取得は物理実行を共有し、最新の表示目標へ更新する。</param>
     /// <param name="background">背景要求なら前景の待機枠・世代を変更せず、前景が終了または意図的に読取待機したときに実行する。編集向けdebounceは適用しない。</param>
     /// <param name="cancellationToken">登録後の待機と実行の両方を取り消す。移動要求の置換による待機取消とは分離する。</param>
+    /// <param name="reuseActiveStream">正方向の隣不足だけが明示する例外。bypassCacheでも安全な同contentの生存streamだけを再利用し、新たなcache hitへは戻らない。</param>
     public void Submit(PreviewRequest request, bool bypassCache = false, bool bypassDebounce = false, bool navigation = false,
-        bool background = false, CancellationToken cancellationToken = default)
+        bool background = false, CancellationToken cancellationToken = default, bool reuseActiveStream = false)
     {
         ArgumentNullException.ThrowIfNull(request);
         request = request with { InputArgs = request.InputArgs.ToArray(), VppArgs = request.VppArgs.ToArray() };
@@ -119,7 +120,7 @@ public sealed partial class PreviewController : IAsyncDisposable
                     CancelReversePrefetchCore();
             }
         }
-        if (!background && TrySubmitStreaming(request, bypassCache, bypassDebounce, navigation, cancellationToken)) return;
+        if (!background && TrySubmitStreaming(request, bypassCache, bypassDebounce, navigation, cancellationToken, reuseActiveStream)) return;
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
