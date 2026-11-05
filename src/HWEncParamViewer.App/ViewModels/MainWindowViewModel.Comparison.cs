@@ -28,6 +28,9 @@ public sealed partial class MainWindowViewModel
     private PreviewRequest? _beforeSelectionRequest;
     private TaskCompletionSource? _beforeImmediate;
     private bool _beforeFinished;
+    private BeforePhysicalWindow? _beforePhysicalWindow;
+    private PreviewRequest? _beforeRecoverySelection;
+    private sealed record BeforePhysicalWindow(RequestContext Context, PreviewRequest Request);
     private string _beforeFallbackDiagnostic = "";
     private long? _lastNavigationIntent;
     private static readonly TimeSpan BeforeQuietPeriod = TimeSpan.FromMilliseconds(300);
@@ -89,6 +92,7 @@ public sealed partial class MainWindowViewModel
             _beforeCancellation?.Cancel();
             _beforeCancellation = null;
             _pendingBeforeImage = null;
+            _beforePhysicalWindow = null;
         }
         Volatile.Write(ref _beforeExecutionContext, null);
         _beforeSelectionRequest = null;
@@ -124,9 +128,18 @@ public sealed partial class MainWindowViewModel
         return last is long timestamp ? BeforeQuietPeriod - _clock.GetElapsedTime(timestamp) : TimeSpan.Zero;
     }
 
+    private void ObserveBeforePhysical(RequestContext context, PreviewRequest physical)
+    {
+        // backendからの通知はUI外。物理計画だけを取消と同じ排他で受け渡す。
+        lock (_taskLock)
+            if (ReferenceEquals(Volatile.Read(ref _beforeExecutionContext), context)
+                && context.BeforeCancellation?.IsCancellationRequested != true)
+                _beforePhysicalWindow = new(context, physical);
+    }
+
     private void CheckBeforeInterval(PreviewRequest afterRequest)
     {
-        if (_beforeExecutionContext is { } context && !ContainsBeforeTarget(context.Request, afterRequest)) CancelBefore();
+        if (_beforeExecutionContext is { } context && !ContainsBeforeTarget(context, afterRequest)) CancelBefore();
     }
 
     private void QueueBefore(PreviewRequest afterRequest, long generation, double? cachedTarget = null)
@@ -142,6 +155,9 @@ public sealed partial class MainWindowViewModel
         var before = afterRequest with { VppArgs = Array.Empty<string>(), CorrelationId = -generation,
             Continuous = false, SeekSecondsOverride = null, PreMarginSeconds = 2, PostMarginSeconds = BenchmarkPostMargin() };
         if (cachedTarget is double target) before = RetargetInterval(before, target);
+        if (_beforeRecoverySelection is { } recovery
+            && (!SameBeforeInput(recovery, before) || Math.Abs(recovery.TargetSeconds - before.TargetSeconds) > 1e-8))
+            _beforeRecoverySelection = null;
         CheckBeforeInterval(before);
         _beforeSelectionRequest = before;
         IsBeforeBusy = true;
@@ -150,12 +166,14 @@ public sealed partial class MainWindowViewModel
             if (PerfTrace.Enabled) PerfTrace.Write("vm.before.cache", new { generation });
             _beforeIntervalFrames = frames;
             var frame = SelectBeforeFrame(before, frames);
-            if (frame == null) { IsBeforeBusy = false; return; }
-            DisplayBeforeFrame(frame, generation, finishBusy: true);
-            return;
+            if (frame != null)
+            {
+                DisplayBeforeFrame(frame, generation, finishBusy: true);
+                return;
+            }
         }
         // 同一区間なら、待機や実行を保ったまま選択する目標だけを更新する。
-        if (_beforeExecutionContext is { } existing && !_beforeFinished && ContainsBeforeTarget(existing.Request, before)) return;
+        if (_beforeExecutionContext is { } existing && !_beforeFinished && ContainsBeforeTarget(existing, before)) return;
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         var context = new RequestContext(generation, before, _clock.GetTimestamp(), RequestKind.Before, cancellation,
             editEpoch: Volatile.Read(ref _editEpoch));
@@ -255,9 +273,24 @@ public sealed partial class MainWindowViewModel
         IsBeforeBusy = false;
         // 実行開始時の目標ではなく、同じ区間で最後に移動した位置を選ぶ。
         var selection = RetargetInterval(context.Request, CurrentSeconds);
-        if (!ContainsBeforeTarget(context.Request, selection)) return;
-        var frame = SelectBeforeFrame(selection, frames);
-        if (frame != null) DisplayBeforeFrame(frame, Volatile.Read(ref _generation), finishBusy: true, revisionContext: context);
+        var frame = ContainsBeforeFrameTarget(_beforeIntervalSegment?.PhysicalRequest ?? context.Request,
+            frames, selection.TargetSeconds, _beforeIntervalSegment) ? SelectBeforeFrame(selection, frames) : null;
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.before.selection", new { generation = context.Generation,
+            target = CurrentSeconds, requestedTarget = context.Request.TargetSeconds,
+            safeStart = _beforeIntervalSegment?.SafeStartSeconds, safeEnd = _beforeIntervalSegment?.SafeEndSeconds,
+            selectedXts = frame?.Xts, missing = frame == null, busy = IsBeforeBusy });
+        if (frame != null)
+        {
+            DisplayBeforeFrame(frame, Volatile.Read(ref _generation), finishBusy: true, revisionContext: context);
+            return;
+        }
+        // 同じ入力・目標での回復は1回に制限し、着地が毎回遅い入力でも再帰し続けない。
+        if (_beforeRecoverySelection is { } prior && SameBeforeInput(prior, selection)
+            && Math.Abs(prior.TargetSeconds - selection.TargetSeconds) <= 1e-8) return;
+        _beforeRecoverySelection = selection;
+        CancelBefore();
+        QueueBefore(selection, Volatile.Read(ref _generation));
+        _beforeImmediate?.TrySetResult();
     }
 
     private bool TryGetBeforeInterval(PreviewRequest request, out IReadOnlyList<Y4mFrame> frames)
@@ -290,14 +323,18 @@ public sealed partial class MainWindowViewModel
 
     private bool ContainsBeforeFrameTarget(PreviewRequest request, IReadOnlyList<Y4mFrame> frames, double target, PreviewSegmentSnapshot? segment)
     {
-        if (ContainsFrameTarget(request, frames, target, segment?.Clock)) return true;
+        bool inside = segment == null || target >= segment.SafeStartSeconds - 1e-8
+            && target <= segment.SafeEndSeconds + 1e-8;
+        if (inside && ContainsFrameTarget(request, frames, target, segment?.Clock)
+            && (segment == null || FrameSelector.Select(segment, target, request.Fps) >= 0)) return true;
         // 自然終端が確定した既知Durationへの移動だけは、Afterと同じ最終画像を共有する。
         // 通常の取得窓の末尾を、この終端例外で延長しない。
         if (segment?.ReachedInputEnd != true || frames.Count == 0 || request.InputDurationSeconds is not double end
             || Math.Abs(target - end) > 1e-8) return false;
         var last = frames[^1];
         double lastSeconds = segment.Clock.ToInputSeconds(last, frames.Count - 1, request.Fps);
-        return lastSeconds <= end + 1e-8 && lastSeconds + FrameSelector.Duration(last, request.Fps) >= end - 1e-8;
+        return lastSeconds >= segment.SafeStartSeconds - 1e-8 && lastSeconds <= segment.SafeEndSeconds + 1e-8
+            && lastSeconds <= end + 1e-8 && lastSeconds + FrameSelector.Duration(last, request.Fps) >= end - 1e-8;
     }
 
     private bool SameBeforeInput(PreviewRequest a, PreviewRequest b) => a.EncoderPath == b.EncoderPath
@@ -308,13 +345,20 @@ public sealed partial class MainWindowViewModel
         && (a.Capabilities.TimestampPassthrough == b.Capabilities.TimestampPassthrough || IsKnownLegacyPhysicalSource(a, b))
         && a.TimestampOriginSeconds == b.TimestampOriginSeconds;
 
-    // 保持している有限窓に最新目標が含まれる間は、実行中の元画像を取り消さない。
-    private bool ContainsBeforeTarget(PreviewRequest first, PreviewRequest second)
+    // 実受信済みなら安全域、未出力ならprobe後の物理窓だけを再利用する。
+    private bool ContainsBeforeTarget(RequestContext context, PreviewRequest second)
     {
-        if (!SameBeforeInput(first, second)) return false;
-        var plan = CommandBuilder.Plan(first);
+        if (!SameBeforeInput(context.Request, second)) return false;
+        if (context.Segment is { } segment)
+            return ContainsBeforeFrameTarget(segment.PhysicalRequest, segment.Frames, second.TargetSeconds, segment);
+        PreviewRequest? physical;
+        lock (_taskLock)
+            physical = _beforePhysicalWindow is { } window && ReferenceEquals(window.Context, context) ? window.Request : null;
+        // probeの結論が未着なら別目標への窓拡張を推測しない。
+        if (physical == null) return Math.Abs(context.Request.TargetSeconds - second.TargetSeconds) <= 1e-8;
+        var plan = CommandBuilder.Plan(physical);
         double start = plan.SeekSeconds ?? 0;
-        double end = start + (plan.FrameCount - 1) / first.Fps;
+        double end = start + (plan.FrameCount - 1) / physical.Fps;
         return second.TargetSeconds >= start - 1e-8 && second.TargetSeconds <= end + 1e-8;
     }
 

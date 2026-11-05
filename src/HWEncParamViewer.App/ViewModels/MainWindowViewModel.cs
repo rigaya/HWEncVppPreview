@@ -889,6 +889,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             var context = owner.ContextForPhysical(request);
             if (context != null) context.Mode = mode;
+            if (context?.Kind == RequestKind.Before) owner.ObserveBeforePhysical(context, request);
             using var cancellation = context?.BeforeCancellation == null ? null
                 : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, context.BeforeCancellation.Token);
             try
