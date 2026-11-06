@@ -283,7 +283,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         if (!_seekDragging) return;
         _seekDragging = false;
-        SeekTo(seconds);
+        if (seconds == CurrentSeconds)
+        {
+            // ドラッグ中のAfterを捨てず、確定した同じ目標のBeforeだけを同時取得へ進める。
+            long generation = Volatile.Read(ref _generation);
+            _concurrentComparisonGeneration = generation;
+            if (_context is { Kind: RequestKind.After } context && IsCurrent(context))
+                QueueBefore(context.Request with { AllowConcurrentBackground = true }, generation);
+        }
+        else SeekTo(seconds, allowConcurrentBefore: true);
     }
 
     private void InputChanged(bool bypassDebounce = false)
@@ -582,7 +590,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         SetTimeOnly(seconds);
         // 物理offの結果を移動に再利用しても、診断用sourceはhelp由来の論理設定を維持する。
         var logical = _intervalLogicalRequest ?? _intervalRequest;
-        var request = RetargetInterval(_intervalRequest, seconds) with { CorrelationId = generation,
+        var request = RetargetInterval(_intervalRequest, seconds) with { CorrelationId = generation, AllowConcurrentBackground = false,
             InputArgs = logical.InputArgs, VppArgs = logical.VppArgs, Capabilities = _capabilities,
             TimestampOriginTrusted = _inputInfo?.TimestampOriginTrusted ?? _intervalRequest.TimestampOriginTrusted };
         CheckBeforeInterval(request);
@@ -599,13 +607,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         NotifyAcceptedFrameStep(request, direction, seconds);
         Track(ReleaseContextAsync(context));
     }
-    private void SeekTo(double seconds, bool force = false)
+    private void SeekTo(double seconds, bool force = false, bool allowConcurrentBefore = false)
     {
         RecordNavigationIntent();
         seconds = ClampTime(seconds);
         if (!force && seconds == CurrentSeconds) return;
         SetTimeOnly(seconds);
-        _ = QueuePreview(navigation: true);
+        _ = QueuePreview(navigation: true, allowConcurrentBefore: allowConcurrentBefore);
     }
     private void SetTimeOnly(double seconds)
     {
@@ -617,7 +625,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private void CommitTime()
     {
         if (!TryParseTime(CurrentTimeText, out double seconds)) { ShowError(AppMessages.InvalidTime, ""); return; }
-        SeekTo(seconds, force: true);
+        SeekTo(seconds, force: true, allowConcurrentBefore: true);
     }
     private static bool TryParseTime(string text, out double seconds)
     {

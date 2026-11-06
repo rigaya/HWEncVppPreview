@@ -34,6 +34,7 @@ public sealed partial class PreviewController : IAsyncDisposable
     private readonly IPreviewBackend _backgroundPreferred;
     private readonly IPreviewBackend _backgroundFallback;
     private CancellationTokenSource? _backgroundActive;
+    private PreviewRequest? _backgroundActiveRequest;
     private readonly bool _separateBackground;
     private SemaphoreSlim ExecutionFor(bool background) => background && _separateBackground ? _backgroundExecution : _execution;
     private readonly TimeProvider _clock;
@@ -317,7 +318,9 @@ public sealed partial class PreviewController : IAsyncDisposable
                 {
                     if (PerfTrace.Enabled && _active != null) PerfTrace.Write("core.cancel_active", new { request.CorrelationId, version });
                     _active?.Cancel();
-                    _backgroundActive?.Cancel();
+                    // 同じ比較組の背景だけを保持し、過去の比較要求は従来どおり取り消す。
+                    if (!request.AllowConcurrentBackground || request.CorrelationId == 0
+                        || _backgroundActiveRequest?.CorrelationId != -request.CorrelationId) _backgroundActive?.Cancel();
                 }
             }
             if (PerfTrace.Enabled)
@@ -327,7 +330,7 @@ public sealed partial class PreviewController : IAsyncDisposable
             }
             while (true)
             {
-                if (background) await WaitForForegroundAsync(scheduled.Token).ConfigureAwait(false);
+                if (background && !(request.AllowConcurrentBackground && _separateBackground)) await WaitForForegroundAsync(scheduled.Token).ConfigureAwait(false);
                 await ExecutionFor(background).WaitAsync(scheduled.Token).ConfigureAwait(false);
                 entered = true;
                 if (PerfTrace.Enabled) executionStart = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -335,11 +338,11 @@ public sealed partial class PreviewController : IAsyncDisposable
                 {
                     if (!IsCurrent()) return;
                     // SemaphoreSlimの待ち順には依存せず、取得と実行登録の間にも前景を優先する。
-                    if (!background || CanStartBackgroundCore())
+                    if (!background || request.AllowConcurrentBackground && _separateBackground || CanStartBackgroundCore())
                     {
                         // scheduledを連結すると、次の移動による待機置換まで実行中断へ変わってしまう。
                         active = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                        if (background) _backgroundActive = active; else _active = active;
+                        if (background) { _backgroundActive = active; _backgroundActiveRequest = request; } else _active = active;
                         break;
                     }
                 }
@@ -496,7 +499,7 @@ public sealed partial class PreviewController : IAsyncDisposable
             lock (_sync)
             {
                 if (ReferenceEquals(_active, active)) _active = null;
-                if (ReferenceEquals(_backgroundActive, active)) _backgroundActive = null;
+                if (ReferenceEquals(_backgroundActive, active)) { _backgroundActive = null; _backgroundActiveRequest = null; }
                 if (background)
                 {
                     if (ReferenceEquals(_backgroundScheduled, scheduled)) _backgroundScheduled = null;

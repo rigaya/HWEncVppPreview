@@ -354,6 +354,53 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         Assert.Equal(0, backend.Starts);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConcurrentBackgroundPermissionIsScopedToEachRequest(bool allowed)
+    {
+        var foreground = new ControlledBackend();
+        var background = new ControlledBackend();
+        var clock = new NavigationClock();
+        var controller = new PreviewController(foreground, foreground, timeProvider: clock,
+            backgroundBackend: background, backgroundFallback: background);
+        await using var teardown = new ControllerLifetime(controller, clock);
+        controller.Submit(Request(0) with { CorrelationId = 1 }, navigation: true);
+        var first = await foreground.NextAsync();
+        controller.Submit(Request(0) with { CorrelationId = -1, AllowConcurrentBackground = allowed }, background: true, bypassCache: true);
+        if (!allowed)
+        {
+            Assert.Equal(0, background.Starts);
+            first.End();
+        }
+        var second = await background.NextAsync();
+        Assert.False(first.Token.IsCancellationRequested);
+        if (allowed) Assert.False(first.Done.Task.IsCompleted);
+        second.End();
+        first.End();
+        await controller.WaitForIdleAsync().WaitAsync(Safety);
+    }
+
+    [Fact]
+    public async Task ForegroundDebounceDoesNotCancelItsAlreadyRunningComparisonPartner()
+    {
+        var foreground = new ControlledBackend();
+        var background = new ControlledBackend();
+        var clock = new NavigationClock();
+        var controller = new PreviewController(foreground, foreground, timeProvider: clock,
+            backgroundBackend: background, backgroundFallback: background);
+        await using var teardown = new ControllerLifetime(controller, clock);
+        controller.Submit(Request(0) with { CorrelationId = 7, AllowConcurrentBackground = true });
+        controller.Submit(Request(0) with { CorrelationId = -7, AllowConcurrentBackground = true }, background: true);
+        var before = await background.NextAsync();
+        clock.Advance(TimeSpan.FromMilliseconds(150));
+        var after = await foreground.NextAsync();
+        Assert.False(before.Token.IsCancellationRequested);
+        before.End();
+        after.End();
+        await controller.WaitForIdleAsync().WaitAsync(Safety);
+    }
+
     private sealed class ControllerLifetime(PreviewController controller, NavigationClock clock) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()

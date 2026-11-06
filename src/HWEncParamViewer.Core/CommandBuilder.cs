@@ -11,6 +11,8 @@ public sealed record PreviewRequest
 
     /// <summary>呼び出し側の要求識別子。通知へ引き継ぐが、エンコード引数と画像キャッシュのキーには含めない。</summary>
     public long CorrelationId { get; init; }
+    /// <summary>この比較要求の背景取得を、独立backendで前景と同時に始めてよい。既定の移動は前景を優先する。</summary>
+    public bool AllowConcurrentBackground { get; init; }
     /// <summary>helpで確認できた、プレビュー時に付加するオプション。</summary>
     public PreviewCapabilities Capabilities { get; init; } = new();
     /// <summary>フィルタなし・seekなしの先頭Xts。未取得なら要求を跨ぐ時計として使わない。</summary>

@@ -143,6 +143,21 @@ public sealed partial class MainWindowViewModel
         if (_beforeExecutionContext is { } context && !ContainsBeforeTarget(context, afterRequest)) CancelBefore();
     }
 
+    private PreviewRequest BeforeRequest(PreviewRequest afterRequest, long generation) => afterRequest with
+    {
+        VppArgs = Array.Empty<string>(), CorrelationId = -generation, Continuous = false,
+        SeekSecondsOverride = null, PreMarginSeconds = 2, PostMarginSeconds = BenchmarkPostMargin(),
+    };
+
+    private void QueueConcurrentBefore(PreviewRequest afterRequest, long generation)
+    {
+        var before = BeforeRequest(afterRequest, generation);
+        CheckBeforeInterval(before);
+        // cache hitはAfter反映後に表示すればよく、先に変換を始めてAfterを待たせない。
+        if (TryGetBeforeInterval(before, out _)) return;
+        QueueBefore(afterRequest, generation);
+    }
+
     private void QueueBefore(PreviewRequest afterRequest, long generation, double? cachedTarget = null)
     {
         if (!IsCurrent(generation)) return;
@@ -154,8 +169,7 @@ public sealed partial class MainWindowViewModel
         }
         if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.before", new { generation, cachedTarget });
         // 元画像は独立した有限窓。Afterの長寿命seekや拡大した前余白を引き継がない。
-        var before = afterRequest with { VppArgs = Array.Empty<string>(), CorrelationId = -generation,
-            Continuous = false, SeekSecondsOverride = null, PreMarginSeconds = 2, PostMarginSeconds = BenchmarkPostMargin() };
+        var before = BeforeRequest(afterRequest, generation);
         if (cachedTarget is double target) before = RetargetInterval(before, target);
         if (_beforeRecoverySelection is { } recovery
             && (!SameBeforeInput(recovery, before) || Math.Abs(recovery.TargetSeconds - before.TargetSeconds) > 1e-8))
@@ -182,7 +196,7 @@ public sealed partial class MainWindowViewModel
         var immediate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_taskLock) _beforeCancellation = cancellation;
         _beforeImmediate = immediate;
-        if (IsShowingBefore) immediate.TrySetResult();
+        if (IsShowingBefore || before.AllowConcurrentBackground) immediate.TrySetResult();
         _beforeFinished = false;
         Volatile.Write(ref _beforeExecutionContext, context);
         Track(ScheduleBeforeAsync(context, immediate));

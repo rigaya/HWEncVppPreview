@@ -10,6 +10,7 @@ public sealed partial class MainWindowViewModel
     private long _editEpoch, _lastQueuedAfter, _lastDisplayedAfter, _lastCompletedAfter, _lastFailedAfter;
     private long _lastQueuedRevision, _lastDisplayedRevision;
     private bool _latestIntentNavigation;
+    private long _concurrentComparisonGeneration;
     private string _completedAfterStatus = AppMessages.Done;
     private ImageWork? _pendingAfterImage, _pendingBeforeImage;
     private bool _conversionActive;
@@ -38,7 +39,7 @@ public sealed partial class MainWindowViewModel
         Volatile.Write(ref _context, context);
     }
 
-    private Task QueuePreview(bool bypassCache = false, bool navigation = false, int neighborDirection = 0, bool requirePhysicalRefetch = false, bool bypassDebounce = false)
+    private Task QueuePreview(bool bypassCache = false, bool navigation = false, int neighborDirection = 0, bool requirePhysicalRefetch = false, bool bypassDebounce = false, bool allowConcurrentBefore = false)
     {
         if (!_initialized || _suspendChanges || _disposed) return Task.CompletedTask;
         CancelInputEdit();
@@ -46,6 +47,7 @@ public sealed partial class MainWindowViewModel
         _lastIntentTarget = CurrentSeconds;
         _latestIntentReverse = reverse;
         long generation = BeginIntent(navigation);
+        if (!navigation || allowConcurrentBefore) _concurrentComparisonGeneration = generation;
         if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.after", new { generation, navigation, neighborDirection, bypassCache, target = CurrentSeconds });
         long editEpoch = Volatile.Read(ref _editEpoch);
         if (neighborDirection != 0) _pendingNeighbor = new NeighborIntent(generation, neighborDirection);
@@ -121,6 +123,7 @@ public sealed partial class MainWindowViewModel
                     var request = new PreviewRequest
                     {
                         EncoderPath = encoder, InputFile = input, InputArgs = inputArgs, VppArgs = vpp,
+                        AllowConcurrentBackground = _concurrentComparisonGeneration == actualGeneration,
                         Fps = info.Fps, TargetSeconds = target, CorrelationId = actualGeneration,
                         // 計測時だけ後マージンを切り替え、通常の要求値は維持する。
                         PostMarginSeconds = capabilities.TimestampPassthrough && info.TimestampOriginSeconds.HasValue
@@ -150,6 +153,8 @@ public sealed partial class MainWindowViewModel
                         && neighbor is { Direction: > 0 } && request.Continuous;
                     _controller.Submit(request, bypassCache || requirePhysicalRefetch, navigation: actualNavigation,
                         reuseActiveStream: reuseNeighbor, bypassDebounce: bypassDebounce);
+                    // 無フィルタではAfterの確定frameがそのままBeforeなので、別の有限取得を競合させない。
+                    if (request.AllowConcurrentBackground && request.VppArgs.Count > 0) QueueConcurrentBefore(request, actualGeneration);
                     Track(ReleaseContextAsync(context));
                 }).ConfigureAwait(false);
             }
@@ -335,6 +340,9 @@ public sealed partial class MainWindowViewModel
         RecalculateDisplaySizes();
         PreviewImage = afterBitmap;
         if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.TraceId, image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
+        if (_context is { Kind: RequestKind.After } current && IsCurrent(current)
+            && current.Request.AllowConcurrentBackground && (current.Request.VppArgs.Count > 0 || current.Request.Continuous))
+            QueueBefore(RetargetInterval(current.Request, CurrentSeconds), current.Generation);
         QueueDurationAfterComparison(image.Before, image.Generation);
         UpdateNavigationStatus();
     }

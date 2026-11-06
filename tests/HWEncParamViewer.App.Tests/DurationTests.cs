@@ -264,6 +264,55 @@ public sealed class DurationTests
         Assert.True(vm.HasDuration);
     }
 
+    [AvaloniaFact]
+    public async Task ComparisonFramesAcrossNavigationGenerationsStartDuration()
+    {
+        using var files = new TestFiles();
+        string? old = Environment.GetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES");
+        Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", "1");
+        var clock = new FakeTimeProvider();
+        var probe = HeldDurationProbe(files, clock);
+        var after = new DelayedStreamBackend();
+        var before = new DurationBeforeBackend();
+        var secondBefore = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int beforeConversions = 0;
+        async Task<byte[]> ConvertAsync(Y4mFrame frame, CancellationToken token)
+        {
+            if (frame.Data[0] == 16 && Interlocked.Increment(ref beforeConversions) > 1)
+                await secondBefore.Task.WaitAsync(token);
+            return YuvToBgra.Convert(frame);
+        }
+        await using var vm = new MainWindowViewModel(files, clock, after, after, probe, null, ConvertAsync, before, before)
+        {
+            EncoderPath = FakeEncoderPath(), InputPath = "cross-generation.ts",
+            InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit"
+        };
+        vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
+        try
+        {
+            await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
+            await WaitUntilAsync(vm, () => vm.BeforeImage != null);
+            Assert.Null(vm.PreviewImage);
+            Assert.False(File.Exists(files.Ready));
+            vm.CurrentSeconds = 0.2;
+            await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+            after.Release.TrySetResult();
+            await WaitForFileAsync(files.Ready);
+            Assert.NotNull(vm.PreviewImage);
+            Assert.NotNull(vm.BeforeImage);
+            Assert.Equal(0.2, vm.CurrentSeconds, 6);
+        }
+        finally
+        {
+            after.Release.TrySetResult();
+            secondBefore.TrySetResult();
+            await File.WriteAllTextAsync(files.Gate, "");
+            Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", old);
+        }
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.True(vm.HasDuration);
+    }
+
     private static InputProbe HeldDurationProbe(TestFiles files, FakeTimeProvider clock) => new(clock, configureStartInfo: info =>
     {
         if (IsDuration(info)) HoldDuration(info, files);
@@ -276,6 +325,52 @@ public sealed class DurationTests
         public ValueTask AbortAsync() => ValueTask.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
+    private static Y4mFrame DurationFrame(Y4mHeader header, double seconds, byte y)
+    {
+        byte[] data = Enumerable.Repeat((byte)128, header.FrameBytes).ToArray();
+        Array.Fill(data, y, 0, header.Width * header.Height);
+        return new(header, 1000 + seconds, 1.0 / 30, data);
+    }
+    private sealed class DurationBeforeBackend : IPreviewBackend
+    {
+        public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken token = default) => Task.FromResult<bool?>(false);
+        public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
+        {
+            var header = Y4mHeader.Parse("YUV4MPEG2 W64 H36 F30:1 Ip A1:1 C420");
+            sink.OnHeader(header);
+            for (int index = 0; index < 31; index++) sink.OnFrame(DurationFrame(header, index / 30.0, 16));
+            return Task.FromResult(new PreviewRunResult(0, ""));
+        }
+        public ValueTask AbortAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+    private sealed class DelayedStreamBackend : IPreviewBackend
+    {
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken token = default) => Task.FromResult<bool?>(false);
+        public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
+        {
+            try
+            {
+                await Release.Task.WaitAsync(token);
+                var header = Y4mHeader.Parse("YUV4MPEG2 W64 H36 F30:1 Ip A1:1 C420");
+                sink.OnHeader(header);
+                for (int index = 0; ; index++)
+                {
+                    var permission = sink.BeforeReadAsync(token);
+                    if (!permission.IsCompleted) sink.OnReadStateChanged(false);
+                    await permission.AsTask().WaitAsync(token);
+                    sink.OnReadStateChanged(true);
+                    token.ThrowIfCancellationRequested();
+                    sink.OnFrame(DurationFrame(header, index / 30.0, 48));
+                }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return new(-12, "", true); }
+        }
+        public ValueTask AbortAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private static MainWindowViewModel Create(TestFiles files, FakeTimeProvider clock, InputProbe probe)
     {
         var backend = new OneShotBackend();

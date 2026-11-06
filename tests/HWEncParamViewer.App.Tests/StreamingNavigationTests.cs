@@ -178,6 +178,32 @@ public sealed class StreamingNavigationTests
     }
 
     [AvaloniaFact]
+    public async Task UnfilteredComparisonUsesLiveAfterCacheWithoutCompetingFiniteRun()
+    {
+        using var capabilities = new CapabilityScope();
+        using var services = new Services();
+        var clock = new FakeTimeProvider();
+        var foreground = new ConcurrentQueue<PreviewRequest>();
+        var background = new ConcurrentQueue<PreviewRequest>();
+        var first = new RecordingBackend(foreground);
+        var second = new RecordingBackend(background);
+        await using var vm = new MainWindowViewModel(services, clock, first, first, null, null, null, second, second)
+        {
+            EncoderPath = FakeEncoderPath(), InputPath = "unfiltered-concurrent.ts", CurrentSeconds = 5,
+            InputArgsText = "--avhw --fake-duration 00:01:00.00"
+        };
+        await vm.InitializeAsync(false).WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.NotNull(vm.PreviewImage);
+        Assert.NotNull(vm.BeforeImage);
+        Assert.NotSame(vm.PreviewImage, vm.BeforeImage);
+        Assert.Single(foreground);
+        Assert.Empty(background);
+        Assert.Null(vm.ErrorText);
+        Assert.False(vm.IsBeforeBusy);
+    }
+
+    [AvaloniaFact]
     public async Task FilteredBeforeUsesIndependentFiniteBackendAfterAfterDemandSettles()
     {
         using var capabilities = new CapabilityScope();
