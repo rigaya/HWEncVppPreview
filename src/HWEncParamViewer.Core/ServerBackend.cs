@@ -145,12 +145,19 @@ public sealed partial class ServerBackend : IPreviewBackend
             long id = Interlocked.Increment(ref _nextId);
             Task<string> logTask = session.RegisterLog(id);
             requestLog = logTask;
+            string[] args = CommandBuilder.BuildServer(request);
+            // 利用者の明示trimは従来の入力番号の意味を保ち、新しい窓内カウントへ切り替えない。
+            bool windowSeek = session.SupportsWindowSeek && !args.Any(arg => arg == "--trim" || arg.StartsWith("--trim=", StringComparison.Ordinal));
             if (PerfTrace.Enabled) PerfTrace.Write("server.run_send", new { request.CorrelationId, id,
                 pid = session.Process.Id, request.TargetSeconds, continuous = request.Continuous,
                 frames = request.Continuous ? (int?)null : CommandBuilder.Plan(request).FrameCount,
                 timestampPassthrough = request.Capabilities.TimestampPassthrough,
-                seekSeconds = CommandBuilder.Plan(request).SeekSeconds, request.PreMarginSeconds, request.PostMarginSeconds, request.WarmupSeconds });
-            await session.SendAsync(new { cmd = "run", id, args = CommandBuilder.BuildServer(request) }).ConfigureAwait(false);
+                seekSeconds = CommandBuilder.Plan(request).SeekSeconds, request.PreMarginSeconds, request.PostMarginSeconds, request.WarmupSeconds, windowSeek });
+            // READYで確認できたサーバだけ、新しい窓開始/枚数の契約へ明示的に参加する。
+            // 再起動やexe切替の後も、現在のsessionの能力を使い、旧サーバへ未知の指定を送らない。
+            var command = new Dictionary<string, object> { ["cmd"] = "run", ["id"] = id, ["args"] = args };
+            if (windowSeek) command["window_seek"] = true;
+            await session.SendAsync(command).ConfigureAwait(false);
             var readTask = Task.Run(() => ReadRequestAsync(session, id, request.CorrelationId, sink, execution.Token));
             session.LastRead = readTask;
             var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -312,7 +319,8 @@ public sealed partial class ServerBackend : IPreviewBackend
             if (ready is not PreviewReady info || !info.Values.TryGetValue("version", out string? version) || version != "1")
                 throw new PreviewServerNotSupportedException(CoreText.ServerReadyUnavailable);
             session.SupportsProbe = info.Values.GetValueOrDefault("probe") == "1";
-            if (PerfTrace.Enabled) PerfTrace.Write("server.ready", new { pid = session.Process.Id });
+            session.SupportsWindowSeek = info.Values.GetValueOrDefault("window_seek") == "1";
+            if (PerfTrace.Enabled) PerfTrace.Write("server.ready", new { pid = session.Process.Id, windowSeek = session.SupportsWindowSeek });
             return session;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -449,6 +457,7 @@ public sealed partial class ServerBackend : IPreviewBackend
         private IPreviewSink? _sink;
         public IPreviewSink? Sink { set => Volatile.Write(ref _sink, value); }
         public bool SupportsProbe { get; set; }
+        public bool SupportsWindowSeek { get; set; }
         public Dictionary<string, bool> HistoryRequirements { get; } = new(StringComparer.Ordinal);
         public string Path { get; }
         public Process Process { get; }

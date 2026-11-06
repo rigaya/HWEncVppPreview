@@ -504,7 +504,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         IsBusy = false;
         StatusText = AppMessages.Error;
         LogText = AppendBeforeFallbackDiagnostic(diagnostics);
-        string tail = string.Join(Environment.NewLine, diagnostics.Split('\n').TakeLast(6));
+        string[] lines = diagnostics.Split('\n');
+        string tail = string.Join(Environment.NewLine, lines.TakeLast(6));
+        // readerの後片付けで末尾が埋まっても、長いkey間隔による窓の保持上限や探索上限の理由を隠さない。
+        // 表示する診断の選択だけで、窓の不足判定や回復の可否には使わない。
+        string? windowError = lines.FirstOrDefault(line => line.Contains("preview window keyframe buffer exceeds ", StringComparison.Ordinal)
+            || line.Contains("preview window keyframe not found within ", StringComparison.Ordinal));
+        if (windowError != null && !tail.Contains(windowError, StringComparison.Ordinal))
+            tail = windowError.TrimEnd('\r') + Environment.NewLine + tail;
         ErrorText = string.IsNullOrWhiteSpace(tail) ? message : message + Environment.NewLine + tail;
     }
 
