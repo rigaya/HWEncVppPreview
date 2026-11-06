@@ -4,6 +4,50 @@ public sealed partial class PreviewController
 {
     private readonly CancellationTokenSource _auxiliaryLifetime = new();
 
+    /// <summary>両方の所有backendの初期化を登録する。表示・cache・Failed通知には流さない。</summary>
+    public Task InitializeEncoderAsync(string encoder, CancellationToken token = default)
+    {
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            Task[] initialization = new[] { _preferred, _backgroundPreferred }.Distinct().Select(InitializeAsync).ToArray();
+            return Task.WhenAll(initialization);
+        }
+
+        async Task InitializeAsync(IPreviewBackend backend)
+        {
+            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, _auxiliaryLifetime.Token);
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var running = new BackendRun();
+            lock (_sync)
+            {
+                _tasks.Add(completion.Task);
+                if (!_backendRuns.TryGetValue(backend, out var runs)) _backendRuns.Add(backend, runs = []);
+                runs.Add(running);
+            }
+            try
+            {
+                Task task = backend.InitializeEncoderAsync(encoder, cancellation.Token);
+                lock (_sync) running.Task = task;
+                await task.ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                if (PerfTrace.Enabled) PerfTrace.Write("core.initialize.failed", new { encoder, error = exception.Message });
+            }
+            finally
+            {
+                completion.TrySetResult();
+                lock (_sync)
+                {
+                    _tasks.Remove(completion.Task);
+                    if (_backendRuns.TryGetValue(backend, out var runs))
+                    { runs.Remove(running); if (runs.Count == 0) _backendRuns.Remove(backend); }
+                }
+            }
+        }
+    }
+
     /// <summary>Controllerが所有する背景backendを入力検査中だけ貸す。画像通知とcache登録は行わない。</summary>
     public async Task<InputInfo> ProbeInputAsync(InputProbe probe, string encoder, string input,
         IReadOnlyList<string> inputArgs, PreviewCapabilities capabilities, CancellationToken token = default)

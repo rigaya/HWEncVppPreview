@@ -19,6 +19,8 @@ public sealed record PreviewRunResult(int ExitCode, string StandardError, bool I
 
 public interface IPreviewBackend : IAsyncDisposable
 {
+    /// <summary>表示しない初期化。未対応backendは何もしない。実要求はその完了後に実行する。</summary>
+    Task InitializeEncoderAsync(string encoderPath, CancellationToken cancellationToken = default) => Task.CompletedTask;
     /// <summary>当該引数のprobe結果。falseだけが履歴非依存、未対応・都度起動・判定不能はnull。</summary>
     Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult<bool?>(null);

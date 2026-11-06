@@ -565,7 +565,7 @@ public sealed partial class PreviewController : IAsyncDisposable
 
     private sealed class BackendRun
     {
-        public Task<PreviewRunResult>? Task { get; set; }
+        public Task? Task { get; set; }
     }
 
     private static void TraceDispose(string stage, object? data = null)

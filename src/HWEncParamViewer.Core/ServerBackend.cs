@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace HWEncParamViewer.Core;
 
 /// <summary>常駐プロトコルを順次実行する。重なった要求は先行要求を中断してから開始する。</summary>
-public sealed class ServerBackend : IPreviewBackend
+public sealed partial class ServerBackend : IPreviewBackend
 {
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _readyTimeout;
@@ -43,6 +43,7 @@ public sealed class ServerBackend : IPreviewBackend
 
     public async Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
     {
+        await WaitForInitializationAsync(request.EncoderPath, cancellationToken).ConfigureAwait(false);
         await _runGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         Session? session = null;
         try
@@ -103,6 +104,12 @@ public sealed class ServerBackend : IPreviewBackend
 
     public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink,
         CancellationToken cancellationToken = default)
+    {
+        await WaitForInitializationAsync(request.EncoderPath, cancellationToken).ConfigureAwait(false);
+        return await RunCoreAsync(request, sink, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<PreviewRunResult> RunCoreAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken)
     {
         using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         lock (_sync)
@@ -370,6 +377,7 @@ public sealed class ServerBackend : IPreviewBackend
         {
             first = _disposeTask == null;
             _disposed = true;
+            CancelInitializationCore();
             disposal = _disposeTask ??= Task.Run(DisposeCoreAsync);
         }
         try { await disposal.ConfigureAwait(false); }

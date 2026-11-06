@@ -239,6 +239,21 @@ internal static class Program
 
     private static async Task<int> EncodeAsync(string[] args, CancellationToken cancellationToken)
     {
+        if (args.Contains("--y4m", StringComparer.Ordinal))
+        {
+            string? ready = Environment.GetEnvironmentVariable("FAKE_ENCODER_INITIALIZE_READY");
+            string? release = Environment.GetEnvironmentVariable("FAKE_ENCODER_INITIALIZE_RELEASE");
+            if (ready != null)
+            {
+                string temporary = ready + ".tmp";
+                await File.WriteAllTextAsync(temporary, Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+                File.Move(temporary, ready, overwrite: true);
+            }
+            try { if (release != null) await WaitForFileAsync(release, cancellationToken); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return -12; }
+            int initializationRc = EnvInt("FAKE_ENCODER_INITIALIZE_RC", 0);
+            if (initializationRc != 0) return initializationRc;
+        }
         // --framesを省いた要求だけを無限にし、既存の有限要求の意味は変えない。
         int? count = Array.IndexOf(args, "--frames") >= 0 ? Number(args, "--frames", 1) : null;
         bool passthrough = args.Contains("--timestamp-passthrough", StringComparer.Ordinal);

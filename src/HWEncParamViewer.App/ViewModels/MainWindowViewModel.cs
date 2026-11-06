@@ -184,7 +184,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         catch (Exception exception) { await PostAsync(() => ShowError(AppMessages.SaveSettingsFailed, exception.Message)).ConfigureAwait(false); }
     }
 
-    public string EncoderPath { get => _encoderPath; set { if (SetProperty(ref _encoderPath, value ?? "")) { EncoderDescription = ""; _metadataEncoder = ""; _helpIndex = new HelpIndex(""); _capabilities = new(); HelpSchema = null; HelpText = ""; InputChanged(); } } }
+    public string EncoderPath { get => _encoderPath; set { if (SetProperty(ref _encoderPath, value ?? "")) { CancelEncoderInitialization(); EncoderDescription = ""; _metadataEncoder = ""; _helpIndex = new HelpIndex(""); _capabilities = new(); HelpSchema = null; HelpText = ""; InputChanged(); } } }
     public string InputPath { get => _inputPath; set { if (SetProperty(ref _inputPath, value ?? "")) InputChanged(); } }
     /// <summary>例: "QSVEnc 8.35"。</summary>
     public string EncoderDescription { get => _encoderDescription; set => SetProperty(ref _encoderDescription, value); }
@@ -698,6 +698,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                 _helpIndex = new HelpIndex(help);
                 HelpSchema = new HelpSchema(help);
                 _capabilities = CommandBuilder.CapabilitiesFromHelp(_helpIndex);
+                _ = StartEncoderInitialization(encoder);
                 UpdateHelp();
             }).ConfigureAwait(false);
         }
@@ -774,6 +775,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         long started = _clock.GetTimestamp();
         Task cancellations = Task.Run(() =>
         {
+            CancelEncoderInitialization();
             TraceDisposeStage("duration_cancel.begin");
             CancelDuration();
             TraceDisposeStage("duration_cancel.end");
@@ -897,6 +899,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     }
     private sealed class ObservedBackend(IPreviewBackend inner, string mode, MainWindowViewModel owner) : IPreviewBackend
     {
+        public Task InitializeEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
+            => inner.InitializeEncoderAsync(encoderPath, cancellationToken);
         public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
             => inner.GetHistoryRequirementAsync(request, cancellationToken);
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
