@@ -270,10 +270,22 @@ public sealed class StreamingNavigationTests
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         async Task WaitForBeforeAsync()
         {
-            while (vm.BeforeImage == null || vm.IsBeforeBusy)
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+            if (vm.BeforeImage != null && !vm.IsBeforeBusy) return;
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            System.ComponentModel.PropertyChangedEventHandler changed = (_, _) =>
+            {
+                if (vm.BeforeImage != null && !vm.IsBeforeBusy) completion.TrySetResult();
+            };
+            // 空のUI操作を回し続けず、タイムアウト時にも購読を必ず解除する。
+            vm.PropertyChanged += changed;
+            try
+            {
+                if (vm.BeforeImage != null && !vm.IsBeforeBusy) completion.TrySetResult();
+                await completion.Task.WaitAsync(Safety);
+            }
+            finally { vm.PropertyChanged -= changed; }
         }
-        await WaitForBeforeAsync().WaitAsync(Safety);
+        await WaitForBeforeAsync();
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Single(background);
         // 入力枚数制限と出力レートが違っても、最初の実取得末尾より先まで小刻みに移動する。
@@ -283,7 +295,7 @@ public sealed class StreamingNavigationTests
             vm.StepFrameCommand.Execute(1);
             await vm.WaitForPreparationAsync().WaitAsync(Safety);
             await vm.WaitForIdleAsync().WaitAsync(Safety);
-            await WaitForBeforeAsync().WaitAsync(Safety);
+            await WaitForBeforeAsync();
             await vm.WaitForIdleAsync().WaitAsync(Safety);
             Assert.Null(vm.ErrorText);
             Assert.True(Math.Abs(beforeDisplay.Last() - vm.CurrentSeconds) <= 1.0 / (2 * (outputRate == "double" ? 60 : outputRate == "film" ? 24 : 30)) + 1e-6,
