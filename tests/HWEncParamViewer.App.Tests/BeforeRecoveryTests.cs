@@ -49,7 +49,28 @@ public sealed class BeforeRecoveryTests
     }
 
     [AvaloniaFact]
-    public async Task SameUnselectableTargetStopsAfterOneRecovery()
+    public async Task AfterWindowRecoveryNeverCarriesItsFilterIntoTheBeforeRequest()
+    {
+        using var capability = new CapabilityScope();
+        using var services = new Services();
+        var clock = new FakeTimeProvider();
+        var backend = new ControlledBackend(false, lateAfter: true);
+        backend.Release.TrySetResult();
+        await using var vm = new MainWindowViewModel(services, clock, backend, backend)
+        { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw", IsShowingBefore = true };
+        vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
+        await vm.InitializeAsync(false).WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Null(vm.ErrorText);
+        Assert.NotNull(vm.PreviewImage);
+        Assert.NotNull(vm.BeforeImage);
+        Assert.True(backend.AfterRequests.Count >= 2);
+        Assert.NotEmpty(backend.BeforeRequests);
+        Assert.All(backend.BeforeRequests, request => Assert.Empty(request.VppArgs));
+    }
+
+    [AvaloniaFact]
+    public async Task SameUnselectableTargetStopsAtTheWindowRecoveryLimit()
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
@@ -58,7 +79,7 @@ public sealed class BeforeRecoveryTests
         await using var vm = await Start(services, clock, backend);
         backend.Release.TrySetResult();
         await vm.WaitForIdleAsync().WaitAsync(Safety);
-        Assert.True(backend.BeforeRequests.Count == 2, string.Join(" | ", backend.BeforeRequests.Select(request => $"target={request.TargetSeconds:R}, seek={CommandBuilder.Plan(request).SeekSeconds:R}, frames={CommandBuilder.Plan(request).FrameCount}, corr={request.CorrelationId}")));
+        Assert.True(backend.BeforeRequests.Count == 1 + PreviewWindowRecovery.MaximumRetries, string.Join(" | ", backend.BeforeRequests.Select(request => $"target={request.TargetSeconds:R}, seek={CommandBuilder.Plan(request).SeekSeconds:R}, frames={CommandBuilder.Plan(request).FrameCount}, corr={request.CorrelationId}")));
         Assert.False(vm.IsBeforeBusy);
         Assert.Null(vm.BeforeImage);
     }
@@ -181,9 +202,10 @@ public sealed class BeforeRecoveryTests
         while (!predicate()) await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(timeout.Token);
     }
 
-    private sealed class ControlledBackend(bool moved, bool alwaysLate = false, bool blockRecovery = false) : IPreviewBackend
+    private sealed class ControlledBackend(bool moved, bool alwaysLate = false, bool blockRecovery = false, bool lateAfter = false) : IPreviewBackend
     {
         public ConcurrentQueue<PreviewRequest> BeforeRequests { get; } = new();
+        public ConcurrentQueue<PreviewRequest> AfterRequests { get; } = new();
         public TaskCompletionSource FirstBefore { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource RecoveryStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -198,6 +220,7 @@ public sealed class BeforeRecoveryTests
             // 逆方向先読みの極小負IDはBeforeの画像要求に数えない。
             bool before = request.CorrelationId < 0 && request.CorrelationId > long.MinValue / 2;
             int number = 0;
+            if (!before) AfterRequests.Enqueue(request);
             if (before)
             {
                 BeforeRequests.Enqueue(request);
@@ -217,9 +240,13 @@ public sealed class BeforeRecoveryTests
             var header = Y4mHeader.Parse("YUV4MPEG2 W2 H2 F10:1 C420");
             sink.OnHeader(header);
             double seek = CommandBuilder.Plan(request).SeekSeconds ?? 0;
-            double first = before && alwaysLate ? request.TargetSeconds + 0.5
+            double first = !before && lateAfter && AfterRequests.Count == 1 ? request.TargetSeconds + 0.5
+                : before && alwaysLate ? request.TargetSeconds + 0.5
                 : before && number == 1 ? (moved ? 9.5 : 10.5) : seek;
-            int frames = before ? 16 : 31;
+            // 回復で広げた物理窓も返す。固定16枚だと、正しく前へ広げるほど末尾が足りなくなる偽動作になる。
+            int frames = before ? number == 1 ? 16
+                : Math.Max(16, (int)Math.Ceiling((request.TargetSeconds - seek + request.PostMarginSeconds) * 10) + 1)
+                : request.Continuous ? 31 : Math.Max(31, (int)Math.Ceiling((request.TargetSeconds - seek + request.PostMarginSeconds) * 10) + 1);
             for (int i = 0; i < frames; ++i)
             {
                 cancellationToken.ThrowIfCancellationRequested();

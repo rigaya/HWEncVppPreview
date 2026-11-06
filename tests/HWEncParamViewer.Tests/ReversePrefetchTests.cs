@@ -57,6 +57,29 @@ public sealed class ReversePrefetchTests
         Assert.Equal(1, backend.MaxConcurrent);
     }
 
+    [Fact]
+    public async Task ShortPrefetchKeepsItsUsablePrefixWithoutPublishingOrRetryingTheBoundary()
+    {
+        var backend = new Backend { ShortPrefetch = true };
+        var cache = new FrameCache();
+        await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
+        int images = 0, failures = 0;
+        controller.FrameReady += _ => ++images;
+        controller.Failed += _ => ++failures;
+        var request = Request();
+        controller.Submit(request);
+        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        ReverseFive(controller, request);
+        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Equal(2, backend.Requests.Count);
+        var partial = cache.GetSegment(2);
+        Assert.NotNull(partial);
+        Assert.NotEmpty(partial.Frames);
+        Assert.True(partial.SafeEndSeconds < 9);
+        Assert.Equal(1, images);
+        Assert.Equal(0, failures);
+    }
+
     [Theory]
     [InlineData(2)]
     [InlineData(100)]
@@ -242,6 +265,7 @@ public sealed class ReversePrefetchTests
     {
         public List<PreviewRequest> Requests { get; } = new();
         public bool HoldPrefetch { get; init; }
+        public bool ShortPrefetch { get; init; }
         public double? HoldContinuousAtSeconds { get; init; }
         public TaskCompletionSource ContinuousHeld { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseContinuous { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -268,7 +292,8 @@ public sealed class ReversePrefetchTests
                 double seek = CommandBuilder.Plan(request).SeekSeconds ?? 0;
                 double duration = 1 / request.Fps;
                 var header = new Y4mHeader { Width = 2, Height = 2, FpsNum = (int)request.Fps, FpsDen = 1 };
-                for (int i = 0; request.Continuous || i < CommandBuilder.Plan(request).FrameCount; ++i)
+                int count = CommandBuilder.Plan(request).FrameCount - (prefetch && ShortPrefetch ? (int)(request.Fps * 1.2) : 0);
+                for (int i = 0; request.Continuous || i < count; ++i)
                 {
                     token.ThrowIfCancellationRequested();
                     ValueTask gate = sink.BeforeReadAsync(token);

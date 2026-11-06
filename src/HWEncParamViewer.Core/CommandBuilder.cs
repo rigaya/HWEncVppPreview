@@ -29,6 +29,8 @@ public sealed record PreviewRequest
     public double WarmupSeconds { get; internal init; } = PreviewWarmupPolicy.DefaultWarmupSeconds;
     /// <summary>当該引数で実受信したprobeの履歴依存判定。物理計画専用で画像内容のキーには含めない。</summary>
     internal bool? DependsOnHistory { get; init; }
+    // 限定回復の物理窓。論理要求の通知・引数・世代は変えない。
+    internal PreviewRequest? RecoveryPhysicalWindow { get; init; }
 
     /// <summary>エンコーダのexeパス。引数配列には含めない（起動側が使う）。</summary>
     public string EncoderPath { get; init; } = "";

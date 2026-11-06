@@ -329,7 +329,7 @@ public sealed partial class PreviewController
             }
             PreviewRunResult result;
             try { result = await run.ConfigureAwait(false); }
-            catch (OperationCanceledException) when (session.NeedsLegacyReplay)
+            catch (OperationCanceledException) when (session.NeedsLegacyReplay || session.WindowShortfall != null)
             { result = new(-12, "", true); }
             if (!session.IsForwardPrefetch && session.NeedsLegacyReplay && !scheduled.IsCancellationRequested && !session.ExternalToken.IsCancellationRequested)
             {
@@ -337,6 +337,14 @@ public sealed partial class PreviewController
                     false, _lastEditVersion, session.ExternalToken);
                 if (entered) { _execution.Release(); entered = false; }
                 if (replay != null) await replay.ConfigureAwait(false);
+                return;
+            }
+            if (!session.IsForwardPrefetch && session.WindowShortfall != null
+                && !scheduled.IsCancellationRequested && !session.ExternalToken.IsCancellationRequested)
+            {
+                Task? recovery = QueueWindowReplay(session);
+                if (entered) { _execution.Release(); entered = false; }
+                if (recovery != null) await recovery.ConfigureAwait(false);
                 return;
             }
             bool naturalEnd = result.ExitCode == 0 && !result.IsCancelled && !session.Cancellation.IsCancellationRequested;
@@ -349,7 +357,8 @@ public sealed partial class PreviewController
                     TryPublishDemand(session, finish: true);
                     if (!session.IsForwardPrefetch && ReferenceEquals(_stream, session) && session.LastNotifiedVersion != session.Version)
                         Notify(session.Version, session.Navigation, () => Failed?.Invoke(new(session.LatestRequest,
-                            CoreText.FrameUnavailable, result)), true);
+                            CoreText.FrameUnavailable, result)
+                            { WindowShortfall = PreviewWindowShortfall.FromSegment(session.LatestRequest, _cache.GetSegment(session.SegmentId)) }), true);
                     else if (!session.IsForwardPrefetch && ReferenceEquals(_stream, session) && _cache.GetSegment(session.SegmentId) is { } segment)
                         Notify(session.Version, session.Navigation, () => Completed?.Invoke(new(session.LatestRequest,
                             result, false, !session.Satisfied)
@@ -429,6 +438,8 @@ public sealed partial class PreviewController
             || (session.IsPaused && request.TargetSeconds < last + tolerance - 1e-8)
             || (finish && request.TargetSeconds <= last + tolerance));
 
+        // EOFでも窓が足りない目標を、最後の別フレームで成功扱いにしない。
+        if (finish && !confirmed && PreviewWindowShortfall.FromSegment(request, segment) != null) return;
         bool notifyFrame = (confirmed || finish) && selected >= 0 && session.LastNotifiedVersion != session.Version;
         if (notifyFrame)
         {
@@ -466,6 +477,7 @@ public sealed partial class PreviewController
         public bool IsPaused { get; set; }
         public bool Satisfied { get; set; }
         public bool NeedsLegacyReplay { get; set; }
+        public PreviewWindowShortfall? WindowShortfall { get; set; }
         public bool Ended { get; set; }
         public bool ClockChecked { get; set; }
         public long LastFrameBytes { get; set; }
@@ -547,7 +559,8 @@ public sealed partial class PreviewController
             lock (owner._sync)
             {
                 if (!ReferenceEquals(owner._stream, session) || session.Cancellation.IsCancellationRequested) return;
-                if (!session.ClockChecked)
+                bool firstFrame = !session.ClockChecked;
+                if (firstFrame)
                 {
                     session.ClockChecked = true;
                     var clock = ClockFor(session.PhysicalRequest, frame);
@@ -558,6 +571,15 @@ public sealed partial class PreviewController
                 if (!owner._cache.Append(session.SegmentId, frame))
                     throw new InvalidOperationException(CoreText.ReadAheadCacheFull);
                 session.LastFrameBytes = frame.Data.LongLength;
+                if (firstFrame && !session.IsForwardPrefetch && !session.Satisfied
+                    && PreviewWindowShortfall.FromSegment(session.LatestRequest, owner._cache.GetSegment(session.SegmentId)) is { MissingHead: true } shortage)
+                {
+                    // 最初の着地が目標を越えたstreamは読み続けても戻れない。末尾は未確定なので先頭不足だけを渡す。
+                    session.WindowShortfall = shortage with { MissingTail = false };
+                    session.Cancellation.Cancel();
+                    session.ReadAllowed.TrySetResult();
+                    return;
+                }
                 owner.TryPublishDemand(session);
 
             }

@@ -158,7 +158,7 @@ public sealed partial class MainWindowViewModel
         QueueBefore(afterRequest, generation);
     }
 
-    private void QueueBefore(PreviewRequest afterRequest, long generation, double? cachedTarget = null)
+    private void QueueBefore(PreviewRequest afterRequest, long generation, double? cachedTarget = null, PreviewRequest? recoveryRequest = null)
     {
         if (!IsCurrent(generation)) return;
         if (!_beforeEnabled || PerfTrace.Enabled && Environment.GetEnvironmentVariable("HWENC_VIEWER_BENCH_DISABLE_BEFORE") == "1")
@@ -169,7 +169,8 @@ public sealed partial class MainWindowViewModel
         }
         if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.before", new { generation, cachedTarget });
         // 元画像は独立した有限窓。Afterの長寿命seekや拡大した前余白を引き継がない。
-        var before = BeforeRequest(afterRequest, generation);
+        var before = recoveryRequest is null ? BeforeRequest(afterRequest, generation)
+            : recoveryRequest with { CorrelationId = -generation };
         if (cachedTarget is double target) before = RetargetInterval(before, target);
         if (_beforeRecoverySelection is { } recovery
             && (!SameBeforeInput(recovery, before) || Math.Abs(recovery.TargetSeconds - before.TargetSeconds) > 1e-8))
@@ -305,9 +306,12 @@ public sealed partial class MainWindowViewModel
         if (_beforeRecoverySelection is { } prior && SameBeforeInput(prior, selection)
             && Math.Abs(prior.TargetSeconds - selection.TargetSeconds) <= 1e-8)
         { BeforeUnavailableForDuration(); return; }
+        var shortfall = PreviewWindowShortfall.FromSegment(selection, _beforeIntervalSegment);
+        if (shortfall == null || !PreviewWindowRecovery.TryExpand(selection, shortfall, 0, out var recoveryRequest))
+        { BeforeUnavailableForDuration(); return; }
         _beforeRecoverySelection = selection;
         CancelBefore();
-        QueueBefore(selection, Volatile.Read(ref _generation));
+        QueueBefore(selection, Volatile.Read(ref _generation), recoveryRequest: recoveryRequest);
         _beforeImmediate?.TrySetResult();
     }
 

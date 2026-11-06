@@ -1,0 +1,34 @@
+﻿namespace HWEncParamViewer.Core;
+
+public sealed partial class PreviewController
+{
+    // streamの窓が目標より後ろへ着地したときは、backendの終了を待ってから同じ所有世代の有限窓へ戻す。
+    private Task? QueueWindowReplay(StreamingSession session)
+    {
+        lock (_sync)
+        {
+            if (_disposed || session.ExternalToken.IsCancellationRequested || session.Version != _version
+                || session.WindowShortfall is not { } shortage) return null;
+            var logical = session.LatestRequest;
+            if (!PreviewWindowRecovery.TryExpand(logical, shortage, 0, out var expanded))
+            {
+                Notify(session.Version, session.Navigation, () => Failed?.Invoke(new(logical, CoreText.FrameUnavailable)
+                    { WindowShortfall = shortage }), true);
+                return null;
+            }
+            _cache.RemoveSegment(session.SegmentId);
+            if (ReferenceEquals(_stream, session)) _stream = null;
+            PulseStreamState();
+            var scheduled = CancellationTokenSource.CreateLinkedTokenSource(session.ExternalToken);
+            _scheduled = scheduled;
+            if (_foregroundPending++ == 0) _foregroundIdle = NewSignal();
+            var completion = NewSignal();
+            _tasks.Add(completion.Task);
+            // 最初の拡張はここで消費済み。有限経路へ回復回数も引き継ぐ。
+            _ = TrackAsync(ScheduleAsync(expanded, session.Version, scheduled, bypassCache: true,
+                bypassDebounce: true, session.Navigation, background: false, _lastEditVersion,
+                session.ExternalToken, recoveryAttempt: 1), completion);
+            return completion.Task;
+        }
+    }
+}
