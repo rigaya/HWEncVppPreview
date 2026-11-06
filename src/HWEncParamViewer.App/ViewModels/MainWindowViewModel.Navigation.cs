@@ -38,9 +38,10 @@ public sealed partial class MainWindowViewModel
         Volatile.Write(ref _context, context);
     }
 
-    private Task QueuePreview(bool bypassCache = false, bool navigation = false, int neighborDirection = 0, bool requirePhysicalRefetch = false)
+    private Task QueuePreview(bool bypassCache = false, bool navigation = false, int neighborDirection = 0, bool requirePhysicalRefetch = false, bool bypassDebounce = false)
     {
         if (!_initialized || _suspendChanges || _disposed) return Task.CompletedTask;
+        CancelInputEdit();
         bool reverse = navigation && (neighborDirection < 0 || CurrentSeconds < _lastIntentTarget - 1e-8);
         _lastIntentTarget = CurrentSeconds;
         _latestIntentReverse = reverse;
@@ -146,7 +147,7 @@ public sealed partial class MainWindowViewModel
                     bool reuseNeighbor = requirePhysicalRefetch && !bypassCache && actualNavigation && !actualReverse
                         && neighbor is { Direction: > 0 } && request.Continuous;
                     _controller.Submit(request, bypassCache || requirePhysicalRefetch, navigation: actualNavigation,
-                        reuseActiveStream: reuseNeighbor);
+                        reuseActiveStream: reuseNeighbor, bypassDebounce: bypassDebounce);
                     Track(ReleaseContextAsync(context));
                     QueueDuration(encoder, input, inputArgs);
                 }).ConfigureAwait(false);

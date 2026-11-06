@@ -120,8 +120,8 @@ public partial class MainWindow : Window
         if (ViewModel is not { } vm || DroppedFile(e) is not { } path) return;
         bool isExe = string.Equals(Path.GetExtension(path), ".exe", StringComparison.OrdinalIgnoreCase);
         // 表示領域では拡張子で振り分ける (exe を落としても入力扱いにしない)
-        if (ReferenceEquals(sender, EncoderBox) || (ReferenceEquals(sender, PreviewArea) && isExe)) vm.EncoderPath = path;
-        else vm.InputPath = path;
+        if (ReferenceEquals(sender, EncoderBox) || (ReferenceEquals(sender, PreviewArea) && isExe)) vm.OpenEncoder(path);
+        else vm.OpenInput(path);
     }
 
     private MainWindowViewModel? ViewModel => DataContext as MainWindowViewModel;

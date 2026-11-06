@@ -257,6 +257,9 @@ public sealed class ViewModelTests
         vm.EncoderPath = "";
         Assert.Null(vm.HelpSchema);
         vm.EncoderPath = FakeEncoderPath();
+        clock.Advance(TimeSpan.FromMilliseconds(149));
+        Assert.Null(vm.HelpSchema);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
         await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
         Assert.NotSame(first, vm.HelpSchema);
         Assert.NotNull(vm.HelpSchema!.Lookup("--vpp-nlmeans"));
@@ -284,6 +287,69 @@ public sealed class ViewModelTests
             Assert.Contains("60", kfm.Parameters.Single(parameter => parameter.Name == "mode").Values);
         }
         finally { Environment.SetEnvironmentVariable("FAKE_ENCODER_HELP_FILE", previous); }
+    }
+
+    [AvaloniaFact]
+    public async Task ConfirmedOperationsRunImmediatelyWhileTextEditingKeepsDebounce()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        int starts = 0;
+        await using var vm = Create(services, clock, new OneShotBackend(_ => Interlocked.Increment(ref starts)));
+        // 初回と入力交換は偽時計を進めずに比較まで終わる。
+        await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.NotNull(vm.PreviewImage);
+        vm.OpenInput("second input.ts");
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.Null(vm.ErrorText);
+        var line = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.1" };
+        vm.FilterLines.Add(line);
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        int beforeText = starts;
+        line.Text = "--vpp-nlmeans sigma=0.2";
+        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        Assert.Equal(beforeText, starts);
+        clock.Advance(TimeSpan.FromMilliseconds(149));
+        Assert.Equal(beforeText, starts);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.True(starts > beforeText);
+        line.IsEnabled = false;
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        vm.FilterLines.Remove(line);
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        vm.RefreshCommand.Execute(null);
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.Null(vm.ErrorText);
+    }
+
+    [AvaloniaFact]
+    public async Task TypingInputPathWaitsBeforeStartingTheProbeAndUsesOnlyTheLatestText()
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        var commands = new List<string[]>();
+        var probe = new InputProbe(clock, configureStartInfo: info => commands.Add(info.ArgumentList.ToArray()));
+        await using var vm = new MainWindowViewModel(services, clock, probe: probe)
+        {
+            EncoderPath = FakeEncoderPath(), InputPath = "initial.ts",
+            InputArgsText = "--avhw --fake-duration 00:00:10.00"
+        };
+        await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        int before = commands.Count;
+        vm.InputPath = "typing-1.ts";
+        vm.InputPath = "typing-2.ts";
+        Assert.Equal(before, commands.Count);
+        clock.Advance(TimeSpan.FromMilliseconds(149));
+        Assert.Equal(before, commands.Count);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.True(commands.Count > before);
+        Assert.DoesNotContain(commands.Skip(before), command => command.Contains("typing-1.ts"));
+        Assert.Contains(commands.Skip(before), command => command.Contains("typing-2.ts"));
+        Assert.Null(vm.ErrorText);
     }
 
     private static MainWindowViewModel Create(TestServices services, FakeTimeProvider clock, IPreviewBackend? backend = null) =>

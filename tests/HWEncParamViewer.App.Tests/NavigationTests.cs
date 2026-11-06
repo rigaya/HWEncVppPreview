@@ -197,6 +197,8 @@ public sealed class NavigationTests(ITestOutputHelper output)
             EncoderPath = FakeEncoderPath(), InputPath = "navigation input.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00",
         };
+        var line = new FilterLineViewModel();
+        vm.FilterLines.Add(line);
         await InitializeAsync(vm, clock, backend);
         string initial = ImageHash(vm);
         var published = new List<string>();
@@ -207,7 +209,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
         converter.DelayEnabled = true;
         vm.StepFrameCommand.Execute(1);
         await UiBarrierAsync();
-        vm.FilterLines.Add(new() { Text = "--vpp-unsharp" });
+        line.Text = "--vpp-unsharp";
         await vm.WaitForPreparationAsync().WaitAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
         await backend.NextStartAsync();

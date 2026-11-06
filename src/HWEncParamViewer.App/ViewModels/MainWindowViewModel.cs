@@ -92,8 +92,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _controller.Completed += OnCompleted;
         _controller.Failed += OnFailed;
         FilterLines.CollectionChanged += LinesChanged;
-        BrowseEncoderCommand = new RelayCommand(() => RunCommand(async () => { string? path = await _services.BrowseEncoderAsync(); if (path != null) EncoderPath = path; }));
-        BrowseInputCommand = new RelayCommand(() => RunCommand(async () => { string? path = await _services.BrowseInputAsync(); if (path != null) InputPath = path; }));
+        BrowseEncoderCommand = new RelayCommand(() => RunCommand(async () => { string? path = await _services.BrowseEncoderAsync(); if (path != null) OpenEncoder(path); }));
+        BrowseInputCommand = new RelayCommand(() => RunCommand(async () => { string? path = await _services.BrowseInputAsync(); if (path != null) OpenInput(path); }));
         AddFilterLineCommand = new RelayCommand(() => { var line = new FilterLineViewModel(); FilterLines.Add(line); SelectedFilterLine = line; });
         AddFilterCommand = new RelayCommand(parameter =>
         {
@@ -108,7 +108,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         GoToStartCommand = new RelayCommand(() => SeekTo(0));
         GoToEndCommand = new RelayCommand(() => { if (HasDuration) SeekTo(DurationSeconds); });
         CommitTimeTextCommand = new RelayCommand(CommitTime);
-        RefreshCommand = new RelayCommand(() => { _cache.Clear(); ClearInterval(); ClearBeforeInterval(); _ = QueuePreview(bypassCache: true); });
+        RefreshCommand = new RelayCommand(() => { _cache.Clear(); ClearInterval(); ClearBeforeInterval(); _ = QueuePreview(bypassCache: true, bypassDebounce: true); });
         SaveFiltersCommand = new RelayCommand(() => RunCommand(SaveFiltersAsync));
         LoadFiltersCommand = new RelayCommand(() => RunCommand(LoadFiltersAsync));
         CopyCommandLineCommand = new RelayCommand(() => RunCommand(() => _services.CopyTextAsync(EnabledOptionsText())));
@@ -147,11 +147,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             OnPropertyChanged(nameof(CurrentSeconds));
         }
         _initialized = true;
-        await QueuePreview();
+        await QueuePreview(bypassDebounce: true);
     }
 
-    /// <summary>現在の要求について入力検査とSubmit登録が完了するまで待つ。テストで偽時計を進める前の同期点にもなる。</summary>
-    public Task WaitForPreparationAsync() => _preparation;
+    /// <summary>通常要求の入力検査とSubmit登録を待つ。パス文字編集中は待機タイマー登録までを同期点とし、時計を進めた後の完了はWaitForIdleAsyncで待つ。</summary>
+    public Task WaitForPreparationAsync() => _inputEditCancellation != null ? Task.CompletedTask : _preparation;
 
     /// <summary>入力検査、エンコード、変換、UIへPostした反映をすべて待つ。</summary>
     public async Task WaitForIdleAsync()
@@ -283,15 +283,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         SeekTo(seconds);
     }
 
-    private void InputChanged()
+    private void InputChanged(bool bypassDebounce = false)
     {
-        CancelDuration();
-        _inputInfo = null;
-        HasDuration = false;
-        DurationSeconds = 0;
-        DurationText = "";
-        ClearInterval();
-        _ = QueuePreview();
+        bool suspended = _suspendChanges;
+        _suspendChanges = true;
+        try
+        {
+            CancelDuration();
+            _inputInfo = null;
+            HasDuration = false;
+            DurationSeconds = 0;
+            DurationText = "";
+            ClearInterval();
+        }
+        finally { _suspendChanges = suspended; }
+        if (!_initialized || _suspendChanges || _disposed) return;
+        lock (_taskLock) _preparationCancellation?.Cancel();
+        BeginIntent(navigation: false);
+        if (bypassDebounce) { CancelInputEdit(); _ = QueuePreview(bypassDebounce: true); }
+        else ScheduleInputEdit();
     }
     private void LinesChanged(object? sender, NotifyCollectionChangedEventArgs args)
     {
@@ -300,15 +310,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         foreach (var line in FilterLines.Where(line => !_observedLines.Contains(line)))
         { line.HelpSchema = HelpSchema; line.PropertyChanged += LineChanged; _observedLines.Add(line); }
         UpdateCatalogUsage();
-        FiltersChanged();
+        FiltersChanged(bypassDebounce: true);
     }
     private void LineChanged(object? sender, PropertyChangedEventArgs args)
     {
         if (args.PropertyName is nameof(FilterLineViewModel.Text) or nameof(FilterLineViewModel.IsEnabled))
-        { UpdateCatalogUsage(); FiltersChanged(); }
+        { UpdateCatalogUsage(); FiltersChanged(bypassDebounce: args.PropertyName == nameof(FilterLineViewModel.IsEnabled)); }
         if (ReferenceEquals(sender, SelectedFilterLine)) UpdateHelp();
     }
-    private void FiltersChanged() { ClearInterval(); _ = QueuePreview(); }
+    private void FiltersChanged(bool bypassDebounce = false) { ClearInterval(); _ = QueuePreview(bypassDebounce: bypassDebounce); }
     private void UpdateHelp()
     {
         if (_initialized || _helpIndex.OptionNames.Count > 0) HelpText = _helpIndex.Lookup(SelectedFilterLine?.OptionName ?? "");
@@ -659,7 +669,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             SelectedFilterLine = FilterLines.FirstOrDefault();
         }
         finally { _suspendChanges = false; }
-        _ = QueuePreview();
+        _ = QueuePreview(bypassDebounce: true);
     }
     private void RunCommand(Func<Task> command)
     {

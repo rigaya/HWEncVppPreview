@@ -126,7 +126,12 @@ public sealed class StreamNeighborReuseViewModelTests
                     if (!request.Continuous && index >= times.Count) return new(0, "");
                 }
             }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { return new(-12, "", true); }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // WaitAsyncの取消が先に再開するとregistrationを破棄できるため、観測はcatchでも確定する。
+                if (call == 1) FirstCancelled.TrySetResult();
+                return new(-12, "", true);
+            }
         }
         public ValueTask AbortAsync() => ValueTask.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
