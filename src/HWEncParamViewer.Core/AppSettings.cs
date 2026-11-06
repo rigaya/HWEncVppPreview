@@ -18,6 +18,7 @@ public sealed record AppSettings
     public double CurrentSeconds { get; init; }
     public bool IsTextListMode { get; init; }
     public string Language { get; init; } = "auto";
+    public double HdrReferenceWhiteNits { get; init; } = 203;
 
     public static string DefaultPath => Path.Combine(OperatingSystem.IsWindows()
         ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
@@ -59,6 +60,8 @@ public sealed record AppSettings
     private static AppSettings Normalize(AppSettings settings) => settings with
     {
         Language = UiLanguage.Normalize(settings.Language),
+        HdrReferenceWhiteNits = double.IsFinite(settings.HdrReferenceWhiteNits)
+            ? Math.Clamp(settings.HdrReferenceWhiteNits, 50, 1000) : 203,
         EncoderPath = settings.EncoderPath ?? "",
         InputPath = settings.InputPath ?? "",
         InputArgsText = settings.InputArgsText ?? "--avhw",

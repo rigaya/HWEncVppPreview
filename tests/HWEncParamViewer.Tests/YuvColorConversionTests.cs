@@ -152,13 +152,15 @@ public sealed class YuvColorConversionTests
     [InlineData("HLG", true)]
     [InlineData("bt709", false)]
     [InlineData("unknown", false)]
-    public void HdrTransferIsReportedWithoutApplyingAToneMap(string transfer, bool expected)
+    public void HdrTransferSelectsToneMappingOnlyForPqAndHlg(string transfer, bool expected)
     {
         var header = Y4mHeader.Parse("YUV4MPEG2 W2 H2 C444 XTRANSFER=" + transfer);
         Assert.Equal(expected, YuvToBgra.GetColorInfo(header).IsHdr);
         var plain = Y4mHeader.Parse("YUV4MPEG2 W2 H2 C444");
-        Assert.Equal(YuvToBgra.Convert(Frame(plain, (_, _) => 100, (_, _) => 150, (_, _) => 180)),
-            YuvToBgra.Convert(Frame(header, (_, _) => 100, (_, _) => 150, (_, _) => 180)));
+        byte[] legacy = YuvToBgra.Convert(Frame(plain, (_, _) => 100, (_, _) => 150, (_, _) => 180));
+        byte[] converted = YuvToBgra.Convert(Frame(header, (_, _) => 100, (_, _) => 150, (_, _) => 180));
+        if (expected) Assert.NotEqual(legacy, converted);
+        else Assert.Equal(legacy, converted);
     }
 
     private static Y4mHeader Header(int width, int height, Y4mChroma chroma, int depth, string matrix, string range, string location) => new()

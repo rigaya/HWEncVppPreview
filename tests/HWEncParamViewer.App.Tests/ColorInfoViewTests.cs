@@ -36,11 +36,11 @@ public sealed class ColorInfoViewTests
             Assert.NotNull(vm.PreviewImage);
             Assert.Contains("BT.2020", vm.ColorInfoText);
             Assert.Contains("full", vm.ColorInfoText);
-            Assert.Contains("HDR (SDRとして表示)", vm.ColorInfoText);
+            Assert.Contains("PQ→SDR 203nit", vm.ColorInfoText);
             Assert.Equal(vm.ColorInfoText, window.FindControl<TextBlock>("ColorInfoLabel")!.Text);
             UiLanguage.Set("en");
             await Flush();
-            Assert.Contains("HDR (shown as SDR)", vm.ColorInfoText);
+            Assert.Contains("PQ→SDR 203nit", vm.ColorInfoText);
             string after = vm.ColorInfoText;
 
             vm.IsShowingBefore = true;

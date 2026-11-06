@@ -468,6 +468,10 @@
                    Text="{Binding ColorInfoText}" ToolTip.Tip="{Binding ColorInfoText}"
                    TextTrimming="CharacterEllipsis" />
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+          <TextBlock Classes="subtle" VerticalAlignment="Center" Text="{Binding Text.HdrReferenceWhite, Source={x:Static loc:Localizer.Instance}}" />
+          <NumericUpDown x:Name="HdrReferenceWhiteEditor" Minimum="50" Maximum="1000" Increment="10" FormatString="0"
+                         Width="136" Height="26" MinHeight="0" Padding="4,0" Value="{Binding HdrReferenceWhiteNits}"
+                         ToolTip.Tip="{Binding Text.HdrReferenceWhiteHint, Source={x:Static loc:Localizer.Instance}}" />
           <ComboBox x:Name="LanguageSelector" Classes="small" MinWidth="90"
                     SelectedIndex="{Binding Language, Converter={x:Static loc:LanguageIndexConverter.Instance}}"
                     ToolTip.Tip="{Binding Text.Language, Source={x:Static loc:Localizer.Instance}}">

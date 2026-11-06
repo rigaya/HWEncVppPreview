@@ -230,14 +230,21 @@ public sealed partial class MainWindowViewModel
         lock (_taskLock)
         {
             if (_disposed) return;
-            long? replacedTraceId = PerfTrace.Enabled ? (image.Before ? _pendingBeforeImage : _pendingAfterImage)?.TraceId : null;
-            if (image.Before) _pendingBeforeImage = image;
+            ImageWork? pending = image.DisplayOnly ? (image.Before ? _pendingBeforeDisplayRefresh : _pendingAfterDisplayRefresh)
+                : image.Before ? _pendingBeforeImage : _pendingAfterImage;
+            long? replacedTraceId = PerfTrace.Enabled ? pending?.TraceId : null;
+            if (image.DisplayOnly)
+            {
+                if (image.Before) _pendingBeforeDisplayRefresh = image; else _pendingAfterDisplayRefresh = image;
+            }
+            else if (image.Before) _pendingBeforeImage = image;
             else if (_pendingAfterImage == null || image.Generation > _pendingAfterImage.Generation
                 || image.Generation == _pendingAfterImage.Generation && image.DisplayRevision >= _pendingAfterImage.DisplayRevision)
                 _pendingAfterImage = image;
             if (PerfTrace.Enabled) PerfTrace.Write("vm.image.enqueue", new { image.TraceId, image.Generation,
                 image.Before, image.Frame.Xts, replacedTraceId,
-                accepted = ReferenceEquals(image.Before ? _pendingBeforeImage : _pendingAfterImage, image) });
+                accepted = ReferenceEquals(image.DisplayOnly ? (image.Before ? _pendingBeforeDisplayRefresh : _pendingAfterDisplayRefresh)
+                    : image.Before ? _pendingBeforeImage : _pendingAfterImage, image) });
             if (!_conversionActive)
             {
                 _conversionActive = true;
@@ -258,17 +265,28 @@ public sealed partial class MainWindowViewModel
                 ImageWork? image;
                 lock (_taskLock)
                 {
-                    image = _pendingAfterImage ?? _pendingBeforeImage;
+                    // 設定変更の表示2枚だけを先に更新し、連続AfterでBeforeの再描画を待たせ続けない。
+                    image = _pendingAfterDisplayRefresh ?? _pendingBeforeDisplayRefresh ?? _pendingAfterImage ?? _pendingBeforeImage;
                     if (image == null) { _conversionActive = false; break; }
-                    if (image.Before) _pendingBeforeImage = null;
+                    if (image.DisplayOnly)
+                    { if (image.Before) _pendingBeforeDisplayRefresh = null; else _pendingAfterDisplayRefresh = null; }
+                    else if (image.Before) _pendingBeforeImage = null;
                     else _pendingAfterImage = null;
                 }
                 try
                 {
                     if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.start", new { image.TraceId, image.Generation, image.Before, image.Frame.Xts });
-                    byte[] data = await _imageConverter(image.Frame, _lifetime.Token).ConfigureAwait(false);
+                    HdrDisplaySettings settings;
+                    long displaySettingsRevision;
+                    lock (_taskLock) { settings = _hdrDisplaySettings; displaySettingsRevision = _hdrDisplaySettingsRevision; }
+                    byte[] data = await _imageConverter(image.Frame, settings, _lifetime.Token).ConfigureAwait(false);
                     if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.end", new { image.TraceId, image.Generation, image.Before, image.Frame.Xts, bytes = data.Length });
-                    await PostAsync(() => ApplyImage(image, data)).ConfigureAwait(false);
+                    await PostAsync(() =>
+                    {
+                        if (displaySettingsRevision != Volatile.Read(ref _hdrDisplaySettingsRevision) && YuvToBgra.GetColorInfo(image.Frame.Header).IsHdr)
+                            RequeueForDisplaySettings(image);
+                        else ApplyImage(image, data);
+                    }).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
                 catch (Exception exception)
@@ -276,6 +294,11 @@ public sealed partial class MainWindowViewModel
                     await PostAsync(() =>
                     {
                         if (_disposed || image.EditEpoch != Volatile.Read(ref _editEpoch)) return;
+                        if (image.DisplayOnly)
+                        {
+                            if (PerfTrace.Enabled) PerfTrace.Write("vm.display_refresh.failed", new { exception.Message });
+                            return;
+                        }
                         if (image.RevisionContext is { } context && image.DisplayRevision != Volatile.Read(ref context.DisplayRevision))
                         {
                             if (image.Before && IsCurrent(image.Generation) && image.BeforeVersion == _beforeImageGeneration) IsBeforeBusy = false;
@@ -300,6 +323,13 @@ public sealed partial class MainWindowViewModel
     private void ApplyImage(ImageWork image, byte[] data)
     {
         if (_disposed || image.EditEpoch != Volatile.Read(ref _editEpoch)) return;
+        if (image.DisplayOnly)
+        {
+            if (!ReferenceEquals(image.Frame, image.Before ? _beforeDisplayedFrame : _displayedFrame)) return;
+            if (image.Before && BeforeImage != null) BeforeImage = CreateBitmap(image.Frame, data, image.TraceId);
+            else if (!image.Before && PreviewImage != null) PreviewImage = CreateBitmap(image.Frame, data, image.TraceId);
+            return;
+        }
         if (image.RevisionContext is { } context && image.DisplayRevision != Volatile.Read(ref context.DisplayRevision))
         {
             if (image.Before && IsCurrent(image.Generation) && image.BeforeVersion == _beforeImageGeneration) IsBeforeBusy = false;
@@ -435,5 +465,5 @@ public sealed partial class MainWindowViewModel
     private sealed record ImageWork(Y4mFrame Frame, long Generation, long EditEpoch,
         bool Before = false, long BeforeVersion = 0, bool FinishBeforeBusy = false,
         double? DisplaySeconds = null, long? SegmentId = null, bool TrustedAbsolute = false,
-        RequestContext? RevisionContext = null, long DisplayRevision = 0, long TraceId = 0);
+        RequestContext? RevisionContext = null, long DisplayRevision = 0, long TraceId = 0, bool DisplayOnly = false);
 }

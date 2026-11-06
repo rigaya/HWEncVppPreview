@@ -36,7 +36,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private readonly bool _borrowInputProbe;
     private readonly FrameCache _cache;
     private readonly PreviewController _controller;
-    private readonly Func<Y4mFrame, CancellationToken, Task<byte[]>> _imageConverter;
+    private readonly Func<Y4mFrame, HdrDisplaySettings, CancellationToken, Task<byte[]>> _imageConverter;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly object _taskLock = new();
     private readonly HashSet<Task> _tasks = new();
@@ -66,13 +66,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter,
         IPreviewBackend? backgroundPreferred = null, IPreviewBackend? backgroundFallback = null, bool beforeEnabled = true)
     {
-        _imageConverter = converter ?? ((frame, token) => Task.Run(() =>
+        _imageConverter = converter != null ? (frame, settings, token) => converter(frame, token) : (frame, settings, token) => Task.Run(() =>
         {
             // 外側のTask.Run待ちと、変換内の並列処理を含む待ちを計測時だけ区別する。
             if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.worker.start", new { frame.Xts });
-            try { return YuvToBgra.Convert(frame); }
+            try { return YuvToBgra.Convert(frame, settings); }
             finally { if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.worker.end", new { frame.Xts }); }
-        }, token));
+        }, token);
         _beforeEnabled = beforeEnabled;
         _services = services ?? new AvaloniaViewModelServices();
         _clock = timeProvider ?? TimeProvider.System;
@@ -136,6 +136,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             var settings = AppSettings.Load(_services.SettingsPath);
             _suspendChanges = true;
             Language = settings.Language;
+            HdrReferenceWhiteNits = settings.HdrReferenceWhiteNits;
             EncoderPath = settings.EncoderPath;
             InputPath = settings.InputPath;
             InputArgsText = settings.InputArgsText;
@@ -178,7 +179,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             EncoderPath = EncoderPath, InputPath = InputPath, InputArgsText = InputArgsText,
             FilterLines = FilterLines.Select(line => new FilterSetting(line.Text, line.IsEnabled)).ToArray(),
-            WindowWidth = width, WindowHeight = height, CurrentSeconds = CurrentSeconds, IsTextListMode = IsTextListMode, Language = Language,
+            WindowWidth = width, WindowHeight = height, CurrentSeconds = CurrentSeconds, IsTextListMode = IsTextListMode, Language = Language, HdrReferenceWhiteNits = HdrReferenceWhiteNits,
         };
         try { await Task.Run(() => settings.Save(_services.SettingsPath)).ConfigureAwait(false); }
         catch (Exception exception) { await PostAsync(() => ShowError(AppMessages.SaveSettingsFailed, exception.Message)).ConfigureAwait(false); }
@@ -832,6 +833,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             PreviewImage = null;
             BeforeImage = null;
             IsBeforeBusy = false;
+            lock (_taskLock) { _pendingAfterDisplayRefresh = null; _pendingBeforeDisplayRefresh = null; }
             _displayedFrame = null;
             _beforeDisplayedFrame = null;
             RefreshColorInfo();

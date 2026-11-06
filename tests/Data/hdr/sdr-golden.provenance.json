@@ -1,0 +1,10 @@
+﻿{
+  "description": "変更前のSDR変換を固定する。入力はHdrTestFrames.Createの決定的な列。",
+  "sourceHead": "c84ff76bb67f85ec361afb4af3a72ef6dbc8cf4f",
+  "sourceFile": "src/HWEncParamViewer.Core/YuvToBgra.cs",
+  "sourceSha256": "1cf50b7b4f01da271219c24d7129d03307a921353ad1f9dd5cd704b8d9a5f069",
+  "baselineAssembly": "artifacts/viewer_nav_perf/stage23/candidate_app_v3/bin/HWEncParamViewer.Core/release/HWEncParamViewer.Core.dll",
+  "baselineAssemblySha256": "9e05bc30d1ff1d37f368a42f4edbe74866ce04be532a13f5c3352956b750cc2e",
+  "goldenSha256": "c0b9ce9f969d95014f4eadc3e1beab31d981fb598d2e8eb68f42607ff60a95dc",
+  "formatCount": 360
+}

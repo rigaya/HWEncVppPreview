@@ -7,7 +7,7 @@ namespace HWEncParamViewer.Core;
 public sealed record YuvColorInfo(string Matrix, string Range, string ChromaLocation, bool IsHdr);
 
 /// <summary>y4mの色情報と色差の位置を使ってBGRA8へ変換する。</summary>
-public static class YuvToBgra
+public static partial class YuvToBgra
 {
     /// <summary>未指定・未対応の行列では従来の解像度による推定、範囲ではlimitedを使う。</summary>
     public static YuvColorInfo GetColorInfo(Y4mHeader header)
@@ -35,9 +35,9 @@ public static class YuvToBgra
     /// <summary>幅×高さ×4バイトのBGRAを返す。入力画像は変更せず、アルファは255にする。</summary>
     /// <remarks>
     /// 8bit超は下位詰めのリトルエンディアン。色差はleft/center/topleftの位置から線形補間する。
-    /// 範囲外の値はRGB変換後に飽和させる。HDRの伝達特性と色域そのものの変換は行わない。
+    /// 範囲外の値はRGB変換後に飽和させる。PQ/HLGだけを線形化し、基準白と高輝度の肩を使ってSDRへ変換する。
     /// </remarks>
-    public static byte[] Convert(Y4mFrame frame)
+    public static byte[] Convert(Y4mFrame frame, HdrDisplaySettings? settings = null)
     {
         ArgumentNullException.ThrowIfNull(frame);
         ArgumentNullException.ThrowIfNull(frame.Header);
@@ -59,6 +59,7 @@ public static class YuvToBgra
             throw new ArgumentException(CoreText.PlaneDataLengthInvalid(expectedBytes, frame.Data.LongLength), nameof(frame));
 
         var color = GetColorInfo(header);
+        if (color.IsHdr) return ConvertHdr(frame, settings ?? new HdrDisplaySettings());
         (double kr, double kb) = color.Matrix switch
         {
             "BT.709" => (0.2126, 0.0722), "BT.2020 ncl" => (0.2627, 0.0593),

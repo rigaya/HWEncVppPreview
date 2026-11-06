@@ -15,7 +15,7 @@ public sealed class AppSettingsTests
             {
                 EncoderPath = @"C:\エンコーダ\QSVEncC64.exe", InputPath = @"X:\入力\長い.ts",
                 InputArgsText = "--avsw", FilterLines = new[] { new FilterSetting("--vpp-nlmeans sigma=0.05"), new FilterSetting("--vpp-deband", false) },
-                WindowWidth = 1280, WindowHeight = 720, CurrentSeconds = 123.45,
+                WindowWidth = 1280, WindowHeight = 720, CurrentSeconds = 123.45, HdrReferenceWhiteNits = 400,
             };
             expected.Save(path);
             var actual = AppSettings.Load(path);
@@ -26,6 +26,7 @@ public sealed class AppSettingsTests
             Assert.Equal(1280, actual.WindowWidth);
             Assert.Equal(720, actual.WindowHeight);
             Assert.Equal(123.45, actual.CurrentSeconds);
+            Assert.Equal(400, actual.HdrReferenceWhiteNits);
             Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(path)!, "*.tmp"));
             (expected with { InputPath = "other.mp4" }).Save(path);
             Assert.Equal("other.mp4", AppSettings.Load(path).InputPath);
@@ -40,6 +41,7 @@ public sealed class AppSettingsTests
         try
         {
             Assert.Equal(1440, AppSettings.Load(path).WindowWidth);
+            Assert.Equal(203, AppSettings.Load(path).HdrReferenceWhiteNits);
             File.WriteAllText(path, "{invalid");
             Assert.Equal("--avhw", AppSettings.Load(path).InputArgsText);
             File.WriteAllText(path, "null");
@@ -53,6 +55,11 @@ public sealed class AppSettingsTests
             Assert.Equal(960, actual.WindowWidth);
             Assert.Equal(900, actual.WindowHeight);
             Assert.Equal(0, actual.CurrentSeconds);
+            Assert.Equal(203, actual.HdrReferenceWhiteNits);
+            File.WriteAllText(path, "{\"HdrReferenceWhiteNits\":0}");
+            Assert.Equal(50, AppSettings.Load(path).HdrReferenceWhiteNits);
+            File.WriteAllText(path, "{\"HdrReferenceWhiteNits\":2000}");
+            Assert.Equal(1000, AppSettings.Load(path).HdrReferenceWhiteNits);
         }
         finally { File.Delete(path); }
     }

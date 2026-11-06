@@ -71,6 +71,8 @@ public sealed class UiText
     public string Uncategorized => T("分類なし", "Uncategorized");
     public string DefaultValue => T("デフォルト", "Default");
     public string DefaultSuffix => T(" (デフォルト)", " (default)");
+    public string HdrReferenceWhite => T("HDR基準白(nit)", "HDR reference white (nit)");
+    public string HdrReferenceWhiteHint => T("HDRの白をSDRへ合わせる基準。大きくすると暗くなり、高輝度の階調が見えます。", "Reference luminance for HDR-to-SDR display. Raise it to darken the image and inspect highlights.");
     public string Language => T("表示言語", "Language");
     // 選択欄の「自動」だけは今の言語で出す (日本語・English は常にその言語の名前)
     public string LanguageAuto => T("自動", "Auto");
