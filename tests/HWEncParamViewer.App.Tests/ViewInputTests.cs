@@ -15,11 +15,14 @@ namespace HWEncParamViewer.App.Tests;
 /// <summary>View のマウス・ドロップ操作 (設計書 19.3、19.4)。ViewModel は初期化せず、プロパティの変化だけを見る。</summary>
 public sealed class ViewInputTests
 {
-    [AvaloniaFact]
-    public async Task WheelStepsFramesAndCtrlWheelZooms()
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WheelStepsFramesAndCtrlWheelZooms(bool useSar)
     {
         using var services = new TestServices();
         await using var vm = new MainWindowViewModel(services);
+        vm.UseSar = useSar;
         var window = new MainWindow { DataContext = vm, Width = 1100, Height = 700 };
         window.Show();
         try
@@ -47,6 +50,10 @@ public sealed class ViewInputTests
             window.MouseWheel(center, new Vector(0, 1), RawInputModifiers.Control);
             Assert.False(viewer.Zoom.IsFit);
             Assert.Equal(afterNext, vm.CurrentSeconds, 9);
+            Assert.Equal(useSar, vm.UseSar);
+            window.FindControl<Button>("ZoomFitButton")!.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            Assert.True(viewer.Zoom.IsFit);
+            Assert.Equal(useSar, vm.UseSar);
         }
         finally { window.Close(); }
     }

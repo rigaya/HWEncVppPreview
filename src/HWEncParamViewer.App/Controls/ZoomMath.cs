@@ -23,6 +23,24 @@ public readonly record struct ZoomState(bool IsFit, double Scale, Point Center)
 /// </summary>
 public static class ZoomMath
 {
+    /// <summary>保存画素を縦横それぞれ整数倍で描く手動表示だけ、画素を補間せずに表示する。</summary>
+    public static bool UseNearest(bool isFit, Size drawnDipSize, PixelSize pixels, double pixelsPerDip = 1)
+    {
+        if (isFit || pixels.Width <= 0 || pixels.Height <= 0) return false;
+        double x = drawnDipSize.Width * PixelsPerDip(pixelsPerDip) / pixels.Width;
+        double y = drawnDipSize.Height * PixelsPerDip(pixelsPerDip) / pixels.Height;
+        const double tolerance = 1e-6;
+        // SARが異なっても、両軸が整数なら各保存画素の表示幅にムラが出ない。
+        return double.IsFinite(x) && double.IsFinite(y) && x >= 1 - tolerance && y >= 1 - tolerance
+            && Math.Abs(x - Math.Round(x)) <= tolerance
+            && Math.Abs(y - Math.Round(y)) <= tolerance;
+    }
+
+    /// <summary>表示幅の変更後も、中央にある画像上の点を保つ。</summary>
+    public static ZoomState ResizeContentWidth(ZoomState state, double oldWidth, double newWidth)
+        => !state.IsFit && oldWidth > 0 && newWidth > 0 && double.IsFinite(oldWidth) && double.IsFinite(newWidth)
+            ? state with { Center = new Point(state.Center.X * newWidth / oldWidth, state.Center.Y) } : state;
+
     public const double MinScale = 0.25;
     public const double MaxScale = 32.0;
     public const double WheelStep = 1.25;

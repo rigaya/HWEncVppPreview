@@ -6,6 +6,52 @@ namespace HWEncParamViewer.App.Tests;
 public sealed class ZoomMathTests
 {
     [Theory]
+    [InlineData(1, 1, false, true)]
+    [InlineData(2, 1, false, true)]
+    [InlineData(1.25, 1, false, false)]
+    [InlineData(2, 1, true, false)]
+    [InlineData(1, 1.3333333333333333, false, false)]
+    [InlineData(3, 1.3333333333333333, false, true)]
+    public void InterpolationUsesStoredPixelsAtEveryDpi(double scale, double sar, bool fit, bool nearest)
+    {
+        foreach (double ppd in new[] { 1.0, 1.5 })
+        {
+            var drawn = new Size(1440 * sar * scale / ppd, 1080 * scale / ppd);
+            Assert.Equal(nearest, ZoomMath.UseNearest(fit, drawn, new PixelSize(1440, 1080), ppd));
+        }
+    }
+
+    [Fact]
+    public void InterpolationHasSmallToleranceAndChecksEachBitmap()
+    {
+        Assert.True(ZoomMath.UseNearest(false, new Size(1440.00001, 1080.00001), new PixelSize(1440, 1080)));
+        Assert.False(ZoomMath.UseNearest(false, new Size(1441, 1080), new PixelSize(1440, 1080)));
+        Assert.True(ZoomMath.UseNearest(false, new Size(1920, 1080), new PixelSize(960, 540)));
+        Assert.False(ZoomMath.UseNearest(false, new Size(1920, 1080), new PixelSize(1440, 1080)));
+        Assert.False(ZoomMath.UseNearest(false, new Size(double.NaN, 1080), new PixelSize(1440, 1080)));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(1.5)]
+    public void WidthChangePreservesNormalizedCenterAndFit(double ppd)
+    {
+        var state = new ZoomState(false, 2, new Point(1200, 400));
+        var changed = ZoomMath.ResizeContentWidth(state, 1920, 1440);
+        Assert.Equal(900, changed.Center.X);
+        Assert.Equal(400, changed.Center.Y);
+        foreach (var viewport in new[] { new Size(800, 600), new Size(399, 600) })
+        {
+            var rect = ZoomMath.ContentRect(changed, viewport, new Size(1440, 1080), ppd);
+            Assert.Equal(viewport.Width / 2, rect.X + changed.Center.X * changed.Scale / ppd, 8);
+            Assert.Equal(viewport.Height / 2, rect.Y + changed.Center.Y * changed.Scale / ppd, 8);
+        }
+        Assert.Equal(state.Scale, changed.Scale);
+        Assert.Equal(state, ZoomMath.ResizeContentWidth(changed, 1440, 1920));
+        Assert.Equal(ZoomState.Fit, ZoomMath.ResizeContentWidth(ZoomState.Fit, 1920, 1440));
+    }
+
+    [Theory]
     [InlineData(800, 600, 1920, 1080, 0.4166666666666667, 0, 75, 800, 450)]
     [InlineData(800, 600, 600, 1200, 0.5, 250, 0, 300, 600)]
     [InlineData(1200, 800, 600, 400, 2, 0, 0, 1200, 800)]

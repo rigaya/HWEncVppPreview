@@ -143,31 +143,24 @@ public sealed class ZoomPanViewer : Control
         if (Background != null) context.FillRectangle(Background, new Rect(viewport));
         double ppd = PixelsPerDip;
         var rect = ZoomMath.SnapToDevicePixels(ZoomMath.ContentRect(Zoom, viewport, ContentSize, ppd), ppd);
-        double scale = ZoomMath.DeviceScale(Zoom, viewport, ContentSize, ppd);
-        // 手動で等倍以上に拡大したときは画素をそのまま見せる (nearest)。
-        // ウィンドウに合わせる表示は、倍率が 100% を超えても高品質に補間する (中途半端な倍率の nearest はムラになるため)
-        var mode = !Zoom.IsFit && scale >= 1.0 ? BitmapInterpolationMode.None : BitmapInterpolationMode.HighQuality;
-        using (context.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = mode }))
+        if (IsSplit)
         {
-            if (IsSplit)
+            DrawBitmap(context, AfterSource, rect);
+            double splitX = rect.X + rect.Width * Math.Clamp(SplitPosition, 0, 1);
+            if (BeforeSource != null)
             {
-                DrawBitmap(context, AfterSource, rect);
-                double splitX = rect.X + rect.Width * Math.Clamp(SplitPosition, 0, 1);
-                if (BeforeSource != null)
+                using (context.PushClip(new Rect(rect.X, rect.Y, Math.Max(0, splitX - rect.X), rect.Height)))
                 {
-                    using (context.PushClip(new Rect(rect.X, rect.Y, Math.Max(0, splitX - rect.X), rect.Height)))
-                    {
-                        DrawBitmap(context, BeforeSource, rect);
-                    }
+                    DrawBitmap(context, BeforeSource, rect);
                 }
-                DrawSplitLine(context, splitX, viewport);
-                DrawLabel(context, Localizer.Instance.Text.Before, new Point(Math.Max(rect.X, 0) + 8, Math.Max(rect.Y, 0) + 8), alignRight: false);
-                DrawLabel(context, Localizer.Instance.Text.After, new Point(Math.Min(rect.Right, viewport.Width) - 8, Math.Max(rect.Y, 0) + 8), alignRight: true);
             }
-            else
-            {
-                DrawBitmap(context, ShowBefore ? BeforeSource : AfterSource, rect);
-            }
+            DrawSplitLine(context, splitX, viewport);
+            DrawLabel(context, Localizer.Instance.Text.Before, new Point(Math.Max(rect.X, 0) + 8, Math.Max(rect.Y, 0) + 8), alignRight: false);
+            DrawLabel(context, Localizer.Instance.Text.After, new Point(Math.Min(rect.Right, viewport.Width) - 8, Math.Max(rect.Y, 0) + 8), alignRight: true);
+        }
+        else
+        {
+            DrawBitmap(context, ShowBefore ? BeforeSource : AfterSource, rect);
         }
         if (!IsSplit && CornerLabel is { Length: > 0 } label)
         {
@@ -175,10 +168,14 @@ public sealed class ZoomPanViewer : Control
         }
     }
 
-    private static void DrawBitmap(DrawingContext context, Bitmap? bitmap, Rect dest)
+    private void DrawBitmap(DrawingContext context, Bitmap? bitmap, Rect dest)
     {
         if (bitmap == null) return;
-        context.DrawImage(bitmap, new Rect(bitmap.Size), dest);
+        // 前後で保存解像度が異なることがあるため、画像ごとに物理画素への倍率を判定する。
+        var mode = ZoomMath.UseNearest(Zoom.IsFit, dest.Size, bitmap.PixelSize, PixelsPerDip)
+            ? BitmapInterpolationMode.None : BitmapInterpolationMode.HighQuality;
+        using (context.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = mode }))
+            context.DrawImage(bitmap, new Rect(bitmap.Size), dest);
     }
 
     private static void DrawSplitLine(DrawingContext context, double x, Size viewport)

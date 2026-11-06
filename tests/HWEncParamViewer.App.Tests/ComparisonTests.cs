@@ -3,7 +3,11 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading.Channels;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using HWEncParamViewer.App.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media.Imaging;
@@ -19,6 +23,54 @@ namespace HWEncParamViewer.App.Tests;
 public sealed class ComparisonTests
 {
     private static readonly TimeSpan SafetyTimeout = TimeSpan.FromSeconds(20);
+
+    [AvaloniaTheory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ActualSizeRemovesSarAndKeepsSharedCenter(bool sideBySide, bool keyboard)
+    {
+        using var services = new TestServices();
+        var clock = new FakeTimeProvider();
+        var backend = new RecordingBackend();
+        await using var vm = Create(services, clock, backend);
+        vm.InputArgsText += " --fake-sar 4:3";
+        await InitializeAsync(vm, clock);
+        vm.CompareMode = sideBySide ? PreviewCompareMode.SideBySide : PreviewCompareMode.Single;
+        var window = new MainWindow { DataContext = vm, Width = 1200, Height = 800 };
+        window.Show();
+        try
+        {
+            var main = window.FindControl<ZoomPanViewer>("MainViewer")!;
+            var before = window.FindControl<ZoomPanViewer>("BeforeViewer")!;
+            var after = window.FindControl<ZoomPanViewer>("AfterViewer")!;
+            main.Zoom = new ZoomState(false, 2, new Point(vm.DisplayWidth * 0.6, 12));
+            double oldWidth = vm.DisplayWidth;
+            vm.UseSar = false;
+            Assert.Equal(0.6, main.Zoom.Center.X / vm.DisplayWidth, 8);
+            vm.UseSar = true;
+            Assert.Equal(oldWidth, vm.DisplayWidth, 8);
+            Assert.Equal(0.6, main.Zoom.Center.X / vm.DisplayWidth, 8);
+            if (keyboard)
+                window.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.D0, KeyModifiers = KeyModifiers.Control });
+            else
+                window.FindControl<Button>("ZoomActualButton")!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.False(vm.UseSar);
+            Assert.False(main.Zoom.IsFit);
+            Assert.Equal(1, main.Zoom.Scale);
+            Assert.Equal(0.6, main.Zoom.Center.X / vm.DisplayWidth, 8);
+            Assert.Equal(12, main.Zoom.Center.Y);
+            Assert.Equal(main.Zoom, before.Zoom);
+            Assert.Equal(main.Zoom, after.Zoom);
+            var active = sideBySide ? after : main;
+            var rect = ZoomMath.ContentRect(active.Zoom, active.Bounds.Size, new Size(vm.DisplayWidth, vm.DisplayHeight));
+            Assert.Equal(vm.PreviewImage!.PixelSize.Width, rect.Width, 8);
+            Assert.Equal(vm.PreviewImage.PixelSize.Height, rect.Height, 8);
+            Assert.Single(backend.Runs);
+        }
+        finally { window.Close(); }
+    }
 
     [AvaloniaFact]
     public async Task BeforeStartsAfterSuccessfulAfterAndCannotOverwriteItsImageOrStatus()

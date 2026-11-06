@@ -28,7 +28,14 @@ public partial class MainWindow : Window
 
         // 拡大率の表示をクリックでウィンドウに合わせ、1:1 で等倍 (設計書 18.3)
         ZoomFitButton.Click += (_, _) => MainViewer.ZoomToFit();
-        ZoomActualButton.Click += (_, _) => ActiveViewer.ZoomToActualSize();
+        ZoomActualButton.Click += (_, _) => ZoomToActualPixels();
+        // 左右のZoomはMainViewerから共有するので、幅変更の中心補正もここだけで一度行う。
+        MainViewer.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == Controls.ZoomPanViewer.ContentWidthProperty)
+                MainViewer.Zoom = Controls.ZoomMath.ResizeContentWidth(MainViewer.Zoom,
+                    (double)e.OldValue!, (double)e.NewValue!);
+        };
         // 拡大率の表示は「いま見えているビューア」から取る (並べて表示では MainViewer が非表示で、大きさが 0 になるため)
         foreach (var viewer in new[] { MainViewer, AfterViewer })
         {
@@ -78,6 +85,13 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName == nameof(Localizer.Text) && IsCompletionOpen && _completionBox is { } box)
             RefreshCompletion(box);
+    }
+
+    private void ZoomToActualPixels()
+    {
+        // 物理等倍ではSARの引き伸ばしを解除し、保存画素と表示画素を対応させる。
+        if (ViewModel is { } vm) vm.UseSar = false;
+        ActiveViewer.ZoomToActualSize();
     }
 
     private void StepFrames(int frames)
@@ -190,7 +204,7 @@ public partial class MainWindow : Window
             case Key.D2 or Key.NumPad2: vm.SetCompareModeCommand.Execute(PreviewCompareMode.Split); break;
             case Key.D3 or Key.NumPad3: vm.SetCompareModeCommand.Execute(PreviewCompareMode.SideBySide); break;
             // 拡大 (設計書 18.3)
-            case Key.D0 or Key.NumPad0 when e.KeyModifiers.HasFlag(KeyModifiers.Control): ActiveViewer.ZoomToActualSize(); break;
+            case Key.D0 or Key.NumPad0 when e.KeyModifiers.HasFlag(KeyModifiers.Control): ZoomToActualPixels(); break;
             case Key.D0 or Key.NumPad0: MainViewer.ZoomToFit(); break;
             // Space を押している間だけフィルタ前を表示する (切替モード)。キーリピートでも true のまま
             case Key.Space when vm.CompareMode is PreviewCompareMode.Single or PreviewCompareMode.Toggle:
