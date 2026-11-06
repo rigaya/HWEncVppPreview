@@ -33,6 +33,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private readonly IViewModelServices _services;
     private readonly TimeProvider _clock;
     private readonly InputProbe _probe;
+    private readonly bool _borrowInputProbe;
     private readonly FrameCache _cache;
     private readonly PreviewController _controller;
     private readonly Func<Y4mFrame, CancellationToken, Task<byte[]>> _imageConverter;
@@ -63,7 +64,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     internal MainWindowViewModel(IViewModelServices? services, TimeProvider? timeProvider,
         IPreviewBackend? preferred, IPreviewBackend? fallback, InputProbe? probe, FrameCache? cache,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter,
-        IPreviewBackend? backgroundPreferred = null, IPreviewBackend? backgroundFallback = null)
+        IPreviewBackend? backgroundPreferred = null, IPreviewBackend? backgroundFallback = null, bool beforeEnabled = true)
     {
         _imageConverter = converter ?? ((frame, token) => Task.Run(() =>
         {
@@ -72,9 +73,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             try { return YuvToBgra.Convert(frame); }
             finally { if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.worker.end", new { frame.Xts }); }
         }, token));
+        _beforeEnabled = beforeEnabled;
         _services = services ?? new AvaloniaViewModelServices();
         _clock = timeProvider ?? TimeProvider.System;
         _probe = probe ?? new InputProbe(_clock);
+        _borrowInputProbe = probe == null && preferred == null;
         _cache = cache ?? new FrameCache();
         var first = preferred ?? new ServerBackend(_clock);
         var second = fallback ?? new OneShotBackend(timeProvider: _clock);
@@ -456,6 +459,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (!IsCurrent(context)) return;
             if (context.Kind == RequestKind.Before)
             {
+                BeforeUnavailableForDuration();
                 CaptureBeforeFallbackDiagnostic(diagnostics);
                 _beforeFinished = true;
                 IsBeforeBusy = false;

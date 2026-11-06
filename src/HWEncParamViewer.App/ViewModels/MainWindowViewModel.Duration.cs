@@ -14,6 +14,7 @@ public sealed partial class MainWindowViewModel
     {
         lock (_taskLock)
         {
+            _durationAfterSeen = _durationBeforeSeen = _durationBeforeUnavailable = false;
             ++_durationGeneration;
             _durationAttempt = null;
             _durationCancellation?.Cancel();
@@ -28,6 +29,28 @@ public sealed partial class MainWindowViewModel
         HasDuration = info.Duration.HasValue;
         DurationSeconds = info.Duration?.TotalSeconds ?? 0;
         DurationText = info.Duration is { } duration ? FormatTime(duration.TotalSeconds, milliseconds: false) : "";
+    }
+
+    private bool _durationAfterSeen, _durationBeforeSeen, _durationBeforeUnavailable;
+
+    private void QueueDurationAfterComparison(bool before, long generation)
+    {
+        if (before) _durationBeforeSeen = true;
+        else _durationAfterSeen = true;
+        TryQueueDuration();
+    }
+
+    private void BeforeUnavailableForDuration()
+    {
+        _durationBeforeUnavailable = true;
+        TryQueueDuration();
+    }
+
+    private void TryQueueDuration()
+    {
+        // 画像の両側を反映してから長さを検査し、初回比較のGPU処理と競合させない。
+        if (!_durationAfterSeen || !(_durationBeforeSeen || _durationBeforeUnavailable)) return;
+        QueueDuration(EncoderPath, InputPath, OptionTextParser.ParseText(InputArgsText));
     }
 
     private void QueueDuration(string encoder, string input, string[] inputArgs)

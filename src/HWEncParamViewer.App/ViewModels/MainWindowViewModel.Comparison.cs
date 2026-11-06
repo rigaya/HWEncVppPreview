@@ -12,6 +12,7 @@ public enum PreviewCompareMode { Single, Toggle, Split, SideBySide }
 
 public sealed partial class MainWindowViewModel
 {
+    private readonly bool _beforeEnabled;
     private PreviewCompareMode _compareMode;
     private bool _isShowingBefore;
     private Bitmap? _beforeImage;
@@ -145,9 +146,10 @@ public sealed partial class MainWindowViewModel
     private void QueueBefore(PreviewRequest afterRequest, long generation, double? cachedTarget = null)
     {
         if (!IsCurrent(generation)) return;
-        if (PerfTrace.Enabled && Environment.GetEnvironmentVariable("HWENC_VIEWER_BENCH_DISABLE_BEFORE") == "1")
+        if (!_beforeEnabled || PerfTrace.Enabled && Environment.GetEnvironmentVariable("HWENC_VIEWER_BENCH_DISABLE_BEFORE") == "1")
         {
-            PerfTrace.Write("vm.queue.before.disabled", new { generation });
+            if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.before.disabled", new { generation });
+            BeforeUnavailableForDuration();
             return;
         }
         if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.before", new { generation, cachedTarget });
@@ -242,6 +244,7 @@ public sealed partial class MainWindowViewModel
                 _beforeFinished = true;
                 IsBeforeBusy = false;
                 BeforeImage = null;
+                BeforeUnavailableForDuration();
                 if (PerfTrace.Enabled) PerfTrace.Write("vm.before.error", new { exception.Message });
             }).ConfigureAwait(false);
         }
@@ -286,7 +289,8 @@ public sealed partial class MainWindowViewModel
         }
         // 同じ入力・目標での回復は1回に制限し、着地が毎回遅い入力でも再帰し続けない。
         if (_beforeRecoverySelection is { } prior && SameBeforeInput(prior, selection)
-            && Math.Abs(prior.TargetSeconds - selection.TargetSeconds) <= 1e-8) return;
+            && Math.Abs(prior.TargetSeconds - selection.TargetSeconds) <= 1e-8)
+        { BeforeUnavailableForDuration(); return; }
         _beforeRecoverySelection = selection;
         CancelBefore();
         QueueBefore(selection, Volatile.Read(ref _generation));

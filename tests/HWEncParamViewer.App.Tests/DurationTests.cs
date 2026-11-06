@@ -211,6 +211,71 @@ public sealed class DurationTests
         info.Environment["FAKE_ENCODER_DURATION_EXIT_READY_FILE"] = files.Ready;
         info.Environment["FAKE_ENCODER_PID_FILE"] = files.Pid;
     }
+    [AvaloniaFact]
+    public async Task OmittedBeforeStartsDurationAfterTheAfterImage()
+    {
+        using var files = new TestFiles();
+        var clock = new FakeTimeProvider();
+        var probe = HeldDurationProbe(files, clock);
+        var backend = new OneShotBackend();
+        await using var vm = new MainWindowViewModel(files, clock, backend, backend, probe, null, null, beforeEnabled: false)
+        {
+            EncoderPath = FakeEncoderPath(), InputPath = "no-before.ts",
+            InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit"
+        };
+        try
+        {
+            await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
+            await WaitForFileAsync(files.Ready);
+            Assert.NotNull(vm.PreviewImage);
+            Assert.Null(vm.BeforeImage);
+        }
+        finally { await File.WriteAllTextAsync(files.Gate, ""); }
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.True(vm.HasDuration);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(19)]
+    [InlineData(0)]
+    public async Task MissingOrFailedBeforeDoesNotPreventDuration(int beforeExitCode)
+    {
+        using var files = new TestFiles();
+        var clock = new FakeTimeProvider();
+        var probe = HeldDurationProbe(files, clock);
+        var after = new OneShotBackend();
+        var before = new MissingBeforeBackend(beforeExitCode);
+        await using var vm = new MainWindowViewModel(files, clock, after, after, probe, null, null, before, before)
+        {
+            EncoderPath = FakeEncoderPath(), InputPath = "missing-before.ts",
+            InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit"
+        };
+        vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
+        try
+        {
+            await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
+            await WaitForFileAsync(files.Ready);
+            Assert.NotNull(vm.PreviewImage);
+            Assert.Null(vm.BeforeImage);
+            Assert.Null(vm.ErrorText);
+        }
+        finally { await File.WriteAllTextAsync(files.Gate, ""); }
+        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        Assert.True(vm.HasDuration);
+    }
+
+    private static InputProbe HeldDurationProbe(TestFiles files, FakeTimeProvider clock) => new(clock, configureStartInfo: info =>
+    {
+        if (IsDuration(info)) HoldDuration(info, files);
+        else { info.ArgumentList.Add("--fake-hang-after"); info.ArgumentList.Add("1"); }
+    });
+    private sealed class MissingBeforeBackend(int exitCode) : IPreviewBackend
+    {
+        public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
+            => Task.FromResult(new PreviewRunResult(exitCode, "元画像がないテスト"));
+        public ValueTask AbortAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
     private static MainWindowViewModel Create(TestFiles files, FakeTimeProvider clock, InputProbe probe)
     {
         var backend = new OneShotBackend();
@@ -236,8 +301,15 @@ public sealed class DurationTests
     }
     private static async Task WaitForFileAsync(string path)
     {
-        async Task WaitAsync() { while (!File.Exists(path)) await Task.Yield(); }
-        await WaitAsync().WaitAsync(SafetyTimeout);
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var watcher = new FileSystemWatcher(Path.GetDirectoryName(path)!, Path.GetFileName(path));
+        void Check(object? sender, FileSystemEventArgs args) { if (File.Exists(path)) ready.TrySetResult(); }
+        watcher.Created += Check;
+        watcher.Changed += Check;
+        watcher.EnableRaisingEvents = true;
+        // UIへの反映を待ってから長さ検査が始まるので、Yield連打でUIのPostを飢餓させない。
+        if (File.Exists(path)) ready.TrySetResult();
+        await ready.Task.WaitAsync(SafetyTimeout);
     }
     private static void AssertStopped(int pid)
     {

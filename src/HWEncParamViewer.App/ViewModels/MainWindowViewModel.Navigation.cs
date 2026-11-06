@@ -96,7 +96,9 @@ public sealed partial class MainWindowViewModel
             {
                 await _metadataTask.WaitAsync(cancellation.Token).ConfigureAwait(false);
                 PreviewCapabilities capabilities = _capabilities;
-                InputInfo info = _inputInfo ?? await _probe.ProbeAsync(encoder, input, inputArgs, cancellation.Token, capabilities).ConfigureAwait(false);
+                InputInfo info = _inputInfo ?? await (_borrowInputProbe
+                    ? _controller.ProbeInputAsync(_probe, encoder, input, inputArgs, capabilities, cancellation.Token)
+                    : _probe.ProbeAsync(encoder, input, inputArgs, cancellation.Token, capabilities)).ConfigureAwait(false);
                 await PostAsync(() =>
                 {
                     if (_disposed || editEpoch != Volatile.Read(ref _editEpoch) || cancellation.IsCancellationRequested) return;
@@ -149,7 +151,6 @@ public sealed partial class MainWindowViewModel
                     _controller.Submit(request, bypassCache || requirePhysicalRefetch, navigation: actualNavigation,
                         reuseActiveStream: reuseNeighbor, bypassDebounce: bypassDebounce);
                     Track(ReleaseContextAsync(context));
-                    QueueDuration(encoder, input, inputArgs);
                 }).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
@@ -275,7 +276,7 @@ public sealed partial class MainWindowViewModel
                             if (image.Before && IsCurrent(image.Generation) && image.BeforeVersion == _beforeImageGeneration) IsBeforeBusy = false;
                             return;
                         }
-                        if (image.Before) { if (IsCurrent(image.Generation) && image.BeforeVersion == _beforeImageGeneration) { IsBeforeBusy = false; BeforeImage = null; } }
+                        if (image.Before) { if (IsCurrent(image.Generation) && image.BeforeVersion == _beforeImageGeneration) { IsBeforeBusy = false; BeforeImage = null; BeforeUnavailableForDuration(); } }
                         else if (image.Generation == Volatile.Read(ref _generation))
                         { _lastFailedAfter = image.Generation; ShowError(AppMessages.ImageDisplayFailed, exception.Message); }
                     }).ConfigureAwait(false);
@@ -321,6 +322,7 @@ public sealed partial class MainWindowViewModel
             RecalculateDisplaySizes();
             BeforeImage = bitmap;
             if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.TraceId, image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
+            QueueDurationAfterComparison(image.Before, image.Generation);
             if (image.FinishBeforeBusy) IsBeforeBusy = false;
             return;
         }
@@ -333,6 +335,7 @@ public sealed partial class MainWindowViewModel
         RecalculateDisplaySizes();
         PreviewImage = afterBitmap;
         if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.TraceId, image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
+        QueueDurationAfterComparison(image.Before, image.Generation);
         UpdateNavigationStatus();
     }
 

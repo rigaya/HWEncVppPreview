@@ -75,7 +75,7 @@ public sealed class InputProbe : IAsyncDisposable
     /// <exception cref="InputProbeException">エンコーダがエラー終了した、または有効なヘッダがない。</exception>
     /// <exception cref="InputProbeTimeoutException">検査全体が指定時間内に完了しなかった。</exception>
     public async Task<InputInfo> ProbeAsync(string encoderPath, string inputFile,
-        IReadOnlyList<string>? inputArgs = null, CancellationToken cancellationToken = default, PreviewCapabilities? capabilities = null)
+        IReadOnlyList<string>? inputArgs = null, CancellationToken cancellationToken = default, PreviewCapabilities? capabilities = null, IPreviewBackend? borrowedBackend = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(encoderPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(inputFile);
@@ -103,7 +103,9 @@ public sealed class InputProbe : IAsyncDisposable
             using var stopAfterFrame = new CancellationTokenSource();
             using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token, stopAfterFrame.Token);
             var sink = new ProbeSink(() => stopAfterFrame.Cancel());
-            Task<PreviewRunResult> run = _backend.RunAsync(request, sink, execution.Token);
+            // 借用backendの寿命とDisposeはControllerだけが所有する。検査中だけ実行を借りる。
+            IPreviewBackend backend = borrowedBackend ?? _backend;
+            Task<PreviewRunResult> run = backend.RunAsync(request, sink, execution.Token);
             PreviewRunResult result;
             try
             {
@@ -111,12 +113,12 @@ public sealed class InputProbe : IAsyncDisposable
             }
             catch (TimeoutException exception)
             {
-                string diagnostics = await StopProbeRunAsync(run, cancellation).ConfigureAwait(false);
+                string diagnostics = await StopProbeRunAsync(run, cancellation, backend).ConfigureAwait(false);
                 throw new InputProbeTimeoutException(CoreText.InputProbeTimedOut, diagnostics, exception);
             }
             catch (OperationCanceledException)
             {
-                await StopProbeRunAsync(run, cancellation).ConfigureAwait(false);
+                await StopProbeRunAsync(run, cancellation, backend).ConfigureAwait(false);
                 throw;
             }
             cancellation.Token.ThrowIfCancellationRequested();
@@ -338,11 +340,11 @@ public sealed class InputProbe : IAsyncDisposable
         catch (Exception exception) { System.Diagnostics.Trace.TraceWarning("Input probe shutdown failure ({0}): {1}", stage, exception.Message); }
     }
 
-    private async Task<string> StopProbeRunAsync(Task<PreviewRunResult> run, CancellationTokenSource cancellation)
+    private async Task<string> StopProbeRunAsync(Task<PreviewRunResult> run, CancellationTokenSource cancellation, IPreviewBackend backend)
     {
         var deadline = new CleanupDeadline(_clock, StopTimeout);
         await JoinIgnoringFailureAsync(cancellation.CancelAsync(), deadline, "probe.run_cancel").ConfigureAwait(false);
-        Task abort = Task.Run(async () => await _backend.AbortAsync().ConfigureAwait(false));
+        Task abort = Task.Run(async () => await backend.AbortAsync().ConfigureAwait(false));
         await JoinIgnoringFailureAsync(abort, deadline, "probe.run_abort").ConfigureAwait(false);
         await JoinIgnoringFailureAsync(run, deadline, "probe.run_join").ConfigureAwait(false);
         return run.IsCompletedSuccessfully ? run.Result.StandardError : "";

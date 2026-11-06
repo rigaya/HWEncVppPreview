@@ -528,7 +528,7 @@ public sealed partial class PreviewController : IAsyncDisposable
             TraceDispose("enter", new { tasks = _tasks.Count });
             long started = _clock.GetTimestamp();
             // 同期cancel callbackがUIやdriverの待ちに入っても、終了期限の監視を止めない。
-            Task[] cancellations = new[] { _scheduled, _backgroundScheduled, _active, _backgroundActive, _stream?.Cancellation, _reversePrefetch?.Cancellation }
+            Task[] cancellations = new[] { _auxiliaryLifetime, _scheduled, _backgroundScheduled, _active, _backgroundActive, _stream?.Cancellation, _reversePrefetch?.Cancellation }
                 .Where(source => source != null).Distinct().Select(source => source!.CancelAsync()).ToArray();
             _streamStateChanged.TrySetResult();
             TraceDispose("cancelled");
@@ -659,6 +659,7 @@ public sealed partial class PreviewController : IAsyncDisposable
     private void ReleaseExecutionResources()
     {
         _reversePrefetch?.Cancellation.Dispose();
+        _auxiliaryLifetime.Dispose();
         _execution.Dispose();
         _backgroundExecution.Dispose();
     }
