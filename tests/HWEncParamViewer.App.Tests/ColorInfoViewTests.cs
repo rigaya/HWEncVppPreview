@@ -28,6 +28,7 @@ public sealed class ColorInfoViewTests
         {
             UiLanguage.Set("ja");
             Assert.Equal("", vm.ColorInfoText);
+            Assert.False(vm.IsHdrReferenceWhiteVisible);
             window.Show();
             await vm.InitializeAsync(false).WaitAsync(TimeSpan.FromSeconds(20));
             clock.Advance(TimeSpan.FromMilliseconds(150));
@@ -38,6 +39,8 @@ public sealed class ColorInfoViewTests
             Assert.Contains("full", vm.ColorInfoText);
             Assert.Contains("PQ→SDR 203nit", vm.ColorInfoText);
             Assert.Equal(vm.ColorInfoText, window.FindControl<TextBlock>("ColorInfoLabel")!.Text);
+            Assert.True(vm.IsHdrReferenceWhiteVisible);
+            Assert.True(window.FindControl<StackPanel>("HdrReferenceWhitePanel")!.IsVisible);
             UiLanguage.Set("en");
             await Flush();
             Assert.Contains("PQ→SDR 203nit", vm.ColorInfoText);
@@ -58,6 +61,31 @@ public sealed class ColorInfoViewTests
             window.Close();
             UiLanguage.Set(previous);
         }
+    }
+
+    [AvaloniaFact]
+    public async Task SDRだけの表示では基準白の設定を出さない()
+    {
+        var clock = new FakeTimeProvider();
+        await using var vm = new MainWindowViewModel(timeProvider: clock, preferred: new OneShotBackend())
+        {
+            EncoderPath = FakeEncoderPath(), InputPath = "fake.ts"
+        };
+        vm.FilterLines.Add(new FilterLineViewModel { Text = "--fake-colormatrix bt709 --fake-colorrange limited" });
+        var window = new MainWindow { DataContext = vm, Width = 1440, Height = 900 };
+        try
+        {
+            window.Show();
+            await vm.InitializeAsync(false).WaitAsync(TimeSpan.FromSeconds(20));
+            clock.Advance(TimeSpan.FromMilliseconds(150));
+            await vm.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            await Flush();
+            Assert.NotNull(vm.PreviewImage);
+            Assert.DoesNotContain("SDR", vm.ColorInfoText);
+            Assert.False(vm.IsHdrReferenceWhiteVisible);
+            Assert.False(window.FindControl<StackPanel>("HdrReferenceWhitePanel")!.IsVisible);
+        }
+        finally { window.Close(); }
     }
 
     private static string FakeEncoderPath()

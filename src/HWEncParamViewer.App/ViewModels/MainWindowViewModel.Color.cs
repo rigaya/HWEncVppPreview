@@ -59,5 +59,14 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    private void RefreshColorInfo() => OnPropertyChanged(nameof(ColorInfoText));
+    /// <summary>表示中のAfterかBeforeがPQ/HLGで、SDRへ変換しているときだけ基準白の設定を出す。</summary>
+    public bool IsHdrReferenceWhiteVisible => IsHdrFrame(_displayedFrame) || IsHdrFrame(_beforeDisplayedFrame);
+
+    private static bool IsHdrFrame(Y4mFrame? frame) => frame != null && YuvToBgra.GetColorInfo(frame.Header).IsHdr;
+
+    private void RefreshColorInfo()
+    {
+        OnPropertyChanged(nameof(ColorInfoText));
+        OnPropertyChanged(nameof(IsHdrReferenceWhiteVisible));
+    }
 }

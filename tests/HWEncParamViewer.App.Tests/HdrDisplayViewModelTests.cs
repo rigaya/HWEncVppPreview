@@ -52,6 +52,8 @@ public sealed class HdrDisplayViewModelTests
         await using var vm = Create(services, backend, new FakeTimeProvider());
         await vm.InitializeAsync(false).WaitAsync(Safety);
         await vm.WaitForIdleAsync().WaitAsync(Safety);
+        // AfterがSDRでも、Beforeを変換しているので基準白は出す。
+        Assert.True(vm.IsHdrReferenceWhiteVisible);
         int runs = backend.Runs;
         Bitmap after = vm.PreviewImage!;
         string afterHash = Hash(after), beforeHash = Hash(vm.BeforeImage!);
