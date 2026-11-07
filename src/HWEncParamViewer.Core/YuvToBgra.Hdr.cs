@@ -5,7 +5,7 @@ namespace HWEncParamViewer.Core;
 
 public static partial class YuvToBgra
 {
-    private static byte[] ConvertHdr(Y4mFrame frame, HdrDisplaySettings settings)
+    private static byte[] ConvertHdr(Y4mFrame frame, HdrDisplaySettings settings, byte[]? destination)
     {
         settings.Validate();
         var h = frame.Header;
@@ -31,7 +31,7 @@ public static partial class YuvToBgra
             (float)(1 / (1 - HdrToneMapping.Knee) - 1 / (settings.PeakNits / settings.ReferenceWhiteNits - HdrToneMapping.Knee)),
             2 * (1 - kr) * cf, 2 * (1 - kb) * cf,
             2 * kb * (1 - kb) / kg * cf, 2 * kr * (1 - kr) / kg * cf);
-        byte[] output = new byte[luma * 4];
+        byte[] output = destination ?? new byte[luma * 4];
         if (h.Chroma == Y4mChroma.C420)
         {
             int expandedSize = width * ch;

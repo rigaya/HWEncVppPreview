@@ -36,7 +36,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private readonly bool _borrowInputProbe;
     private readonly FrameCache _cache;
     private readonly PreviewController _controller;
-    private readonly Func<Y4mFrame, HdrDisplaySettings, CancellationToken, Task<byte[]>> _imageConverter;
+    private readonly Func<Y4mFrame, HdrDisplaySettings, CancellationToken, Task<byte[]>>? _imageConverter;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly object _taskLock = new();
     private readonly HashSet<Task> _tasks = new();
@@ -66,13 +66,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter,
         IPreviewBackend? backgroundPreferred = null, IPreviewBackend? backgroundFallback = null, bool beforeEnabled = true)
     {
-        _imageConverter = converter != null ? (frame, settings, token) => converter(frame, token) : (frame, settings, token) => Task.Run(() =>
-        {
-            // 外側のTask.Run待ちと、変換内の並列処理を含む待ちを計測時だけ区別する。
-            if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.worker.start", new { frame.Xts });
-            try { return YuvToBgra.Convert(frame, settings); }
-            finally { if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.worker.end", new { frame.Xts }); }
-        }, token);
+        _imageConverter = converter != null ? (frame, settings, token) => converter(frame, token) : null;
         _beforeEnabled = beforeEnabled;
         _services = services ?? new AvaloniaViewModelServices();
         _clock = timeProvider ?? TimeProvider.System;
@@ -297,6 +291,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     private void InputChanged(bool bypassDebounce = false)
     {
+        _bgraPool.Retire();
         bool suspended = _suspendChanges;
         _suspendChanges = true;
         try
@@ -840,6 +835,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         TraceDisposeStage("enter");
         _disposed = true;
+        _bgraPool.Dispose();
         UiLanguage.Changed -= OnLanguageChanged;
         _initialized = false;
         Interlocked.Increment(ref _generation);

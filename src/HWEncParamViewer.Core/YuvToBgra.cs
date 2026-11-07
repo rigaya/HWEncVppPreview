@@ -38,6 +38,16 @@ public static partial class YuvToBgra
     /// 範囲外の値はRGB変換後に飽和させる。PQ/HLGだけを線形化し、基準白と高輝度の肩を使ってSDRへ変換する。
     /// </remarks>
     public static byte[] Convert(Y4mFrame frame, HdrDisplaySettings? settings = null)
+        => ConvertCore(frame, settings, null);
+
+    /// <summary>呼出側が所有する幅×高さ×4の配列へ変換し、入力画像は変更しない。</summary>
+    public static void ConvertInto(Y4mFrame frame, byte[] output, HdrDisplaySettings? settings = null)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ConvertCore(frame, settings, output);
+    }
+
+    private static byte[] ConvertCore(Y4mFrame frame, HdrDisplaySettings? settings, byte[]? output)
     {
         ArgumentNullException.ThrowIfNull(frame);
         ArgumentNullException.ThrowIfNull(frame.Header);
@@ -49,6 +59,8 @@ public static partial class YuvToBgra
         if (!Enum.IsDefined(header.Chroma)) throw new ArgumentException(CoreText.ChromaUnsupported, nameof(frame));
         long pixels = (long)width * height;
         if (pixels > int.MaxValue / 4) throw new ArgumentException(CoreText.ImageTooLarge, nameof(frame));
+        if (output != null && (output.Length != pixels * 4 || ReferenceEquals(output, frame.Data)))
+            throw new ArgumentException("出力は入力とは別の幅×高さ×4byteの配列にしてください。", nameof(output));
         int lumaSamples = (int)pixels;
         int chromaWidth = header.Chroma is Y4mChroma.C420 or Y4mChroma.C422 ? (width + 1) / 2 : width;
         int chromaHeight = header.Chroma == Y4mChroma.C420 ? (height + 1) / 2 : height;
@@ -59,7 +71,7 @@ public static partial class YuvToBgra
             throw new ArgumentException(CoreText.PlaneDataLengthInvalid(expectedBytes, frame.Data.LongLength), nameof(frame));
 
         var color = GetColorInfo(header);
-        if (color.IsHdr) return ConvertHdr(frame, settings ?? new HdrDisplaySettings());
+        if (color.IsHdr) return ConvertHdr(frame, settings ?? new HdrDisplaySettings(), output);
         (double kr, double kb) = color.Matrix switch
         {
             "BT.709" => (0.2126, 0.0722), "BT.2020 ncl" => (0.2627, 0.0593),
@@ -76,7 +88,7 @@ public static partial class YuvToBgra
         double greenCb = 2 * kb * (1 - kb) / kg * cFactor;
         double greenCr = 2 * kr * (1 - kr) / kg * cFactor;
         byte[] data = frame.Data;
-        byte[] result = new byte[lumaSamples * 4];
+        byte[] result = output ?? new byte[lumaSamples * 4];
         if (header.Chroma == Y4mChroma.C420)
         {
             // 同じ色差行の水平補間を隣り合う輝度行で共有し、画素ごとの4点読取りを避ける。

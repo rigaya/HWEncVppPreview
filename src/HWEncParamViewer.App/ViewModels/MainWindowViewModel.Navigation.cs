@@ -289,13 +289,15 @@ public sealed partial class MainWindowViewModel
                     HdrDisplaySettings settings;
                     long displaySettingsRevision;
                     lock (_taskLock) { settings = _hdrDisplaySettings; displaySettingsRevision = _hdrDisplaySettingsRevision; }
-                    byte[] data = await _imageConverter(image.Frame, settings, _lifetime.Token).ConfigureAwait(false);
-                    if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.end", new { image.TraceId, image.Generation, image.Before, image.Frame.Xts, bytes = data.Length });
-                    await PostAsync(() =>
+                    await WithConvertedBgraAsync(image.Frame, settings, _lifetime.Token, async data =>
                     {
-                        if (displaySettingsRevision != Volatile.Read(ref _hdrDisplaySettingsRevision) && YuvToBgra.GetColorInfo(image.Frame.Header).IsHdr)
-                            RequeueForDisplaySettings(image);
-                        else ApplyImage(image, data);
+                        if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.end", new { image.TraceId, image.Generation, image.Before, image.Frame.Xts, bytes = data.Length });
+                        await PostAsync(() =>
+                        {
+                            if (displaySettingsRevision != Volatile.Read(ref _hdrDisplaySettingsRevision) && YuvToBgra.GetColorInfo(image.Frame.Header).IsHdr)
+                                RequeueForDisplaySettings(image);
+                            else ApplyImage(image, data);
+                        }).ConfigureAwait(false);
                     }).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
