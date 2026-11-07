@@ -51,8 +51,10 @@ public sealed class ReverseWindowBudgetTests
         var(cache,id)=Full();
         Assert.True(cache.TryTrimReverseWindow(Request(),10,10.1,4d/60,43*6));
         var unrelated=Request() with {VppArgs=new[]{"before"}};
-        cache.Store(unrelated,Enumerable.Range(0,60).Select(Frame).ToArray());
-        Assert.True(cache.TryGet(unrelated,out _));
+        // closed/legacyは今回の回収対象なので、競合相手を回収できないactive区間にする。
+        long active=cache.BeginSegment(unrelated,new(1000,0,true),0);
+        foreach(var frame in Enumerable.Range(0,60).Select(Frame))Assert.True(cache.Append(active,frame));
+        Assert.NotNull(cache.GetSegment(active));
         var bridge=cache.GetSegment(id)!;
         var frames=Enumerable.Range(564,43).Select(Frame).ToArray();
         Assert.Null(cache.StoreSegment(Request(),frames,new(1000,7,true),9.4,10.083333333333,false,true));

@@ -98,8 +98,10 @@ internal static class PreviewByteWindow
         double seek = CommandBuilder.Plan(physical).SeekSeconds ?? 0;
         double current = Math.Max(0, physical.TargetSeconds - seek - (seek > 0 ? physical.WarmupSeconds : 0));
         double available = (frames - 1) / rate;
-        if (current + overlap > available && overlap > ReducedOverlapFrameCount / rate)
+        if (current + overlap > available)
         {
+            // 縮める通常逆窓はguardしか持たない場合もある。照合の重なりを4出力frame残し、その分だけ表示域を狭める。
+            // 余裕のある窓には加えず、既存のprefetchの縮小幅と同じ値にそろえる。
             overlap = ReducedOverlapFrameCount / rate;
             physical = physical with { PostMarginSeconds = TailGuardSeconds + overlap };
         }

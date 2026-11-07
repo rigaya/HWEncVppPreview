@@ -442,12 +442,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             { context.Segment = null; return; }
             RefreshRetainedSnapshots();
             var segment = value.Segment;
+            bool evictedAfter = false;
             if (segment is { SegmentId: > 0 })
             {
                 var latest = _cache.GetSegment(segment.SegmentId);
-                if (latest == null) return;
-                segment = latest;
-                frames = latest.Frames;
+                if (latest == null)
+                {
+                    if (context.Kind == RequestKind.Before)
+                    {
+                        // UI待ちの間にevictされてもBeforeの完了を捨てない。最新目標の1枚だけ残す。
+                        segment = RetainEvictedBeforeCompletion(segment, CurrentSeconds);
+                    }
+                    else
+                    {
+                        segment = RetainEvictedAfterCompletion(segment, context);
+                        evictedAfter = true;
+                    }
+                    frames = segment.Frames;
+                }
+                else
+                {
+                    segment = latest;
+                    frames = latest.Frames;
+                }
             }
             if (segment != null) context.Segment = segment;
             if (context.Kind == RequestKind.Before)
@@ -462,6 +479,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             _intervalLogicalRequest = value.Request;
             _intervalSegment = segment;
             _intervalFrames = frames;
+            if (evictedAfter)
+            {
+                if (frames.Count == 0)
+                {
+                    if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
+                    _lastFailedAfter = context.Generation;
+                    ShowError(AppMessages.NoDisplayableFrames, value.Result.StandardError);
+                    return;
+                }
+                if (context.NeighborDirection == 0 || context.NeighborResolved)
+                {
+                    // 正ID付きの旧変換仕事を失効させ、少数保持の画像を再取得なしで反映する。
+                    Interlocked.Increment(ref context.DisplayRevision);
+                    DisplayFrame(frames[0], context);
+                }
+            }
             _lastCompletedAfter = Math.Max(_lastCompletedAfter, context.Generation);
             var afterRequest = context.NeighborDirection != 0 ? CompleteNeighbor(context, frames) : value.Request;
             if (frames.Count == 0 && context.Generation == Volatile.Read(ref _generation) && _lastQueuedAfter < context.Generation)

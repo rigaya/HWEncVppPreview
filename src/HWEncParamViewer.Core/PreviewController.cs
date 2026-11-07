@@ -523,10 +523,10 @@ public sealed partial class PreviewController : IAsyncDisposable
             }
             if (sink.Segment is { Clock.TrustedAbsolute: true } segment)
             {
-                if (!background && prefetch == null) _cache.PinCurrent(null, request.TargetSeconds);
                 var stored = _cache.StoreSegment(segment.PhysicalRequest, sink.Frames, segment.Clock, segment.SafeStartSeconds,
-                    segment.SafeEndSeconds, segment.ReachedInputEnd, prefetch != null, sink.FirstOutputInputSeconds);
-                if (stored != null) { sink.Segment = stored; if (!background && prefetch == null) _cache.PinCurrent(stored.SegmentId, request.TargetSeconds); }
+                    segment.SafeEndSeconds, segment.ReachedInputEnd, prefetch != null, sink.FirstOutputInputSeconds,
+                    pinCurrent: !background && prefetch == null);
+                if (stored != null) sink.Segment = stored;
                 else if (_cache.CapacityBytes > 0) sink.KeepSelectionOnly();
             }
             else
@@ -538,7 +538,6 @@ public sealed partial class PreviewController : IAsyncDisposable
             }
             if (sink.RetentionLimited)
                 result = result with { StandardError = result.StandardError + "\n[preview] Raw retention window limited by byte budget.\n" };
-            if (prefetch != null) prefetch.Segment = sink.Segment;
             _cache.EndPendingSource(pendingSource); pendingSource = 0;
             if (PerfTrace.Enabled) PerfTrace.Write("core.cache_store", new { request.CorrelationId, version,
                 frames = sink.Frames.Count, bytes = sink.ReceivedBytes, cacheBytes = _cache.SizeBytes,

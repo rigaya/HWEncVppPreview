@@ -125,6 +125,5 @@ public sealed partial class PreviewController
         public double Boundary { get; } = boundary;
         public CancellationTokenSource Cancellation { get; } = new();
         public TaskCompletionSource Completion { get; } = NewSignal();
-        public PreviewSegmentSnapshot? Segment { get; set; }
     }
 }

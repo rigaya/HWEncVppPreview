@@ -211,7 +211,9 @@ public sealed partial class PreviewController
                 if (neighborReuse && active!.IsPaused && active.LastFrameBytes > 0)
                     neighborReuse = _cache.CanAppend(active.SegmentId, active.LastFrameBytes);
             }
-            bool compatible = active != null && navigation && (!bypassCache || neighborReuse)
+            bool approachingForward = !neighborReuse && TryAdoptApproachingForward(active, current, request,
+                reuseActiveStream, bypassCache, navigation, capable, withinJump, notBeforeRetained);
+            bool compatible = active != null && navigation && (!bypassCache || neighborReuse || approachingForward)
                 && FrameCache.SameContent(active.PhysicalRequest, request);
             if (compatible && withinJump && notBeforeRetained && (capable || cached != null))
             {
@@ -374,7 +376,11 @@ public sealed partial class PreviewController
 
             async Task<PreviewRunResult> RunAsync()
             {
-                try { return await RunTrackedBackendAsync(backend, session.PhysicalRequest, sink, session.Cancellation.Token).ConfigureAwait(false); }
+                try
+                {
+                    BeginForwardObservation(session, backend);
+                    return await RunTrackedBackendAsync(backend, session.PhysicalRequest, sink, session.Cancellation.Token).ConfigureAwait(false);
+                }
                 catch (PreviewServerNotSupportedException) when (_enableFallback && ReferenceEquals(backend, _preferred))
                 {
                     lock (_sync) _unsupported.Add(session.PhysicalRequest.EncoderPath);
@@ -388,6 +394,7 @@ public sealed partial class PreviewController
                     if (!session.IsForwardPrefetch) _cache.PinCurrent(session.SegmentId, session.LatestRequest.TargetSeconds);
                     sink = new StreamSink(this, session, watchdog);
                     watchdog.Touch();
+                    BeginForwardObservation(session, backend);
                     return await RunTrackedBackendAsync(backend, session.PhysicalRequest, sink, session.Cancellation.Token).ConfigureAwait(false);
                 }
             }
@@ -481,12 +488,18 @@ public sealed partial class PreviewController
         public bool Ended { get; set; }
         public bool ClockChecked { get; set; }
         public long LastFrameBytes { get; set; }
+        public IPreviewBackend? ObservationBackend { get; set; }
+        public long BackendCallStarted { get; set; }
+        public bool BackendFirstObserved { get; set; }
+        public ForwardReadProgress ReadProgress { get; } = new();
     }
 
     private sealed class StreamSink(PreviewController owner, StreamingSession session, OutputWatchdog watchdog) : IPreviewSink
     {
         private readonly PreviewTimestampGuard _timestampGuard = new(session.PhysicalRequest.Fps);
         private bool? _lastTraceReading;
+        private PreviewClockMap? _observedClock;
+        private string? _lastBudgetStopReason;
         public void OnHeader(Y4mHeader header) => owner.RememberOutputHeader(session.PhysicalRequest, header);
         public void OnOutput() => watchdog.Touch();
         public void OnReadStateChanged(bool reading)
@@ -502,6 +515,7 @@ public sealed partial class PreviewController
                         logicalCorrelationId = session.LatestRequest.CorrelationId, session.SegmentId, reading,
                         session.LatestRequest.TargetSeconds });
                 }
+                session.ReadProgress.SetReading(reading);
                 session.IsPaused = !reading;
                 owner.PulseStreamState();
                 if (!reading)
@@ -522,7 +536,20 @@ public sealed partial class PreviewController
                     ? segment.Clock.ToInputSeconds(segment.Frames[^1], segment.Frames.Count - 1, session.LatestRequest.Fps)
                     : double.NegativeInfinity;
                 double demand = session.IsForwardPrefetch ? session.InitialRequest.TargetSeconds : session.LatestRequest.TargetSeconds;
-                bool needs = !trusted || last < demand + 2;
+                var readBudget = PreviewForwardReadBudget.Evaluate(segment, demand, last, owner._cache.CapacityBytes);
+                bool needs = !trusted || readBudget.NeedsRead;
+                // 読取を止める理由の遷移だけ記録し、frameごとのログを増やさない。
+                if (needs) _lastBudgetStopReason = null;
+                else if (_lastBudgetStopReason != readBudget.Reason)
+                {
+                    _lastBudgetStopReason = readBudget.Reason;
+                    if (PerfTrace.Enabled) PerfTrace.Write("core.stream.read_ahead_budget", new
+                    {
+                        session.SegmentId, session.PhysicalRequest.CorrelationId, demand, last,
+                        aheadBytes = readBudget.AheadBytes, aheadFrames = readBudget.AheadFrames,
+                        capacity = owner._cache.CapacityBytes, byteLimit = readBudget.ByteLimit, reason = readBudget.Reason,
+                    });
+                }
                 // 暖機境界とVFRの位相が重なると、安全な候補がないまま先読みに到達する。永久pauseにしない。
                 if (!session.IsForwardPrefetch && !needs && segment != null && FrameSelector.Select(segment, session.LatestRequest.TargetSeconds, session.LatestRequest.Fps) < 0)
                     throw new InvalidOperationException(CoreText.FrameUnavailable);
@@ -567,12 +594,25 @@ public sealed partial class PreviewController
                     var clock = ClockFor(session.PhysicalRequest, frame);
                     if (!clock.TrustedAbsolute) { RequestReplay("要求先頭のabsolute時刻が入力原点と一致しません"); return; }
                     owner._cache.SetClock(session.SegmentId, clock);
+                    _observedClock = clock;
                 }
                 if (_timestampGuard.IsInvalid(frame)) { RequestReplay(_timestampGuard.Reason); return; }
                 owner.RememberOutputFrame(session.PhysicalRequest, frame);
                 if (!owner._cache.Append(session.SegmentId, frame))
                     throw new InvalidOperationException(CoreText.ReadAheadCacheFull);
                 session.LastFrameBytes = frame.Data.LongLength;
+                if (_observedClock is { TrustedAbsolute: true } observedClock && frame.Xts is double actualTimestamp && double.IsFinite(actualTimestamp))
+                {
+                    double input = observedClock.ToInputSeconds(frame, 0, session.PhysicalRequest.Fps);
+                    session.ReadProgress.Observe(owner._clock, input);
+                    if (!session.BackendFirstObserved && session.ObservationBackend != null)
+                    {
+                        session.BackendFirstObserved = true;
+                        // Coreの実行準備後から計測するが、backend内部のgate/probe待ちは含む。
+                        owner._forwardStartups.Remember(session.ObservationBackend, session.PhysicalRequest, frame.Header,
+                            owner._clock.GetTimestamp(), owner._clock.GetElapsedTime(session.BackendCallStarted).TotalSeconds);
+                    }
+                }
                 if (firstFrame && !session.IsForwardPrefetch && !session.Satisfied
                     && PreviewWindowShortfall.FromSegment(session.LatestRequest, owner._cache.GetSegment(session.SegmentId)) is { MissingHead: true } shortage)
                 {

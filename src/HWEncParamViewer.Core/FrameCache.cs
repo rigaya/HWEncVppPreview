@@ -23,6 +23,13 @@ public sealed partial class FrameCache
     private readonly Dictionary<long, PreviewRequest> _pendingSources = new();
     private long _nextPendingId;
 
+    // 未到達の順先読み需要だけに、中心元との既照合direct接続を要求する。
+    internal bool AreDirectlyConnected(long segmentId, long peerId)
+    {
+        lock (_gate) return _segments.TryGetValue(segmentId, out var segment)
+            && _segments.TryGetValue(peerId, out var peer) && DirectlyConnected(segment, peer);
+    }
+
     public long CapacityBytes => _capacityBytes;
 
     public FrameCache(long capacityBytes = 1L << 30)
@@ -295,11 +302,18 @@ public sealed partial class FrameCache
 
     /// <summary>成功した有限区間を範囲検索へ保存する。</summary>
     public PreviewSegmentSnapshot? StoreSegment(PreviewRequest request, IReadOnlyList<Y4mFrame> frames,
-        PreviewClockMap clock, double safeStartSeconds, double safeEndSeconds, bool reachedInputEnd = false, bool reverseWindow = false, double? firstOutputInputSeconds = null)
+        PreviewClockMap clock, double safeStartSeconds, double safeEndSeconds, bool reachedInputEnd = false, bool reverseWindow = false, double? firstOutputInputSeconds = null, bool pinCurrent = false)
     {
         long bytes = frames.Sum(x => x.Data.LongLength);
         lock (_gate)
         {
+            // 前景の旧pin解除から新pinまでを同じgateで行い、背景保存の割込みで新Afterを失わないようにする。
+            // 保存失敗時は従来の前景経路と同じく旧pinを戻さず、activeの保護は独立して維持する。
+            if (pinCurrent)
+            {
+                _currentSegmentId = null;
+                _currentSeconds = request.TargetSeconds;
+            }
             long id = ++_nextSegmentId;
             // 暖機pixelを保持しない窓でも、実際に受信した元の先頭時刻で従来と同じ安全判定を行う。
             double start = firstOutputInputSeconds is double first && double.IsFinite(first)
@@ -309,8 +323,11 @@ public sealed partial class FrameCache
             entry.Frames.AddRange(frames);
             // 容量不足で保存できない場合も、残る旧区間との整合を先に確認する。
             ValidateOverlap(entry, closed: true);
-            // 逆先読みは要求時に未来tailを回収済み。競合で空きが減ったときはbridgeを削らず保存を拒否する。
-            if (reverseWindow ? bytes > _capacityBytes - _sizeBytes : !MakeRoom(bytes, null))
+            // 逆先読みも古いclosed区間を通常の使用順で回収する。bridgeは削らず、
+            // 競合したactive等しか残らない場合は保存を拒否する。currentのprefixもここでは削らない。
+            var reverseProtection = reverseWindow
+                ? ReverseProtectedSegments(request, request.TargetSeconds, request.TargetSeconds) : null;
+            if (reverseWindow && reverseProtection == null || !MakeRoom(bytes, null, reverseProtection, trimCurrent: !reverseWindow))
             {
                 // 比較による診断と、容量不足で実区間を保存できない結果を区別する。
                 if (PerfTrace.Enabled) PerfTrace.Write("cache.store_rejected", new { entry.Id, request.CorrelationId,
@@ -322,7 +339,9 @@ public sealed partial class FrameCache
             _segments.Add(id, entry);
             _sizeBytes += bytes;
             ValidateAfterChange(entry, closed: true);
-            return _segments.ContainsKey(id) ? Snapshot(entry) : null;
+            if (!_segments.ContainsKey(id)) return null;
+            if (pinCurrent) _currentSegmentId = id;
+            return Snapshot(entry);
         }
     }
 
@@ -456,13 +475,16 @@ public sealed partial class FrameCache
     }
 
     // 固定秒数では削らず、容量不足時だけ非保護区間、続いて表示位置より古いprefixを回収する。
-    private bool MakeRoom(long bytes, long? appendingSegment)
+    private bool MakeRoom(long bytes, long? appendingSegment, HashSet<long>? protectedSegments = null, bool trimCurrent = true)
     {
         if (bytes < 0 || bytes > _capacityBytes || _capacityBytes == 0) return false;
         while (_sizeBytes > _capacityBytes - bytes)
         {
-            if (EvictOne(appendingSegment)) continue;
+            if (EvictOne(appendingSegment, protectedSegments)) continue;
+            if (!trimCurrent) return false;
             // pinはentryを保護する。メモリ不足時だけ、選択中の1枚を残して古いprefixをさらに縮める。
+            // 既照合peerの過去prefixは表示移動に従い回収し、共通raw点数を永久固定しない。
+            // 未来tailも切るreverse計画では、接続を維持する共通点を別途残す。
             bool removed = false;
             foreach (var entry in _segments.Values)
             {
@@ -479,10 +501,17 @@ public sealed partial class FrameCache
         return true;
     }
 
-    private bool EvictOne(long? protectedSegment = null)
+    // 見積もりと実際の回収で同じ候補を使い、回収できない区間を空きとして数えない。
+    private IEnumerable<SegmentEntry> EvictableSegments(long? protectedSegment = null, HashSet<long>? protectedSegments = null)
     {
-        var segment = _segments.Values.Where(x => x.Id != protectedSegment && x.Id != _currentSegmentId && !_activeSegments.Contains(x.Id))
-            .OrderBy(x => x.LastUse).FirstOrDefault();
+        var directPeers = CurrentDirectPeerIds();
+        return _segments.Values.Where(x => x.Id != protectedSegment && x.Id != _currentSegmentId
+            && !_activeSegments.Contains(x.Id) && !directPeers.Contains(x.Id) && !(protectedSegments?.Contains(x.Id) ?? false));
+    }
+
+    private bool EvictOne(long? protectedSegment = null, HashSet<long>? protectedSegments = null)
+    {
+        var segment = EvictableSegments(protectedSegment, protectedSegments).OrderBy(x => x.LastUse).FirstOrDefault();
         var legacy = _lru.Last;
         if (legacy != null && (segment == null || legacy.Value.LastUse <= segment.LastUse))
         {
