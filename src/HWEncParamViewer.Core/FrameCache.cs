@@ -6,7 +6,7 @@
 /// 画像の二重保持を避けるため、Y4mFrameとDataは共有する。保存後および取得結果のDataは変更しないこと。
 /// ヘッダとコレクションの管理領域は容量に含めない。各操作は複数スレッドから呼び出せる。
 /// </remarks>
-public sealed class FrameCache
+public sealed partial class FrameCache
 {
     private readonly object _gate = new();
     private readonly long _capacityBytes;
@@ -295,18 +295,22 @@ public sealed class FrameCache
 
     /// <summary>成功した有限区間を範囲検索へ保存する。</summary>
     public PreviewSegmentSnapshot? StoreSegment(PreviewRequest request, IReadOnlyList<Y4mFrame> frames,
-        PreviewClockMap clock, double safeStartSeconds, double safeEndSeconds, bool reachedInputEnd = false)
+        PreviewClockMap clock, double safeStartSeconds, double safeEndSeconds, bool reachedInputEnd = false, bool reverseWindow = false, double? firstOutputInputSeconds = null)
     {
         long bytes = frames.Sum(x => x.Data.LongLength);
         lock (_gate)
         {
             long id = ++_nextSegmentId;
-            var entry = new SegmentEntry(id, request, clock, SafeStartIncludingFirst(safeStartSeconds, clock, frames.FirstOrDefault(), request.Fps))
+            // 暖機pixelを保持しない窓でも、実際に受信した元の先頭時刻で従来と同じ安全判定を行う。
+            double start = firstOutputInputSeconds is double first && double.IsFinite(first)
+                ? Math.Max(safeStartSeconds, first) : SafeStartIncludingFirst(safeStartSeconds, clock, frames.FirstOrDefault(), request.Fps);
+            var entry = new SegmentEntry(id, request, clock, start)
             { SafeEnd = safeEndSeconds, Bytes = bytes, ReachedInputEnd = reachedInputEnd, LastUse = ++_useSequence };
             entry.Frames.AddRange(frames);
             // 容量不足で保存できない場合も、残る旧区間との整合を先に確認する。
             ValidateOverlap(entry, closed: true);
-            if (!MakeRoom(bytes, null))
+            // 逆先読みは要求時に未来tailを回収済み。競合で空きが減ったときはbridgeを削らず保存を拒否する。
+            if (reverseWindow ? bytes > _capacityBytes - _sizeBytes : !MakeRoom(bytes, null))
             {
                 // 比較による診断と、容量不足で実区間を保存できない結果を区別する。
                 if (PerfTrace.Enabled) PerfTrace.Write("cache.store_rejected", new { entry.Id, request.CorrelationId,

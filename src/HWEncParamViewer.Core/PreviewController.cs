@@ -48,6 +48,7 @@ public sealed partial class PreviewController : IAsyncDisposable
     /// <summary>終了期限までに回収できない処理が残った場合はtrue。子プロセス回収完了を意味しない。</summary>
     public bool ShutdownIncomplete => Volatile.Read(ref _shutdownIncomplete) != 0;
     private readonly FrameCache _cache;
+    private readonly PreviewFiniteBudget _finiteBudget = new();
     private readonly IPreviewBackend _preferred;
     private readonly IPreviewBackend _fallback;
     private readonly bool _enableFallback;
@@ -258,7 +259,8 @@ public sealed partial class PreviewController : IAsyncDisposable
                 InputArgs = request.InputArgs.Where(argument => !argument.Equals("--timestamp-passthrough", StringComparison.OrdinalIgnoreCase)).ToArray(),
                 VppArgs = request.VppArgs.Where(argument => !argument.Equals("--timestamp-passthrough", StringComparison.OrdinalIgnoreCase)).ToArray(),
             };
-        return request.RecoveryPhysicalWindow ?? PreviewWarmupPolicy.PreparePhysical(request, background);
+        var physical = request.RecoveryPhysicalWindow ?? PreviewWarmupPolicy.PreparePhysical(request, background);
+        return WithOutputStartHint(request, LimitReverseWindow(request, physical, background));
     }
 
     private bool CanStartBackgroundCore() => _foregroundPending == 0 && (_stream == null || _stream.IsPaused);
@@ -301,6 +303,7 @@ public sealed partial class PreviewController : IAsyncDisposable
         long backendStart = 0;
         long pendingSource = 0;
         CancellationTokenSource? active = null;
+        using var finiteWindow = _finiteBudget.Open(_cache.CapacityBytes, request.RetainedByteLimit);
         bool IsCurrent() => prefetch != null
             ? !_disposed && !scheduled.IsCancellationRequested && ReferenceEquals(_reversePrefetch, prefetch)
             : IsRequestedCurrent(version, background, editVersion);
@@ -398,7 +401,10 @@ public sealed partial class PreviewController : IAsyncDisposable
             physicalRequest = PhysicalAfterRequest(request with { DependsOnHistory = history, RecoveryPhysicalWindow = recoveryPhysicalWindow }, background) with { Continuous = false };
             physicalKey = physicalRequest with
             { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
-            sink = new SelectionSink(request, emit, background, physicalRequest);
+            finiteWindow.Reset();
+            sink = new SelectionSink(request, emit, background, physicalRequest, finiteWindow);
+            sink.HeaderObserved = header => RememberOutputHeader(request, header);
+            sink.FrameObserved = frame => RememberOutputFrame(request, frame);
             PreviewRunResult result;
             using var progress = new OutputWatchdog(_clock, _watchdog);
             sink.Progress = progress.Touch;
@@ -458,6 +464,25 @@ public sealed partial class PreviewController : IAsyncDisposable
                 }
                 sink.Finish();
                 var shortfall = PreviewWindowShortfall.FromSegment(request, sink.Segment);
+                if (shortfall is { MissingHead: true } && result.OutputStartApplied && !physicalRequest.DisableOutputStart)
+                {
+                    // 未知のVFRの隙間では、Sを動かす前に転送の省略だけを外して旧窓を正確に再現する。
+                    if (PerfTrace.Enabled) PerfTrace.Write("core.output_start_replay", new {request.CorrelationId, seek=CommandBuilder.Plan(physicalRequest).SeekSeconds});
+                    isReplay = true;
+                    Publish(() => ReplayStarted?.Invoke(request), currentOnly: true);
+                    physicalRequest = physicalRequest with { DisableOutputStart = true };
+                    physicalKey = physicalRequest with { Capabilities=request.Capabilities, InputArgs=request.InputArgs, VppArgs=request.VppArgs };
+                    finiteWindow.Reset();
+                    sink = new SelectionSink(request, emit, background, physicalRequest, finiteWindow)
+                    {
+                        HeaderObserved = header => RememberOutputHeader(request, header),
+                        FrameObserved = frame => RememberOutputFrame(request, frame),
+                        Progress = progress.Touch,
+                        ReplayRequired = reason => { MarkLegacySource(request, reason); active.Cancel(); },
+                        ReadState = reading => { if (reading) progress.Resume(); else progress.Suspend(); },
+                    };
+                    continue;
+                }
                 if (shortfall != null && prefetch == null)
                 {
                     bool madeProgress = previousShortfall == null
@@ -475,8 +500,11 @@ public sealed partial class PreviewController : IAsyncDisposable
                         physicalRequest = PhysicalAfterRequest(expanded, background) with { Continuous = false };
                         physicalKey = physicalRequest with
                         { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
-                        sink = new SelectionSink(request, emit, background, physicalRequest)
+                        finiteWindow.Reset();
+                        sink = new SelectionSink(request, emit, background, physicalRequest, finiteWindow)
                         {
+                            HeaderObserved = header => RememberOutputHeader(request, header),
+                            FrameObserved = frame => RememberOutputFrame(request, frame),
                             Progress = progress.Touch,
                             ReplayRequired = reason => { MarkLegacySource(request, reason); active.Cancel(); },
                             ReadState = reading => { if (reading) progress.Resume(); else progress.Suspend(); },
@@ -495,11 +523,21 @@ public sealed partial class PreviewController : IAsyncDisposable
             }
             if (sink.Segment is { Clock.TrustedAbsolute: true } segment)
             {
+                if (!background && prefetch == null) _cache.PinCurrent(null, request.TargetSeconds);
                 var stored = _cache.StoreSegment(segment.PhysicalRequest, sink.Frames, segment.Clock, segment.SafeStartSeconds,
-                    segment.SafeEndSeconds, segment.ReachedInputEnd);
+                    segment.SafeEndSeconds, segment.ReachedInputEnd, prefetch != null, sink.FirstOutputInputSeconds);
                 if (stored != null) { sink.Segment = stored; if (!background && prefetch == null) _cache.PinCurrent(stored.SegmentId, request.TargetSeconds); }
+                else if (_cache.CapacityBytes > 0) sink.KeepSelectionOnly();
             }
-            else _cache.Store(physicalKey, sink.Frames, physicalRequest);
+            else
+            {
+                // 時刻なし列でprefixを捨てた結果は、legacyの相対番号だけのcacheへ戻さない。
+                if (sink.Segment?.Clock.FrameIndexOffset is not > 0 || sink.Frames.Any(frame => frame.Xts.HasValue))
+                    _cache.Store(physicalKey, sink.Frames, physicalRequest);
+                if (_cache.CapacityBytes > 0 && !_cache.TryGet(physicalKey, out _)) sink.KeepSelectionOnly();
+            }
+            if (sink.RetentionLimited)
+                result = result with { StandardError = result.StandardError + "\n[preview] Raw retention window limited by byte budget.\n" };
             if (prefetch != null) prefetch.Segment = sink.Segment;
             _cache.EndPendingSource(pendingSource); pendingSource = 0;
             if (PerfTrace.Enabled) PerfTrace.Write("core.cache_store", new { request.CorrelationId, version,
@@ -517,8 +555,11 @@ public sealed partial class PreviewController : IAsyncDisposable
                     physicalRequest = PhysicalAfterRequest(request with { DependsOnHistory = null, RecoveryPhysicalWindow = recoveryAttempt > 0 || recoveryPhysicalWindow != null ? physicalRequest : null }, background) with { Continuous = false };
                     physicalKey = physicalRequest with
                     { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
-                    sink = new SelectionSink(request, emit, background, physicalRequest)
+                    finiteWindow.Reset();
+                    sink = new SelectionSink(request, emit, background, physicalRequest, finiteWindow)
                     {
+                        HeaderObserved = header => RememberOutputHeader(request, header),
+                        FrameObserved = frame => RememberOutputFrame(request, frame),
                         Progress = progress.Touch,
                         ReplayRequired = reason => { MarkLegacySource(request, reason); active.Cancel(); },
                         ReadState = reading => { if (reading) progress.Resume(); else progress.Suspend(); },
@@ -712,7 +753,7 @@ public sealed partial class PreviewController : IAsyncDisposable
         _backgroundExecution.Dispose();
     }
 
-    private sealed class SelectionSink(PreviewRequest request, Action<PreviewFrameResult> emit, bool background = false, PreviewRequest? physicalRequest = null) : IPreviewSink
+    private sealed class SelectionSink(PreviewRequest request, Action<PreviewFrameResult> emit, bool background = false, PreviewRequest? physicalRequest = null, PreviewFiniteBudget.Window? budget = null) : IPreviewSink
     {
         private readonly PreviewRequest _physicalRequest = physicalRequest ?? request;
         private readonly PreviewTimestampGuard _timestampGuard = new(request.Fps);
@@ -729,15 +770,25 @@ public sealed partial class PreviewController : IAsyncDisposable
         private bool _confirmed;
         private bool _hasTimestamp;
         public List<Y4mFrame> Frames { get; } = new();
+        private int _receivedFrames;
+        private double _receivedEnd = double.NegativeInfinity;
+        private bool _guardMetadataOnly;
+        private double? _firstOutputInputSeconds;
+        private bool _discardedRetainedPrefix;
+        public bool RetentionLimited { get; private set; }
+        public double? FirstOutputInputSeconds => _firstOutputInputSeconds;
         public long ReceivedBytes { get; private set; }
         public Action? Progress { get; set; }
         public bool TargetNotReached { get; private set; }
         public bool HasSelection => _confirmed;
         public void OnOutput() => Progress?.Invoke();
-        public void OnHeader(Y4mHeader header) { }
+        public Action<Y4mHeader>? HeaderObserved { get; set; }
+        public Action<Y4mFrame>? FrameObserved { get; set; }
+        public void OnHeader(Y4mHeader header) => HeaderObserved?.Invoke(header);
         public void OnFrame(Y4mFrame frame)
         {
-            int index = Frames.Count;
+            int index = _receivedFrames;
+            if (index == 0) HeaderObserved?.Invoke(frame.Header);
             if (_physicalRequest.Capabilities.TimestampPassthrough)
             {
                 string? reason = index == 0 && !ClockFor(_physicalRequest, frame).TrustedAbsolute
@@ -745,32 +796,113 @@ public sealed partial class PreviewController : IAsyncDisposable
                 if (reason == null && _timestampGuard.IsInvalid(frame)) reason = _timestampGuard.Reason;
                 if (reason != null) { NeedsLegacyReplay = true; ReplayRequired?.Invoke(reason); return; }
             }
+            FrameObserved?.Invoke(frame);
             if (PerfTrace.Enabled)
             {
                 ReceivedBytes += frame.Data.LongLength;
                 if (index == 0) PerfTrace.Write("core.first_frame", new { request.CorrelationId, frame.Xts,
                     bytes = frame.Data.LongLength, frame.Header.Width, frame.Header.Height });
             }
-            Frames.Add(frame);
+            ++_receivedFrames;
             if (index == 0)
             {
                 _clock = ClockFor(_physicalRequest, frame);
                 _target = _clock.ToFrameSeconds(request.TargetSeconds);
+                // 暖機のpixelは解放しても、実際に届いた元の先頭時刻という安全判定の根拠は残す。
+                double firstInput = _clock.ToInputSeconds(frame, 0, request.Fps);
+                _firstOutputInputSeconds = double.IsFinite(firstInput) ? firstInput : null;
+                var plan = CommandBuilder.Plan(_physicalRequest);
+                double warmup = plan.SeekSeconds > 0 ? _physicalRequest.WarmupSeconds : 0;
+                double retainedSeconds = Math.Max(0, plan.ActualPreMargin + _physicalRequest.PostMarginSeconds - warmup);
+                _guardMetadataOnly = budget != null
+                    && (Math.Ceiling(retainedSeconds * FrameSelector.FrameRate(frame, request.Fps)) + 2) * frame.Data.LongLength > budget.CapacityBytes;
+            }
+            bool timed = frame.Xts is double;
+            // 全列欠落と判明する前のfps仮候補は、最初のXtsが現れた時点で無効にする。
+            if (timed && !_hasTimestamp) { _candidate = -1; _candidateTime = double.NegativeInfinity; }
+            double tolerance = FrameSelector.Duration(frame, request.Fps) / 2.0;
+            bool replacesCandidate = frame.Xts is double timestamp
+                ? timestamp <= _target + tolerance && timestamp > _candidateTime
+                : !_hasTimestamp && index <= Math.Floor(_target * FrameSelector.FrameRate(frame, request.Fps) + 0.5 + 1e-9);
+            // 正しさのため処理した暖機は表示可能域へ含めず、pixelの参照も持ち続けない。
+            double inputSeconds = _clock.ToInputSeconds(frame, index - _clock.FrameIndexOffset, request.Fps);
+            _receivedEnd = inputSeconds + FrameSelector.Duration(frame, request.Fps);
+            if (timed) _hasTimestamp = true;
+            if (frame.Xts is double observedTime) _lastTime = Math.Max(_lastTime, observedTime);
+            if (budget != null && _clock.TrustedAbsolute && !background
+                && PreviewSafeRange.IsAfter(PreviewWarmupPolicy.SafeStartSeconds(_physicalRequest, background), inputSeconds))
+            {
+                _clock = _clock with { FrameIndexOffset = _clock.FrameIndexOffset + 1 };
+                return;
+            }
+            // guardは末尾時刻の証拠だけでよい。表示・照合用の窓より後のpixelを保持しない。
+            bool guarded = !background && _physicalRequest.Capabilities.TimestampPassthrough && request.TimestampOriginSeconds.HasValue;
+            double retainedEnd = request.TargetSeconds + _physicalRequest.PostMarginSeconds - (guarded ? PreviewByteWindow.TailGuardSeconds : 0);
+            if (_guardMetadataOnly && budget != null && guarded && Frames.Count > 0 && !replacesCandidate && inputSeconds > retainedEnd + tolerance)
+            {
+                UpdateSegment(false);
+                TryConfirm(frame, tolerance);
+                return;
+            }
+            if (budget != null)
+            {
+                while (!budget.TryAdd(frame.Data.LongLength))
+                {
+                    // 候補より古いprefixだけを解放する。候補とguardが収まらなければ成功扱いにはしない。
+                    if (Frames.Count == 0 || !replacesCandidate && _candidate <= 0)
+                        throw new InvalidOperationException("The preview raw byte budget cannot retain the selected frame and its tail guard.");
+                    budget.Remove(Frames[0].Data.LongLength);
+                    Frames.RemoveAt(0);
+                    _discardedRetainedPrefix = true;
+                    --_candidate;
+                    _clock = _clock with { FrameIndexOffset = _clock.FrameIndexOffset + 1 };
+                    MarkLimited();
+                }
+            }
+            Frames.Add(frame);
+            if (timed) _hasTimestamp = true;
+            if (frame.Xts is double ts) _lastTime = Math.Max(_lastTime, ts);
+            if (replacesCandidate)
+            {
+                _candidate = Frames.Count - 1;
+                if (frame.Xts is double candidateTime) _candidateTime = candidateTime;
             }
             UpdateSegment(false);
-            // 一部だけ時刻が欠ける場合、V1と同じく欠落フレームを選択対象にしない。
-            if (frame.Xts is not double ts) return;
-            _hasTimestamp = true;
-            double tolerance = FrameSelector.Duration(frame, request.Fps) / 2.0;
-            _lastTime = Math.Max(_lastTime, ts);
-            if (ts <= _target + tolerance && ts > _candidateTime)
-            {
-                _candidate = index;
-                _candidateTime = ts;
-            }
-            else if (ts > _target + tolerance && _candidate >= 0
+            TryConfirm(frame, tolerance);
+        }
+        private void TryConfirm(Y4mFrame frame, double tolerance)
+        {
+            // 全列が時刻なしだった場合だけFinishでfpsへ戻す。
+            if (frame.Xts is double observed && observed > _target + tolerance && _candidate >= 0
                 && (background || !request.Capabilities.TimestampPassthrough || Segment!.SafeEndSeconds >= request.TargetSeconds - tolerance)) Confirm(false);
         }
+        private void MarkLimited()
+        {
+            if (RetentionLimited) return;
+            RetentionLimited = true;
+            if (PerfTrace.Enabled) PerfTrace.Write("core.retention_limited", new { request.CorrelationId,
+                capacityBytes = budget?.CapacityBytes, reason = "rolling_prefix" });
+        }
+        public void KeepSelectionOnly()
+        {
+            if (_candidate < 0 || Segment == null) return;
+            // 保存できなかった窓は、候補と直前直後だけを通知する。guardの根拠は受信済みの安全域を使う。
+            int first = Math.Max(0, _candidate - 1);
+            int count = Math.Min(Frames.Count - first, 3);
+            if (first == 0 && count == Frames.Count) return;
+            var retained = Frames.Skip(first).Take(count).ToArray();
+            long removed = Frames.Sum(f => f.Data.LongLength) - retained.Sum(f => f.Data.LongLength);
+            budget?.Remove(removed);
+            Frames.Clear(); Frames.AddRange(retained);
+            _candidate -= first;
+            _clock = _clock with { FrameIndexOffset = _clock.FrameIndexOffset + first };
+            Segment = Segment with { Frames = Array.AsReadOnly(retained), Clock = _clock,
+                SafeStartSeconds = Math.Max(Segment.SafeStartSeconds, _clock.ToInputSeconds(retained[0], 0, request.Fps)),
+                SafeEndSeconds = Math.Min(Segment.SafeEndSeconds,
+                    _clock.ToInputSeconds(retained[^1], count - 1, request.Fps) + FrameSelector.Duration(retained[^1], request.Fps)) };
+            MarkLimited();
+        }
+
         public void Finish()
         {
             if (Frames.Count == 0) return;
@@ -779,8 +911,7 @@ public sealed partial class PreviewController : IAsyncDisposable
             {
                 var plan = CommandBuilder.Plan(_physicalRequest);
                 double plannedEnd = (plan.SeekSeconds ?? 0) + plan.FrameCount / request.Fps;
-                double receivedEnd = _clock.ToInputSeconds(Frames[^1], Frames.Count - 1, request.Fps)
-                    + FrameSelector.Duration(Frames[^1], request.Fps);
+                double receivedEnd = _receivedEnd;
                 // 出力枚数は間引きで変わるためEOF根拠にはしない。既知の入力長と受信した末尾を照合する。
                 double endTolerance = Math.Max(0.02, FrameSelector.Duration(Frames[^1], request.Fps) / 2);
                 naturalEnd = plannedEnd >= duration - endTolerance && receivedEnd >= duration - endTolerance;
@@ -790,8 +921,8 @@ public sealed partial class PreviewController : IAsyncDisposable
             if (!_hasTimestamp)
             {
                 // 全フレームが時刻なしと判明するのは終端なので、fpsによる代替選択はここで行う。
-                _candidate = FrameSelector.Select(Frames, _target, request.Fps);
-                _lastTime = (Frames.Count - 1) / FrameSelector.FrameRate(Frames[^1], request.Fps);
+                _candidate = FrameSelector.Select(Frames, _target - _clock.FrameIndexOffset / FrameSelector.FrameRate(Frames[0], request.Fps), request.Fps);
+                _lastTime = (_receivedFrames - 1) / FrameSelector.FrameRate(Frames[^1], request.Fps);
             }
             var lastTimed = Frames.LastOrDefault(f => f.Xts.HasValue) ?? Frames[^1];
             double tolerance = FrameSelector.Duration(lastTimed, request.Fps) / 2.0;
@@ -804,11 +935,12 @@ public sealed partial class PreviewController : IAsyncDisposable
         private void UpdateSegment(bool reachedEnd)
         {
             if (Frames.Count == 0) return;
-            double start = FrameCache.SafeStartIncludingFirst(PreviewWarmupPolicy.SafeStartSeconds(_physicalRequest, background),
-                _clock, Frames[0], request.Fps);
+            double start = PreviewWarmupPolicy.SafeStartSeconds(_physicalRequest, background);
+            if (_firstOutputInputSeconds is double first) start = Math.Max(start, first);
+            if (_discardedRetainedPrefix) start = Math.Max(start, _clock.ToInputSeconds(Frames[0], 0, request.Fps));
             bool guarded = !background && _physicalRequest.Capabilities.TimestampPassthrough && request.TimestampOriginSeconds.HasValue;
-            double end = _clock.ToInputSeconds(Frames[^1], Frames.Count - 1, request.Fps) + FrameSelector.Duration(Frames[^1], request.Fps);
-            if (guarded && !reachedEnd) end -= 0.5;
+            double retainedEnd = _clock.ToInputSeconds(Frames[^1], Frames.Count - 1, request.Fps) + FrameSelector.Duration(Frames[^1], request.Fps);
+            double end = Math.Min(retainedEnd, _receivedEnd - (guarded && !reachedEnd ? PreviewByteWindow.TailGuardSeconds : 0));
             // 有限要求の早期画像は画素照合前なので、完了後にcacheが検証するまでは他区間と混ぜない。
             Segment = new(0, _physicalRequest, _clock, Array.AsReadOnly(Frames.ToArray()), start, end, false, reachedEnd)
                 { CanStitch = false };
@@ -826,7 +958,9 @@ public sealed partial class PreviewController : IAsyncDisposable
             }
             _confirmed = true;
             TargetNotReached = notReached;
-            emit(new(request, Frames[_candidate], notReached) { Segment = Segment });
+            // 早期画像のUI待ちで区間全体を固定しない。完了時の区間は別途通知する。
+            var anchor = Segment == null ? null : new PreviewFrameReference(Segment, _candidate).RetainFrameOnly();
+            emit(new(request, Frames[_candidate], notReached) { Segment = anchor?.Segment });
         }
     }
 

@@ -10,6 +10,7 @@ public sealed partial class MainWindowViewModel
     private long _editEpoch, _lastQueuedAfter, _lastDisplayedAfter, _lastCompletedAfter, _lastFailedAfter;
     private long _lastQueuedRevision, _lastDisplayedRevision;
     private bool _latestIntentNavigation;
+    private enum NavigationOperation { Seek, Page, Frame }
     private long _concurrentComparisonGeneration;
     private string _completedAfterStatus = AppMessages.Done;
     private ImageWork? _pendingAfterImage, _pendingBeforeImage;
@@ -19,6 +20,7 @@ public sealed partial class MainWindowViewModel
     private long BeginIntent(bool navigation)
     {
         long generation = Interlocked.Increment(ref _generation);
+        ReleaseObsoleteRequestSnapshots(generation);
         _latestIntentNavigation = navigation;
         _pendingNeighbor = null;
         _reversePrefetchWait = null;
@@ -39,11 +41,15 @@ public sealed partial class MainWindowViewModel
         Volatile.Write(ref _context, context);
     }
 
-    private Task QueuePreview(bool bypassCache = false, bool navigation = false, int neighborDirection = 0, bool requirePhysicalRefetch = false, bool bypassDebounce = false, bool allowConcurrentBefore = false)
+    private Task QueuePreview(bool bypassCache = false, bool navigation = false, int neighborDirection = 0, bool requirePhysicalRefetch = false, bool bypassDebounce = false, bool allowConcurrentBefore = false, NavigationOperation operation = NavigationOperation.Seek)
     {
         if (!_initialized || _suspendChanges || _disposed) return Task.CompletedTask;
         CancelInputEdit();
-        bool reverse = navigation && (neighborDirection < 0 || CurrentSeconds < _lastIntentTarget - 1e-8);
+        // シークは向きにかかわらず目標を早く確定する。逆の広い窓はコマ移動と接続範囲内の秒移動だけ。
+        if (neighborDirection != 0) operation = NavigationOperation.Frame;
+        bool reverse = navigation && (operation == NavigationOperation.Frame && neighborDirection < 0
+            || operation == NavigationOperation.Page && CurrentSeconds < _lastIntentTarget - 1e-8
+                && IsConnectedNavigationTarget(CurrentSeconds, _lastIntentTarget));
         _lastIntentTarget = CurrentSeconds;
         _latestIntentReverse = reverse;
         long generation = BeginIntent(navigation);
@@ -125,6 +131,9 @@ public sealed partial class MainWindowViewModel
                         EncoderPath = encoder, InputFile = input, InputArgs = inputArgs, VppArgs = vpp,
                         AllowConcurrentBackground = _concurrentComparisonGeneration == actualGeneration,
                         Fps = info.Fps, TargetSeconds = target, CorrelationId = actualGeneration,
+                        InputFormatHint = new Y4mHeader { Width = info.Width, Height = info.Height,
+                            FpsNum = info.FpsNum, FpsDen = info.FpsDen, Chroma = info.Chroma,
+                            BitDepth = info.BitDepth, ColorSpaceTag = info.ColorSpaceTag },
                         // 計測時だけ後マージンを切り替え、通常の要求値は維持する。
                         PostMarginSeconds = capabilities.TimestampPassthrough && info.TimestampOriginSeconds.HasValue
                             ? actualReverse ? 0.5 : BenchmarkPostMargin() + 0.5 : BenchmarkPostMargin(),
@@ -151,6 +160,7 @@ public sealed partial class MainWindowViewModel
                     // 隣不足では旧cache hitを避ける。正方向だけ、生存中の同じ物理streamへ合流を明示する。
                     bool reuseNeighbor = requirePhysicalRefetch && !bypassCache && actualNavigation && !actualReverse
                         && neighbor is { Direction: > 0 } && request.Continuous;
+                    ReleaseIntervalSnapshotsForSubmission();
                     _controller.Submit(request, bypassCache || requirePhysicalRefetch, navigation: actualNavigation,
                         reuseActiveStream: reuseNeighbor, bypassDebounce: bypassDebounce);
                     // 無フィルタではAfterの確定frameがそのままBeforeなので、別の有限取得を競合させない。
@@ -407,7 +417,7 @@ public sealed partial class MainWindowViewModel
         else
         {
             var clock = context.Segment?.Clock ?? IntervalClock(request, frames);
-            int index = NeighborAnchorIndex(frames, clock.ToFrameSeconds(request.TargetSeconds), request.Fps);
+            int index = NeighborAnchorIndex(frames, clock.ToSelectionSeconds(request.TargetSeconds, frames, request.Fps), request.Fps);
             int next = index + context.NeighborDirection;
             if (index >= 0 && next >= 0 && next < frames.Count)
             {

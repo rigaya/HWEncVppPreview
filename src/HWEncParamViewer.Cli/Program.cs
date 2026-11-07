@@ -99,13 +99,8 @@ public static class Program
         controller.Failed += value => failure = value;
         controller.Submit(request);
         await controller.WaitForIdleAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
-        // replayで取り直した完了列だけを採用し、初回の異常出力をdumpへ連結しない。
-        if (completion is { Frames.Count: > 0 })
-        {
-            recording.Frames.Clear();
-            recording.Frames.AddRange(completion.Frames);
-            recording.Header = recording.Frames[0].Header;
-        }
+        // RecordingBackendはrun開始ごとに列を消すため、ここには勝った物理runだけが残る。
+        // GUI用の保持窓は暖機やbyte上限で限定されるが、診断dumpは全受信列を維持する。
         var winningSegment = completion?.Segment ?? selected?.Segment;
         var physical = completion?.Segment?.PhysicalRequest ?? recording.PhysicalRequest ?? selected?.Segment?.PhysicalRequest;
         result.TimestampPassthrough = physical?.Capabilities.TimestampPassthrough == true;

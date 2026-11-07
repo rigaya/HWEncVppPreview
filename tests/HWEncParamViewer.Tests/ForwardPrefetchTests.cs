@@ -255,13 +255,15 @@ public sealed class ForwardPrefetchTests
     [Fact]
     public async Task 逆先読みで取消した順先読みは同じ境界で再起動する()
     {
-        var cache = new FrameCache(240); Seed(cache, Request()); var backend = new Backend();
+        // byte窓のための未来tail削減とは分け、同じ境界の取消markerだけを検証する。
+        var cache = new FrameCache(); Seed(cache, Request()); var backend = new Backend(holdAtSeedEnd: true);
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
         controller.Submit(Request()); await controller.WaitForIdleAsync().WaitAsync(Safety);
         controller.NotifyNavigation(Request(11.5), 1);
         await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(Safety);
         await controller.WaitForIdleAsync().WaitAsync(Safety);
-        Assert.Equal(13, cache.GetConnectedSafeRange(Request(11.5))!.Value.End);
+        double boundary = cache.GetConnectedSafeRange(Request(11.5))!.Value.End;
+        Assert.Equal(13, boundary);
         Assert.Single(backend.Requests);
 
         controller.Submit(Request(10.4, 2), navigation: true); controller.NotifyNavigation(Request(10.4, 2), -1);
@@ -269,14 +271,14 @@ public sealed class ForwardPrefetchTests
         var pending = controller.GetPendingReversePrefetch(Request(10.3, 3)); Assert.NotNull(pending);
         await pending!.WaitAsync(Safety); await controller.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Equal(1, backend.Cancelled); Assert.Equal(2, backend.Requests.Count);
-        Assert.Equal(13, cache.GetConnectedSafeRange(Request(11.5))!.Value.End);
+        Assert.Equal(boundary, cache.GetConnectedSafeRange(Request(11.5))!.Value.End);
 
-        controller.NotifyNavigation(Request(11.5, 4), 1);
-        // 再起動した順streamの容量pauseが実際に届くまで待つ。修正前はここでredになる。
+        controller.NotifyNavigation(Request(boundary - 1, 4), 1);
+        // 再起動した順streamの読取pauseが実際に届くまで待つ。修正前はここでredになる。
         await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(Safety);
         await controller.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Equal(3, backend.Requests.Count); Assert.True(backend.Requests.Last().Continuous);
-        Assert.Equal(13, backend.Requests.Last().TargetSeconds); Assert.Equal(1, backend.MaxConcurrent);
+        Assert.Equal(boundary, backend.Requests.Last().TargetSeconds); Assert.Equal(1, backend.MaxConcurrent);
     }
 
     [Theory]
@@ -299,12 +301,14 @@ public sealed class ForwardPrefetchTests
     [Fact]
     public async Task 取消回収中の同境界通知は重複起動せず回収後だけ再起動する()
     {
-        var cache = new FrameCache(240); Seed(cache, Request()); var backend = new Backend(holdCancellation: true);
+        var cache = new FrameCache(); Seed(cache, Request()); var backend = new Backend(holdCancellation: true, holdAtSeedEnd: true);
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
         controller.Submit(Request()); await controller.WaitForIdleAsync().WaitAsync(Safety);
         controller.NotifyNavigation(Request(11.5), 1);
         await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(Safety);
         await controller.WaitForIdleAsync().WaitAsync(Safety);
+        double boundary = cache.GetConnectedSafeRange(Request(11.5))!.Value.End;
+        Assert.Equal(13, boundary);
         Task? pending = null;
         try
         {
@@ -312,13 +316,13 @@ public sealed class ForwardPrefetchTests
             controller.Submit(Request(10.3, 3), navigation: true); controller.NotifyNavigation(Request(10.3, 3), -1);
             pending = controller.GetPendingReversePrefetch(Request(10.3, 3)); Assert.NotNull(pending);
             await backend.CancellationObserved.Task.WaitAsync(Safety);
-            for (int i = 0; i < 3; i++) controller.NotifyNavigation(Request(11.5, 4), 1);
+            for (int i = 0; i < 3; i++) controller.NotifyNavigation(Request(boundary - 1, 4), 1);
             Assert.Single(backend.Requests);
         }
         finally { backend.FinishCancellation.TrySetResult(); }
         await pending!.WaitAsync(Safety); await controller.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Equal(2, backend.Requests.Count);
-        controller.NotifyNavigation(Request(11.5, 5), 1);
+        controller.NotifyNavigation(Request(boundary - 1, 5), 1);
         await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(Safety);
         await controller.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Equal(3, backend.Requests.Count); Assert.Equal(1, backend.MaxConcurrent);
@@ -347,7 +351,7 @@ public sealed class ForwardPrefetchTests
         Assert.Equal(2, backend.Requests.Count); Assert.Equal(1, backend.Cancelled);
     }
 
-    private sealed class Backend(string result = "stream", bool history = false, bool holdCancellation = false) : IPreviewBackend
+    private sealed class Backend(string result = "stream", bool history = false, bool holdCancellation = false, bool holdAtSeedEnd = false) : IPreviewBackend
     {
         public ConcurrentQueue<PreviewRequest> Requests { get; } = new();
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -374,6 +378,12 @@ public sealed class ForwardPrefetchTests
                     if (!permission.IsCompleted) { sink.OnReadStateChanged(false); Pauses.Writer.TryWrite(last); }
                     await permission; sink.OnReadStateChanged(true); token.ThrowIfCancellationRequested();
                     last = seek + i / 10d; sink.OnOutput(); sink.OnFrame(Frame(result == "clock" ? 0 : last));
+                    if (holdAtSeedEnd && request.Continuous && last >= 12.9 - 1e-8)
+                    {
+                        // byte容量とは独立に同じ境界でpauseさせ、取消markerの寿命だけを再現する。
+                        sink.OnReadStateChanged(false); Pauses.Writer.TryWrite(last);
+                        await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(token);
+                    }
                     if (result == "eof" && i >= 30) return new(0, "");
                 }
                 return new(0, "");

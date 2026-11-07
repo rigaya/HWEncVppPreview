@@ -62,7 +62,8 @@ internal static class Program
             string encoder = Environment.GetEnvironmentVariable("FAKE_ENCODER_READY_ENCODER") ?? "fake";
             await WriteLineAsync("RGYPREVIEW READY version=1" + (encoder.Length == 0 ? "" : " encoder=" + encoder)
                 + (Environment.GetEnvironmentVariable("FAKE_ENCODER_PROBE_SUPPORTED") == "1" ? " probe=1" : "")
-                + (Environment.GetEnvironmentVariable("FAKE_ENCODER_WINDOW_SEEK") is string windowSeek ? " window_seek=" + windowSeek : ""));
+                + (Environment.GetEnvironmentVariable("FAKE_ENCODER_WINDOW_SEEK") is string windowSeek ? " window_seek=" + windowSeek : "")
+                + (Environment.GetEnvironmentVariable("FAKE_ENCODER_OUTPUT_START") is string outputStart ? " output_start=" + outputStart : ""));
         }
         var channel = Channel.CreateBounded<Request>(new BoundedChannelOptions(1)
         {

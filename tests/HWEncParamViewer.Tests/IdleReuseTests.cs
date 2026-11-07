@@ -32,8 +32,9 @@ public sealed class IdleReuseTests(ITestOutputHelper output)
         var older = await finite.Task.WaitAsync(SetupTimeout);
         await controller.WaitForIdleAsync().WaitAsync(SetupTimeout);
         Assert.Equal(95, CommandBuilder.Plan(backend.Requests[1]).SeekSeconds);
-        Assert.Equal(1095.3, older.Frames[0].Xts!.Value, 6);
-        Assert.Equal(56, older.Frames.Count);
+        // 暖機のunsafeなpixelは保持しない。旧物理窓のseekとsafe域は維持する。
+        Assert.Equal(1097, older.Frames[0].Xts!.Value, 6);
+        Assert.Equal(39, older.Frames.Count);
         Assert.Equal(97, older.Segment!.SafeStartSeconds);
         Assert.Equal(100.4, older.Segment.SafeEndSeconds, 6);
 

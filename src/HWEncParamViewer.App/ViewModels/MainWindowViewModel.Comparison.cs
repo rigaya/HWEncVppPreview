@@ -409,7 +409,7 @@ public sealed partial class MainWindowViewModel
             return null;
         }
         var clock = _beforeIntervalSegment?.Clock ?? ClockFor(request, frames);
-        double target = clock.ToFrameSeconds(request.TargetSeconds);
+        double target = clock.ToSelectionSeconds(request.TargetSeconds, frames, request.Fps);
         int index = FrameSelector.Select(frames, target, request.Fps);
         var last = frames.LastOrDefault(frame => frame.Xts.HasValue) ?? frames[^1];
         double lastTime = last.Xts ?? (frames.Count - 1) / FrameSelector.FrameRate(last, request.Fps);

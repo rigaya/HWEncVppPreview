@@ -6,7 +6,7 @@ public sealed partial class PreviewController
     private const double ReversePrefetchWarmupSeconds = PreviewWarmupPolicy.DefaultWarmupSeconds;
     private const double ReversePrefetchDisplaySeconds = 3;
     // 末尾処理のguardとは別に、安全な画素照合の重なりを0.5秒残す。
-    private const double ReversePrefetchGuardSeconds = 0.5;
+    private const double ReversePrefetchGuardSeconds = PreviewByteWindow.TailGuardSeconds;
     private const double ReversePrefetchOverlapSeconds = 0.5;
     private ReversePrefetchState? _reversePrefetch;
     private PreviewRequest? _lastNavigationRequest;
@@ -49,7 +49,8 @@ public sealed partial class PreviewController
         {
             if (_reversePrefetch is not { } state || state.Completion.Task.IsCompleted || state.Cancellation.IsCancellationRequested
                 || !FrameCache.SameContent(state.Request, logical)) return null;
-            double start = Math.Max(0, state.Boundary - ReversePrefetchDisplaySeconds);
+            var physical = state.Request.RecoveryPhysicalWindow ?? state.Request;
+            double start = PreviewWarmupPolicy.SafeStartSeconds(physical, false);
             return logical.TargetSeconds >= start - 1e-7 && logical.TargetSeconds <= state.Boundary + ReversePrefetchThresholdSeconds + 1e-7
                 ? state.Completion.Task : null;
         }
@@ -66,29 +67,34 @@ public sealed partial class PreviewController
         {
             // 同じ窓は完了済みでも再発行しない。失敗時の端では通常の要求単位取得に任せる。
             if (!prior.Completion.Task.IsCompleted || Math.Abs(prior.Boundary - boundary) <= 1e-7) return;
-            prior.Cancellation.Dispose();
         }
-        if (_stream is { } stream && !stream.Cancellation.IsCancellationRequested)
+        var stream=_stream is { } activeStream && !activeStream.Cancellation.IsCancellationRequested?activeStream:null;
+        if(stream!=null && (!stream.IsPaused || !(_reverseSteps>=5 || _reverseSteps>=2 && _reverseDistance>=0.2-1e-8)))return;
+        // 同じ_sync下なので、pause中streamがtrim後にAppendする前に取消を確定できる。
+        // 窓とbridgeが容量に収まらない場合、元streamもcacheもそのまま残す。
+        if(!TryPrepareReverseWindow(logical,boundary,out var planned))
         {
-            if (!stream.IsPaused || !(_reverseSteps >= 5 || _reverseSteps >= 2 && _reverseDistance >= 0.2 - 1e-8)) return;
-            // 順先読みを含む生存streamは、ここで逆先読みの実行条件が成立して初めて取り消す。
-            // 協調cancel→ENDでAfterの実行枠を空けてから、同じbackendで有限取得する。
+            if(PerfTrace.Enabled)PerfTrace.Write("core.reverse_prefetch.skip",new{boundary,logical.TargetSeconds,reason="byte_budget_or_bridge"});
+            return;
+        }
+        if(stream!=null)
+        {
+            if(_cache.GetSegment(stream.SegmentId) is { } trimmed)
+                Notify(stream.Version,stream.Navigation,()=>SegmentUpdated?.Invoke(new(stream.LatestRequest,trimmed,true,true)),true);
             CancelStreamCore("reverse_prefetch");
         }
-        var request = logical with
-        {
-            CorrelationId = long.MinValue + Interlocked.Increment(ref _prefetchSerial),
-            TargetSeconds = boundary, Continuous = false, SeekSecondsOverride = null,
-            PreMarginSeconds = ReversePrefetchWarmupSeconds + ReversePrefetchDisplaySeconds,
-            PostMarginSeconds = ReversePrefetchGuardSeconds + ReversePrefetchOverlapSeconds,
-        };
+        if (_reversePrefetch is { } previous) previous.Cancellation.Dispose();
+        long correlationId=long.MinValue+Interlocked.Increment(ref _prefetchSerial);
+        var request=planned with {CorrelationId=correlationId,
+            RecoveryPhysicalWindow=planned.RecoveryPhysicalWindow! with {CorrelationId=correlationId}};
         var state = new ReversePrefetchState(request, boundary);
         _reversePrefetch = state;
         var scheduled = CancellationTokenSource.CreateLinkedTokenSource(state.Cancellation.Token);
         if (_foregroundPending++ == 0) _foregroundIdle = NewSignal();
         _tasks.Add(state.Completion.Task);
         if (PerfTrace.Enabled) PerfTrace.Write("core.reverse_prefetch", new { request.CorrelationId, boundary,
-            seek = Math.Max(0, boundary - 5), end = boundary + ReversePrefetchGuardSeconds + ReversePrefetchOverlapSeconds });
+            seek = CommandBuilder.Plan(request.RecoveryPhysicalWindow ?? request).SeekSeconds,
+            end = boundary + request.PostMarginSeconds, request.RetainedByteLimit });
         _ = TrackAsync(ScheduleAsync(request, _version, scheduled, bypassCache: true, bypassDebounce: true,
             navigation: true, background: false, _lastEditVersion, state.Cancellation.Token, prefetch: state), state.Completion);
     }

@@ -15,7 +15,10 @@ public interface IPreviewSink
     void OnReadStateChanged(bool reading) { }
 }
 
-public sealed record PreviewRunResult(int ExitCode, string StandardError, bool IsCancelled = false);
+public sealed record PreviewRunResult(int ExitCode, string StandardError, bool IsCancelled = false)
+{
+    internal bool OutputStartApplied { get; init; }
+}
 
 public interface IPreviewBackend : IAsyncDisposable
 {

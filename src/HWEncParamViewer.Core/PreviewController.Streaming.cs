@@ -342,7 +342,7 @@ public sealed partial class PreviewController
             if (!session.IsForwardPrefetch && session.WindowShortfall != null
                 && !scheduled.IsCancellationRequested && !session.ExternalToken.IsCancellationRequested)
             {
-                Task? recovery = QueueWindowReplay(session);
+                Task? recovery = QueueWindowReplay(session, result.OutputStartApplied && session.WindowShortfall.MissingHead);
                 if (entered) { _execution.Release(); entered = false; }
                 if (recovery != null) await recovery.ConfigureAwait(false);
                 return;
@@ -487,7 +487,7 @@ public sealed partial class PreviewController
     {
         private readonly PreviewTimestampGuard _timestampGuard = new(session.PhysicalRequest.Fps);
         private bool? _lastTraceReading;
-        public void OnHeader(Y4mHeader header) { }
+        public void OnHeader(Y4mHeader header) => owner.RememberOutputHeader(session.PhysicalRequest, header);
         public void OnOutput() => watchdog.Touch();
         public void OnReadStateChanged(bool reading)
         {
@@ -563,11 +563,13 @@ public sealed partial class PreviewController
                 if (firstFrame)
                 {
                     session.ClockChecked = true;
+                    owner.RememberOutputHeader(session.PhysicalRequest, frame.Header);
                     var clock = ClockFor(session.PhysicalRequest, frame);
                     if (!clock.TrustedAbsolute) { RequestReplay("要求先頭のabsolute時刻が入力原点と一致しません"); return; }
                     owner._cache.SetClock(session.SegmentId, clock);
                 }
                 if (_timestampGuard.IsInvalid(frame)) { RequestReplay(_timestampGuard.Reason); return; }
+                owner.RememberOutputFrame(session.PhysicalRequest, frame);
                 if (!owner._cache.Append(session.SegmentId, frame))
                     throw new InvalidOperationException(CoreText.ReadAheadCacheFull);
                 session.LastFrameBytes = frame.Data.LongLength;

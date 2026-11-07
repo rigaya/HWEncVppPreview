@@ -31,6 +31,16 @@ public sealed record PreviewClockMap(double? InputOriginSeconds, double Physical
         return PhysicalSeekSeconds + (rate > 0 ? (index + FrameIndexOffset) / rate : 0);
     }
 
+    /// <summary>配列内の選択に使う秒へ変換する。全Xtsなしの列だけ、解放済みprefixの番号を差し引く。</summary>
+    public double ToSelectionSeconds(double inputSeconds, IReadOnlyList<Y4mFrame> frames, double fps)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
+        if (frames.Count == 0 || frames.Any(frame => frame.Xts.HasValue)) return ToFrameSeconds(inputSeconds);
+        // XtsなしのToInputSecondsは物理seekと元番号を使うため、その逆変換も同じ基準にする。
+        double rate = FrameSelector.FrameRate(frames[0], fps);
+        return inputSeconds - PhysicalSeekSeconds - (rate > 0 ? FrameIndexOffset / rate : 0);
+    }
+
     /// <summary>入力先頭からの秒を、この区間の生フレーム時計へ戻す。</summary>
     public double ToFrameSeconds(double inputSeconds) => TrustedAbsolute && InputOriginSeconds is double origin
         ? inputSeconds + origin : inputSeconds - PhysicalSeekSeconds;
@@ -56,4 +66,11 @@ public sealed record PreviewFrameReference(PreviewSegmentSnapshot Segment, int F
     public long SegmentId => Segment.SegmentId;
     public double InputSeconds => Clock.ToInputSeconds(Frame, FrameIndex, Segment.PhysicalRequest.Fps);
     public bool IsSafe => PreviewSafeRange.Contains(InputSeconds, Segment.SafeStartSeconds, Segment.SafeEndSeconds);
+
+    /// <summary>移動の基準となる1枚だけを保持し、古い区間全体の画素を固定しない参照へ変える。</summary>
+    public PreviewFrameReference RetainFrameOnly()
+    {
+        var clock = Clock with { FrameIndexOffset = Clock.FrameIndexOffset + FrameIndex };
+        return new(Segment with { Frames = Array.AsReadOnly(new[] { Frame }), Clock = clock }, 0);
+    }
 }

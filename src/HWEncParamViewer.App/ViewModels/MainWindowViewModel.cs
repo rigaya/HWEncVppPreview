@@ -107,7 +107,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         });
         RemoveFilterLineCommand = new RelayCommand(p => { if (p is FilterLineViewModel line) { FilterLines.Remove(line); if (ReferenceEquals(SelectedFilterLine, line)) SelectedFilterLine = FilterLines.FirstOrDefault(); } });
         StepFrameCommand = new RelayCommand(p => StepFrame((int)Number(p)));
-        StepSecondsCommand = new RelayCommand(p => SeekTo(CurrentSeconds + Number(p)));
+        StepSecondsCommand = new RelayCommand(p => SeekTo(CurrentSeconds + Number(p), operation: NavigationOperation.Page));
         GoToStartCommand = new RelayCommand(() => SeekTo(0));
         GoToEndCommand = new RelayCommand(() => { if (HasDuration) SeekTo(DurationSeconds); });
         CommitTimeTextCommand = new RelayCommand(CommitTime);
@@ -366,17 +366,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     private void OnFrameReady(PreviewFrameResult value)
     {
+        if (_disposed) return;
         var context = ContextFor(value.Request);
-        if (context != null && value.Segment != null) context.Segment = value.Segment;
-        if (context != null && value.IsReplay) BeginReplay(context);
-        long revision = context == null ? 0 : Volatile.Read(ref context.DisplayRevision);
-        // 元画像は完了列から最新目標を選ぶため、古い目標向けの早期通知では表示しない。
-        if (context == null || context.Kind == RequestKind.Before || context.NeighborDirection != 0) return;
+        if (context == null) return;
+        if (value.IsReplay) BeginReplay(context);
+        long revision = Volatile.Read(ref context.DisplayRevision);
+        var frame = value.Frame;
+        var segment = RetainSelectedFrame(value.Segment, frame);
+        bool isReplay = value.IsReplay;
+        // 元画像と隣不足は完了列で選ぶ。取消済みcontextへ全区間の参照を戻さない。
+        if (context.Kind == RequestKind.Before || context.NeighborDirection != 0)
+        {
+            if (IsCurrent(context) && segment != null) context.Segment = segment;
+            return;
+        }
         Dispatcher.UIThread.Post(() =>
         {
             if (!IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)) return;
-            if (value.IsReplay) PrepareReplayUi(context);
-            DisplayFrame(value.Frame, context);
+            // Postが世代切替をまたいでも、過去の全snapshotを復活させず画像1枚だけを渡す。
+            if (segment != null) context.Segment = segment;
+            if (isReplay) PrepareReplayUi(context);
+            DisplayFrame(frame, context);
         });
     }
     private void OnReplayStarted(PreviewRequest request)
@@ -419,15 +429,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private void OnCompleted(PreviewCompletion value)
     {
         var context = ContextFor(value.Request);
-        if (context == null) return;
+        if (_disposed || context == null) return;
         if (value.IsReplay) BeginReplay(context);
-        if (value.Segment != null) context.Segment = value.Segment;
         IReadOnlyList<Y4mFrame> frames = value.Frames;
         if (frames.Count == 0) _cache.TryGet(value.Request, out frames);
         if (context.Kind == RequestKind.After) _afterRequests.TryRemove(context.Generation, out _);
         Dispatcher.UIThread.Post(() =>
         {
             if (!IsCurrent(context)) return;
+            // 途中画像はFrameReadyが1枚だけ渡す。旧世代の完了列で最新の保持区間を戻さない。
+            if (context.Kind == RequestKind.After && context.Generation != Volatile.Read(ref _generation))
+            { context.Segment = null; return; }
+            RefreshRetainedSnapshots();
+            var segment = value.Segment;
+            if (segment is { SegmentId: > 0 })
+            {
+                var latest = _cache.GetSegment(segment.SegmentId);
+                if (latest == null) return;
+                segment = latest;
+                frames = latest.Frames;
+            }
+            if (segment != null) context.Segment = segment;
             if (context.Kind == RequestKind.Before)
             {
                 CaptureBeforeFallbackDiagnostic(value.Result.StandardError);
@@ -436,9 +458,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             }
             if (value.IsReplay) PrepareReplayUi(context);
             if (_lastFailedAfter == Volatile.Read(ref _generation)) return;
-            _intervalRequest = value.Segment?.PhysicalRequest ?? value.Request;
+            _intervalRequest = segment?.PhysicalRequest ?? value.Request;
             _intervalLogicalRequest = value.Request;
-            _intervalSegment = value.Segment;
+            _intervalSegment = segment;
             _intervalFrames = frames;
             _lastCompletedAfter = Math.Max(_lastCompletedAfter, context.Generation);
             var afterRequest = context.NeighborDirection != 0 ? CompleteNeighbor(context, frames) : value.Request;
@@ -555,7 +577,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             // trustedな移動viewがあれば、warmを含む元配列へ戻って候補を増やさない。
             if (_intervalSegment?.Clock.TrustedAbsolute != true && _intervalFrames.Count > 0)
             {
-                double target = IntervalClock(interval, _intervalFrames).ToFrameSeconds(CurrentSeconds);
+                double target = IntervalClock(interval, _intervalFrames).ToSelectionSeconds(CurrentSeconds, _intervalFrames, interval.Fps);
                 var first = _intervalFrames[0];
                 var last = _intervalFrames[^1];
                 double firstTime = first.Xts ?? 0;
@@ -615,13 +637,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         NotifyAcceptedFrameStep(request, direction, seconds);
         Track(ReleaseContextAsync(context));
     }
-    private void SeekTo(double seconds, bool force = false, bool allowConcurrentBefore = false)
+    private void SeekTo(double seconds, bool force = false, bool allowConcurrentBefore = false, NavigationOperation operation = NavigationOperation.Seek)
     {
         RecordNavigationIntent();
         seconds = ClampTime(seconds);
         if (!force && seconds == CurrentSeconds) return;
         SetTimeOnly(seconds);
-        _ = QueuePreview(navigation: true, allowConcurrentBefore: allowConcurrentBefore);
+        _ = QueuePreview(navigation: true, allowConcurrentBefore: allowConcurrentBefore, operation: operation);
     }
     private void SetTimeOnly(double seconds)
     {
@@ -848,6 +870,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             ClearBeforeInterval();
             _cache.Clear();
             Interlocked.Exchange(ref _pendingSegmentUpdate, null);
+            // Dispose後もウィンドウ等がVMを参照し得るため、完了した要求の区間もここで手放す。
+            if (_context != null) _context.Segment = null;
+            foreach (var context in _afterRequests.Values) context.Segment = null;
+            _afterRequests.Clear();
+            Volatile.Write(ref _context, null);
+            _beforeExecutionContext = null;
+            _beforePhysicalWindow = null;
         });
         await WaitForVmShutdownAsync(cleanup, started, "ui_cleanup").ConfigureAwait(false);
         Task resources = Task.WhenAll(cancellations, controller, probe, pending);

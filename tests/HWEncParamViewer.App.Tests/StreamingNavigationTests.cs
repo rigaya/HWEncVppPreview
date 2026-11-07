@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Reflection;
 using Avalonia.Headless.XUnit;
 using HWEncParamViewer.App.Services;
 using HWEncParamViewer.App.ViewModels;
@@ -24,13 +25,17 @@ public sealed class StreamingNavigationTests
         clock.Advance(TimeSpan.FromMilliseconds(150));
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Single(backend.Requests);
-        foreach (double target in new[] { 100d, 101d })
-        {
-            vm.CurrentSeconds = target;
-            await vm.WaitForPreparationAsync().WaitAsync(Safety);
-            await vm.WaitForIdleAsync().WaitAsync(Safety);
-            Assert.Null(vm.ErrorText);
-        }
+        // 時刻setterはシーク専用になったため、隣不足の位置だけをfixtureとして設定し、逆コマで有限窓を作る。
+        typeof(MainWindowViewModel).GetMethod("SetTimeOnly", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(vm, new object[] { 100d });
+        vm.StepFrameCommand.Execute(-1);
+        await vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Null(vm.ErrorText);
+        vm.CurrentSeconds = 101;
+        await vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        Assert.Null(vm.ErrorText);
         Assert.Equal(3, backend.Requests.Count);
         Assert.False(backend.Requests.ElementAt(1).Continuous);
         Assert.Equal(5, backend.Requests.ElementAt(1).PreMarginSeconds);
@@ -142,9 +147,10 @@ public sealed class StreamingNavigationTests
         await vm.WaitForPreparationAsync().WaitAsync(Safety);
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Equal(2, requests.Count);
-        Assert.False(requests.Last().Continuous);
-        Assert.Equal(5, requests.Last().PreMarginSeconds);
-        Assert.Equal(0.5, requests.Last().PostMarginSeconds);
+        // 大きく戻るシークも通常の前方計画を使い、逆コマ用の過去窓を作らない。
+        Assert.True(requests.Last().Continuous);
+        Assert.Equal(2, requests.Last().PreMarginSeconds);
+        Assert.Equal(1, requests.Last().PostMarginSeconds);
         Assert.Equal(1001, displayed.Last()!.Value, 5);
     }
 
@@ -167,7 +173,7 @@ public sealed class StreamingNavigationTests
         await vm.WaitForPreparationAsync().WaitAsync(Safety);
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Equal(2, requests.Count);
-        Assert.Equal(3, requests.Last().PreMarginSeconds);
+        Assert.Equal(2, requests.Last().PreMarginSeconds);
         Assert.Null(vm.ErrorText);
         Assert.All(requests, request =>
         {

@@ -31,6 +31,9 @@ public sealed record PreviewRequest
     internal bool? DependsOnHistory { get; init; }
     // 限定回復の物理窓。論理要求の通知・引数・世代は変えない。
     internal PreviewRequest? RecoveryPhysicalWindow { get; init; }
+    internal long? RetainedByteLimit { get; init; }
+    internal double? OutputFrameIntervalHint { get; init; }
+    internal bool DisableOutputStart { get; init; }
 
     /// <summary>エンコーダのexeパス。引数配列には含めない（起動側が使う）。</summary>
     public string EncoderPath { get; init; } = "";
@@ -45,6 +48,8 @@ public sealed record PreviewRequest
     public double PostMarginSeconds { get; init; } = DefaultPostMarginSeconds;
     /// <summary>入力のフレームレート。--frames の算出に使う。</summary>
     public double Fps { get; init; }
+    /// <summary>実出力の形式が不明なとき、byte窓の初回計画に使う入力検査の形式。</summary>
+    public Y4mHeader? InputFormatHint { get; init; }
     /// <summary>vpp 引数 (OptionTextParser の出力)。</summary>
     public IReadOnlyList<string> VppArgs { get; init; } = Array.Empty<string>();
 }
