@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using HWEncParamViewer.Testing;
+using System.Text.Json;
 using HWEncParamViewer.Core;
 namespace HWEncParamViewer.Tests;
 
@@ -32,7 +33,7 @@ public sealed class WindowSeekBackendTests
             if (expected) Assert.True(value.GetBoolean());
             Assert.Equal(CommandBuilder.BuildServer(Request()), runs[0].GetProperty("args").EnumerateArray().Select(x => x.GetString()!).ToArray());
         }
-        finally { File.Delete(log); }
+        finally { FakeLogFiles.Delete(log); }
     }
 
     [Theory]
@@ -56,7 +57,7 @@ public sealed class WindowSeekBackendTests
             }
             Assert.False(Assert.Single(ReadRuns(log)).TryGetProperty("window_seek",out _));
         }
-        finally{File.Delete(log);}
+        finally{FakeLogFiles.Delete(log);}
     }
 
     [Fact]
@@ -82,10 +83,10 @@ public sealed class WindowSeekBackendTests
             Assert.False(runs[1].TryGetProperty("window_seek", out _));
             Assert.True(runs[2].GetProperty("window_seek").GetBoolean());
         }
-        finally { File.Delete(log); }
+        finally { FakeLogFiles.Delete(log); }
     }
 
-    private static JsonElement[] ReadRuns(string file) => File.ReadAllLines(file).Select(line =>
+    private static JsonElement[] ReadRuns(string file) => FakeLogFiles.ReadAllLines(file).Select(line =>
     {
         using var json = JsonDocument.Parse(line);
         return json.RootElement.Clone();

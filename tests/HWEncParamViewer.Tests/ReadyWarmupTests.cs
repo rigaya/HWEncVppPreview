@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using HWEncParamViewer.Testing;
+using System.Diagnostics;
 using System.Text.Json;
 using HWEncParamViewer.Core;
 
@@ -129,7 +130,7 @@ public sealed class HistoryProbeTests
                 Assert.Equal(8, Commands(log).Count(item => item.GetProperty("cmd").GetString() == "probe"));
             }
         }
-        finally { File.Delete(log); }
+        finally { FakeLogFiles.Delete(log); }
     }
 
     [Fact]
@@ -148,7 +149,7 @@ public sealed class HistoryProbeTests
             Assert.Equal(2, Commands(log).Count(item => item.GetProperty("cmd").GetString() == "probe"));
             Assert.Equal(0, (await backend.RunAsync(Request(), new EmptySink())).ExitCode);
         }
-        finally { File.Delete(log); }
+        finally { FakeLogFiles.Delete(log); }
     }
 
     [Fact]
@@ -199,7 +200,7 @@ public sealed class HistoryProbeTests
             string[] commands = Commands(log).Select(item => item.GetProperty("cmd").GetString()!).ToArray();
             Assert.Equal(new[] { "run", "cancel", "probe" }, commands);
         }
-        finally { File.Delete(log); }
+        finally { FakeLogFiles.Delete(log); }
     }
 
     [Theory]
@@ -271,7 +272,7 @@ public sealed class HistoryProbeTests
             delay = false;
             Assert.False(await backend.GetHistoryRequirementAsync(Request()));
         }
-        finally { File.Delete(log); }
+        finally { FakeLogFiles.Delete(log); }
     }
 
     [Fact]
@@ -284,10 +285,8 @@ public sealed class HistoryProbeTests
 
     private static JsonElement[] Commands(string log)
     {
-        // Windowsでも追記中のwriterを妨げず、改行まで完了したJSON行だけを読む。
-        using var stream = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd().Split('\n').SkipLast(1).Where(line => line.Length > 0).Select(line =>
+        // PID別ログを受信順に集約し、完了したJSON行だけを読む。
+        return FakeLogFiles.ReadAllLines(log).Select(line =>
         {
             using var document = JsonDocument.Parse(line);
             return document.RootElement.Clone();

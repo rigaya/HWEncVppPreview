@@ -20,6 +20,7 @@
     <ProjectReference Include="..\..\src\HWEncParamViewer.App\HWEncParamViewer.App.csproj" />
     <ProjectReference Include="..\FakeEncoder\FakeEncoder.csproj" ReferenceOutputAssembly="false" />
     <Compile Include="..\HWEncParamViewer.Tests\FakeTimeProvider.cs" Link="Testing\FakeTimeProvider.cs" />
+    <Compile Include="..\HWEncParamViewer.Tests\FakeLogFiles.cs" Link="Testing\FakeLogFiles.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\Data\help\**" Link="Data\help\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />

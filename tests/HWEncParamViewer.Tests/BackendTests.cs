@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using HWEncParamViewer.Testing;
+using System.Diagnostics;
 using System.Threading.Channels;
 using HWEncParamViewer.Core;
 using HWEncParamViewer.Tests.Testing;
@@ -161,14 +162,14 @@ public sealed class BackendTests
             await observedClock.TimerArmed.Task.WaitAsync(SafetyTimeout);
             clock.Advance(TimeSpan.FromSeconds(3));
             await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => run.WaitAsync(SafetyTimeout));
-            if (File.Exists(pidFile))
+            if (FakeLogFiles.Exists(pidFile))
             {
-                foreach (string pid in File.ReadAllLines(pidFile)) AssertStopped(int.Parse(pid));
+                foreach (string pid in FakeLogFiles.ReadAllLines(pidFile)) AssertStopped(int.Parse(pid));
             }
         }
         finally
         {
-            File.Delete(pidFile);
+            FakeLogFiles.Delete(pidFile);
         }
     }
 
@@ -316,20 +317,20 @@ public sealed class BackendTests
         try
         {
             controller.Submit(Request());
-            await WaitUntilAsync(() => File.Exists(pidFile) && File.ReadAllLines(pidFile).Length > 0);
+            await WaitUntilAsync(() => FakeLogFiles.Exists(pidFile) && FakeLogFiles.ReadAllLines(pidFile).Length > 0);
             clock.Advance(TimeSpan.FromSeconds(4));
             Assert.Equal(0, (await completed.Reader.ReadAsync().AsTask().WaitAsync(SafetyTimeout)).Result.ExitCode);
             await controller.WaitForIdleAsync().WaitAsync(SafetyTimeout);
-            Assert.Equal(2, File.ReadAllLines(pidFile).Length);
+            Assert.Equal(2, FakeLogFiles.ReadAllLines(pidFile).Length);
             controller.Submit(Request() with { VppArgs = new[] { "--vpp-nlmeans", "sigma=0.2" } });
             Assert.Equal(0, (await completed.Reader.ReadAsync().AsTask().WaitAsync(SafetyTimeout)).Result.ExitCode);
             await controller.WaitForIdleAsync().WaitAsync(SafetyTimeout);
-            Assert.Equal(3, File.ReadAllLines(pidFile).Length);
-            foreach (string pid in File.ReadAllLines(pidFile)) AssertStopped(int.Parse(pid));
+            Assert.Equal(3, FakeLogFiles.ReadAllLines(pidFile).Length);
+            foreach (string pid in FakeLogFiles.ReadAllLines(pidFile)) AssertStopped(int.Parse(pid));
         }
         finally
         {
-            File.Delete(pidFile);
+            FakeLogFiles.Delete(pidFile);
         }
     }
 

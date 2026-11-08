@@ -1,4 +1,5 @@
-﻿using System.ComponentModel;
+﻿using HWEncParamViewer.Testing;
+using System.ComponentModel;
 using System.Diagnostics;
 using Avalonia.Headless.XUnit;
 using HWEncParamViewer.App.Services;
@@ -129,7 +130,7 @@ public sealed class DurationTests
         await using var vm = Create(files, clock, probe);
         await PrepareAsync(vm, clock);
         await WaitForFileAsync(files.Ready);
-        int pid = int.Parse(await File.ReadAllTextAsync(files.Pid));
+        int pid = int.Parse(Assert.Single(FakeLogFiles.ReadAllLines(files.Pid)));
         vm.InputPath = "new.ts";
         await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
         clock.Advance(TimeSpan.FromMilliseconds(150));
@@ -156,7 +157,7 @@ public sealed class DurationTests
         {
             await PrepareAsync(vm, clock);
             await WaitForFileAsync(files.Ready);
-            int pid = int.Parse(await File.ReadAllTextAsync(files.Pid));
+            int pid = int.Parse(Assert.Single(FakeLogFiles.ReadAllLines(files.Pid)));
             await vm.DisposeAsync().AsTask().WaitAsync(SafetyTimeout);
             AssertStopped(pid);
             Assert.False(vm.HasDuration);

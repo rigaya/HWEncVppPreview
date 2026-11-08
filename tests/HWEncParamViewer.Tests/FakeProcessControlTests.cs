@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using HWEncParamViewer.Testing;
+using System.Diagnostics;
 using System.Text.Json;
 using HWEncParamViewer.Core;
 
@@ -30,7 +31,7 @@ public sealed class FakeProcessControlTests
             process.StandardInput.Close();
             await process.WaitForExitAsync().WaitAsync(SafetyTimeout);
             Assert.Equal(0, process.ExitCode);
-            string[] commands = await File.ReadAllLinesAsync(log);
+            string[] commands = FakeLogFiles.ReadAllLines(log);
             Assert.Equal(2, commands.Length);
             using var quit = JsonDocument.Parse(commands[0]);
             using var run = JsonDocument.Parse(commands[1]);

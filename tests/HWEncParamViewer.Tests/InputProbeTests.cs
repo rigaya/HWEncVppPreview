@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using HWEncParamViewer.Testing;
+using System.Diagnostics;
 using HWEncParamViewer.Core;
 using HWEncParamViewer.Tests.Testing;
 
@@ -94,7 +95,7 @@ public sealed class InputProbeTests
             int pid = await ReadPidAsync(pidFile);
             AssertStopped(pid);
         }
-        finally { File.Delete(pidFile); }
+        finally { FakeLogFiles.Delete(pidFile); }
     }
 
     [Fact]
@@ -148,7 +149,7 @@ public sealed class InputProbeTests
             InputInfo recovered = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts").WaitAsync(SafetyTimeout);
             Assert.Equal(30, recovered.Fps);
         }
-        finally { File.Delete(pidFile); File.Delete(readyFile); }
+        finally { FakeLogFiles.Delete(pidFile); File.Delete(readyFile); }
     }
 
     [Fact]
@@ -170,7 +171,7 @@ public sealed class InputProbeTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => active.WaitAsync(SafetyTimeout));
             AssertStopped(pid);
         }
-        finally { File.Delete(pidFile); }
+        finally { FakeLogFiles.Delete(pidFile); }
     }
 
     [Fact]
@@ -191,7 +192,7 @@ public sealed class InputProbeTests
         finally
         {
             await probe.DisposeAsync();
-            File.Delete(pidFile);
+            FakeLogFiles.Delete(pidFile);
         }
     }
 
@@ -415,7 +416,7 @@ public sealed class InputProbeTests
             AssertStopped(pid);
             await Assert.ThrowsAsync<ObjectDisposedException>(() => probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts"));
         }
-        finally { await probe.DisposeAsync(); File.Delete(pidFile); }
+        finally { await probe.DisposeAsync(); FakeLogFiles.Delete(pidFile); }
     }
 
     private static async Task WaitForFileAsync(string path)
@@ -433,7 +434,7 @@ public sealed class InputProbeTests
         {
             while (true)
             {
-                if (File.Exists(path) && int.TryParse(File.ReadLines(path).FirstOrDefault(), out int pid)) return pid;
+                if (FakeLogFiles.Exists(path) && int.TryParse(FakeLogFiles.ReadAllLines(path).FirstOrDefault(), out int pid)) return pid;
                 await Task.Yield();
             }
         }

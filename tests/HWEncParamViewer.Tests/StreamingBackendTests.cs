@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using HWEncParamViewer.Testing;
+using System.Diagnostics;
 using HWEncParamViewer.Core;
 using HWEncParamViewer.Tests.Testing;
 
@@ -137,13 +138,13 @@ public sealed class StreamingBackendTests
             await backend.DisposeAsync().AsTask().WaitAsync(SafetyTimeout);
             await process.WaitForExitAsync().WaitAsync(SafetyTimeout);
             Assert.True(process.HasExited);
-            Assert.Contains("\"cmd\":\"quit\"", await File.ReadAllTextAsync(commandLog), StringComparison.Ordinal);
+            Assert.Contains("\"cmd\":\"quit\"", string.Join("\n", FakeLogFiles.ReadAllLines(commandLog)), StringComparison.Ordinal);
             await backend.DisposeAsync();
         }
         finally
         {
             await backend.DisposeAsync();
-            File.Delete(commandLog);
+            FakeLogFiles.Delete(commandLog);
         }
     }
 
@@ -204,7 +205,7 @@ public sealed class StreamingBackendTests
             await backend.RunAsync(Request(), sink).WaitAsync(SafetyTimeout);
             using var process = Process.GetProcessById(sink.ProcessId);
             Task stopping = backend.DisposeAsync().AsTask();
-            await WaitUntilAsync(() => File.Exists(log) && ReadSharedCommandLog(log).Contains("quit", StringComparison.Ordinal));
+            await WaitUntilAsync(() => FakeLogFiles.Exists(log) && ReadSharedCommandLog(log).Contains("quit", StringComparison.Ordinal));
             Assert.False(stopping.IsCompleted);
             clock.Advance(TimeSpan.FromSeconds(5));
             await Assert.ThrowsAsync<TimeoutException>(() => stopping.WaitAsync(SafetyTimeout));
@@ -341,10 +342,8 @@ public sealed class StreamingBackendTests
 
     private static string ReadSharedCommandLog(string path)
     {
-        // Fakeの追記中でも、Windowsの共有モードを妨げずコマンド受信を確認する。
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        // PID別ログの完了行を集約し、コマンド受信を確認する。
+        return string.Join("\n", FakeLogFiles.ReadAllLines(path));
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)

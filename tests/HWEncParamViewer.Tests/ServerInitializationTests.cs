@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using HWEncParamViewer.Testing;
+using System.Diagnostics;
 using System.Text.Json;
 using HWEncParamViewer.Core;
 namespace HWEncParamViewer.Tests;
@@ -23,7 +24,7 @@ public sealed class ServerInitializationTests
         await initialization.WaitAsync(Safety);
         Assert.Equal(0, (await actual.WaitAsync(Safety)).ExitCode);
         Assert.Equal(2, sink.Frames);
-        var commands = File.ReadAllLines(files.Log).Select(line => JsonDocument.Parse(line))
+        var commands = FakeLogFiles.ReadAllLines(files.Log).Select(line => JsonDocument.Parse(line))
             .Where(document => document.RootElement.GetProperty("cmd").GetString() == "run").ToArray();
         try
         {

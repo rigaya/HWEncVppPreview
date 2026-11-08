@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using HWEncParamViewer.Testing;
+using System.Text.Json;
 using HWEncParamViewer.Core;
 namespace HWEncParamViewer.Tests;
 
@@ -45,13 +46,13 @@ public sealed class OutputStartBackendTests
                 if(capability!=null)start.Environment["FAKE_ENCODER_OUTPUT_START"]=capability;
                 else start.Environment.Remove("FAKE_ENCODER_OUTPUT_START");
             })) Assert.Equal(0,(await backend.RunAsync(Request(),new Sink()).WaitAsync(TimeSpan.FromSeconds(15))).ExitCode);
-            var commands=File.ReadAllLines(log).Select(line=>JsonDocument.Parse(line).RootElement.Clone()).Where(x=>x.GetProperty("cmd").GetString()=="run").ToArray();
+            var commands=FakeLogFiles.ReadAllLines(log).Select(line=>JsonDocument.Parse(line).RootElement.Clone()).Where(x=>x.GetProperty("cmd").GetString()=="run").ToArray();
             var run=Assert.Single(commands);
             Assert.Equal(expected,run.TryGetProperty("output_start_us",out var value));
             if(expected)Assert.Equal(1_008_250_000,value.GetInt64());
             Assert.Equal(CommandBuilder.Plan(Request()).FrameCount,int.Parse(run.GetProperty("args").EnumerateArray().Select(x=>x.GetString()).SkipWhile(x=>x!="--frames").Skip(1).First()!));
         }
-        finally{File.Delete(log);}
+        finally{FakeLogFiles.Delete(log);}
     }
     private sealed class Sink:IPreviewSink
     {

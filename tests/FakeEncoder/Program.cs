@@ -17,6 +17,23 @@ internal static class Program
     private static long _currentId;
     private static long _sequence;
     private static long _cancelledPending = -1;
+    private static long _logSequence, _lastLogTimestamp;
+
+    // 別プロセスのappendで受信記録を失わないよう、共有baseごとにPID別ファイルへ出す。
+    private static string ProcessLogPath(string path) => Path.Combine(Path.GetDirectoryName(path) ?? "",
+        Path.GetFileNameWithoutExtension(path) + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + Path.GetExtension(path));
+
+    private static async Task WriteCommandLogAsync(string path, JsonElement root)
+    {
+        var command = root.EnumerateObject().ToDictionary(item => item.Name, item => item.Value.Clone());
+        long sequence = ++_logSequence;
+        // 時計が戻っても同じPID内の受信順を保ち、PID間の集約にはUTCの時刻を使う。
+        long timestamp = _lastLogTimestamp = Math.Max(DateTime.UtcNow.Ticks, _lastLogTimestamp + 1);
+        command["_fakeLogPid"] = JsonSerializer.SerializeToElement(Environment.ProcessId);
+        command["_fakeLogSequence"] = JsonSerializer.SerializeToElement(sequence);
+        command["_fakeLogTimestamp"] = JsonSerializer.SerializeToElement(timestamp);
+        await File.AppendAllTextAsync(ProcessLogPath(path), JsonSerializer.Serialize(command) + "\n");
+    }
 
     public static async Task<int> Main(string[] args)
     {
@@ -25,7 +42,7 @@ internal static class Program
         if (args.Contains("--fake-hold-output-child", StringComparer.Ordinal))
             return await HoldOutputChildAsync();
         string? pidFile = Environment.GetEnvironmentVariable("FAKE_ENCODER_PID_FILE");
-        if (!string.IsNullOrEmpty(pidFile)) await File.AppendAllTextAsync(pidFile, $"{Environment.ProcessId}\n");
+        if (!string.IsNullOrEmpty(pidFile)) await File.AppendAllTextAsync(ProcessLogPath(pidFile), $"{Environment.ProcessId}\n");
         if (args.Contains("--version", StringComparer.Ordinal))
         {
             await Console.Out.WriteLineAsync("FakeEncoder 1.0");
@@ -81,7 +98,7 @@ internal static class Program
                 var root = json.RootElement;
                 string? command = root.GetProperty("cmd").GetString();
                 string? commandLog = Environment.GetEnvironmentVariable("FAKE_ENCODER_COMMAND_LOG_FILE");
-                if (!string.IsNullOrEmpty(commandLog)) await File.AppendAllTextAsync(commandLog, line + "\n");
+                if (!string.IsNullOrEmpty(commandLog)) await WriteCommandLogAsync(commandLog, root);
                 if (command == "quit")
                 {
                     if (Environment.GetEnvironmentVariable("FAKE_ENCODER_IGNORE_QUIT") == "1") continue;
@@ -338,6 +355,9 @@ internal static class Program
         }
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\0", vpp)));
         double seek = ParseSeek(Value(args, "--seek"));
+        // 試験指定時だけ開始位置で画素を変え、時計を壊さず別取得のstitch拒否を再現する。
+        long seekPixelOffset = args.Contains("--fake-seek-pixel-offset", StringComparer.Ordinal)
+            ? (long)Math.Round(seek * 30) : 0;
         await Console.Error.WriteLineAsync($"FAKEPID {Environment.ProcessId} seek={seek.ToString(CultureInfo.InvariantCulture)}");
         string? duration = Value(args, "--fake-duration");
         bool durationAtExit = args.Contains("--fake-duration-at-exit", StringComparer.Ordinal);
@@ -387,12 +407,37 @@ internal static class Program
                 string durationTag = noDuration ? "" : string.Create(CultureInfo.InvariantCulture, $" Xdur={frame.Duration:F9}");
                 await WriteLineAsync($"FRAME Xts={timestamp}{durationTag}");
                 var data = new byte[width * height + 2 * ((width + 1) / 2) * ((height + 1) / 2)];
-                for (int j = 0; j < data.Length; j++) data[j] = (byte)(hash[j % hash.Length] + i);
+                for (int j = 0; j < data.Length; j++) data[j] = (byte)(hash[j % hash.Length] + i + seekPixelOffset);
                 if (crashAt == i)
                 {
                     await Output.WriteAsync(data.AsMemory(0, data.Length / 2));
                     await Output.FlushAsync();
                     Environment.Exit(72);
+                }
+                // 指定した要求内の枚数で画素途中を止め、実Readerの所有とread待ちを試験する。
+                // 入力probeは除外し、seek後の絶対indexにも依存しない。
+                string? bodyGate = Value(args, "--fake-body-gate");
+                if (bodyGate != null && Value(args, "--log-level") != "input=debug"
+                    && outputOrdinal == Number(args, "--fake-body-gate-at", 2))
+                {
+                    int split = data.Length / 2;
+                    await Output.WriteAsync(data.AsMemory(0, split));
+                    await Output.FlushAsync();
+                    string ready = bodyGate + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + ".ready";
+                    string temporary = ready + ".tmp";
+                    await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(new
+                    {
+                        pid = Environment.ProcessId, input = Value(args, "-i"), seek, outputOrdinal, index = i,
+                    }));
+                    File.Move(temporary, ready, overwrite: true);
+                    try { await WaitForFileAsync(bodyGate, effectiveToken); }
+                    finally
+                    {
+                        // Serverの取消でも残半を送り切り、続くENDを画素へ混入させない。
+                        await Output.WriteAsync(data.AsMemory(split));
+                        await Output.FlushAsync();
+                    }
+                    continue;
                 }
                 // フレーム単位で書き切り、中断でバイナリ境界が壊れないようにする。
                 await Output.WriteAsync(data);
