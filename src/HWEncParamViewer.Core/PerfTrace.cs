@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace HWEncParamViewer.Core;
 
@@ -11,6 +12,9 @@ public static class PerfTrace
     private static readonly object Sync = new();
     private static readonly long Origin = Stopwatch.GetTimestamp();
     private static readonly StreamWriter? Writer = OpenWriter();
+    // 末尾が開いた区間のSafeEndなど、計測値にはInfinityやNaNが入ることがある。
+    // 既定のJSONはこれらを書けずに例外になり、計測を有効にした時だけ要求が失敗していたため、文字列として書く。
+    private static readonly JsonSerializerOptions JsonOptions = new() { NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals };
     public static bool Enabled => Writer != null;
 
     public static void Write(string eventName, object? data = null)
@@ -20,7 +24,7 @@ public static class PerfTrace
         int threadId = Environment.CurrentManagedThreadId;
         lock (Sync)
         {
-            Writer.WriteLine(JsonSerializer.Serialize(new { elapsedMs, eventName, threadId, data }));
+            Writer.WriteLine(JsonSerializer.Serialize(new { elapsedMs, eventName, threadId, data }, JsonOptions));
         }
     }
 
