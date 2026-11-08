@@ -286,6 +286,14 @@ internal static class Program
             await Console.Error.WriteLineAsync("FAKE invalid timestamp origin");
             return -24;
         }
+        double timestampJitterRatio = 0;
+        string? jitterText = Value(args, "--fake-timestamp-jitter-ratio");
+        if (jitterText != null && (!double.TryParse(jitterText, NumberStyles.Float, CultureInfo.InvariantCulture, out timestampJitterRatio)
+            || !double.IsFinite(timestampJitterRatio) || timestampJitterRatio < 0 || timestampJitterRatio >= .5))
+        {
+            await Console.Error.WriteLineAsync("FAKE invalid timestamp jitter ratio");
+            return -24;
+        }
         string? endText = Value(args, "--fake-input-end");
         double? inputEnd = null;
         if (endText != null)
@@ -402,6 +410,9 @@ internal static class Program
                         timestampValue = previous - 2 * frame.Duration;
                 }
                 else if (clockFaultConfigured) timestampValue = frame.Time - firstTime.Value;
+                // 指定時だけ一枚おきの時刻をずらし、累積ドリフトを作らず間隔の許容境界を再現する。
+                if (timestampJitterRatio != 0 && (outputOrdinal & 1) == 0)
+                    timestampValue += frame.Duration * timestampJitterRatio;
                 previousTimestamp = timestampValue;
                 string timestamp = timestampValue.ToString(outputRate == null ? "F9" : "R", CultureInfo.InvariantCulture);
                 string durationTag = noDuration ? "" : string.Create(CultureInfo.InvariantCulture, $" Xdur={frame.Duration:F9}");

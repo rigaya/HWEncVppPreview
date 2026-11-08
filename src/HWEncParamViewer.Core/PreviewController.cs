@@ -4,6 +4,8 @@ public sealed record PreviewFrameResult(PreviewRequest Request, Y4mFrame Frame, 
 {
     public PreviewSegmentSnapshot? Segment { get; init; }
     public bool IsReplay { get; init; }
+    /// <summary>受信済みの単調な等間隔列で目標を読み越し、END前のBefore表示を許可する。</summary>
+    public bool CanDisplayBeforeEnd { get; init; }
 }
 public sealed record PreviewCompletion(PreviewRequest Request, PreviewRunResult Result, bool FromCache, bool TargetNotReached)
 {
@@ -11,6 +13,8 @@ public sealed record PreviewCompletion(PreviewRequest Request, PreviewRunResult 
     public IReadOnlyList<Y4mFrame> Frames { get; init; } = Array.Empty<Y4mFrame>();
     public PreviewSegmentSnapshot? Segment { get; init; }
     public bool IsReplay { get; init; }
+    /// <summary>早期表示後に受信時刻の条件が崩れた理由。最終表示の再選択と照合する。</summary>
+    public string? EarlyDisplayFallbackReason { get; init; }
 }
 public sealed record PreviewFailure(PreviewRequest Request, string Reason, PreviewRunResult? Result = null, Exception? Exception = null)
 {
@@ -551,7 +555,8 @@ public sealed partial class PreviewController : IAsyncDisposable
             if (PerfTrace.Enabled) PerfTrace.Write("core.cache_store", new { request.CorrelationId, version,
                 frames = sink.Frames.Count, bytes = sink.ReceivedBytes, cacheBytes = _cache.SizeBytes,
                 cacheEntries = _cache.Count });
-            Publish(() => EmitCompletion(new(request, result, false, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly(), Segment = sink.Segment, IsReplay = isReplay }));
+            Publish(() => EmitCompletion(new(request, result, false, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly(), Segment = sink.Segment, IsReplay = isReplay,
+                EarlyDisplayFallbackReason = sink.EarlyDisplayFallbackReason }));
 
             async Task<PreviewRunResult> RunWithFallbackAsync()
             {
@@ -798,6 +803,16 @@ public sealed partial class PreviewController : IAsyncDisposable
         private int _candidate = -1;
         private double _candidateTime = double.NegativeInfinity;
         private double _lastTime = double.NegativeInfinity;
+        // 59.94fpsの1%は約167µsなので数十µsの量子化を吸収し、RFF等の1.5倍化は除外できる。
+        private const double EarlyTimingRelativeTolerance = 0.01;
+        private const int MinimumEarlyTimedFrames = 2;
+        private double? _earlyPreviousTimestamp;
+        private double? _earlyDuration;
+        private int _earlyTimedFrames;
+        private bool _earlyTimingEligible = true;
+        private bool _finishing;
+        private bool _earlyOffered;
+        public string? EarlyDisplayFallbackReason { get; private set; }
         private bool _confirmed;
         private bool _hasTimestamp;
         public RawFrameList Frames { get; } = new("Finite");
@@ -832,6 +847,7 @@ public sealed partial class PreviewController : IAsyncDisposable
         private void OnFrameCore(Y4mFrame frame)
         {
             int index = _receivedFrames;
+            ObserveEarlyTiming(frame);
             if (index == 0) HeaderObserved?.Invoke(frame.Header);
             if (_physicalRequest.Capabilities.TimestampPassthrough)
             {
@@ -917,6 +933,37 @@ public sealed partial class PreviewController : IAsyncDisposable
             UpdateSegment(false);
             TryConfirm(frame, tolerance);
         }
+        private void ObserveEarlyTiming(Y4mFrame frame)
+        {
+            if (!_earlyTimingEligible) return;
+            string? reason = null;
+            double duration = FrameSelector.Duration(frame, request.Fps);
+            if (frame.Xts is not double timestamp || !double.IsFinite(timestamp))
+                reason = "受信時刻が欠損または非有限";
+            else if (!double.IsFinite(duration) || duration <= 0)
+                reason = "表示時間を確定できない";
+            else
+            {
+                // 後続の長い表示時間で許容幅が広がらないよう、先頭の有効値を基準に固定する。
+                double tolerance = (_earlyDuration ?? duration) * EarlyTimingRelativeTolerance;
+                // 同じ時刻や後退を含む列は、後続の確定を待ってから選ぶ。
+                if (_earlyPreviousTimestamp is double previous && timestamp <= previous)
+                    reason = "受信時刻が単調増加していない";
+                // 長い表示時間が後から現れる列では、先の候補も選択範囲に入り得る。
+                else if (_earlyDuration is double known && Math.Abs(duration - known) > tolerance)
+                    reason = "受信した表示時間が一致しない";
+                // 表示時間だけが一定でも、時刻の間隔が異なる列は可変レートとして待つ。
+                else if (_earlyPreviousTimestamp is double last && Math.Abs(timestamp - last - duration) > tolerance)
+                    reason = "受信時刻の間隔が一定でない";
+                _earlyPreviousTimestamp = timestamp;
+                _earlyDuration ??= duration;
+                ++_earlyTimedFrames;
+            }
+            if (reason == null) return;
+            _earlyTimingEligible = false;
+            if (_earlyOffered) EarlyDisplayFallbackReason = reason;
+        }
+
         private void TryConfirm(Y4mFrame frame, double tolerance)
         {
             // 全列が時刻なしだった場合だけFinishでfpsへ戻す。
@@ -962,6 +1009,7 @@ public sealed partial class PreviewController : IAsyncDisposable
 
         public void Finish()
         {
+            _finishing = true;
             if (Frames.Count == 0) return;
             bool naturalEnd = false;
             if (request.InputDurationSeconds is double duration && double.IsFinite(duration) && duration >= 0)
@@ -1017,7 +1065,10 @@ public sealed partial class PreviewController : IAsyncDisposable
             TargetNotReached = notReached;
             // 早期画像のUI待ちで区間全体を固定しない。完了時の区間は別途通知する。
             var anchor = Segment == null ? null : new PreviewFrameReference(Segment, _candidate).RetainFrameOnly();
-            emit(new(request, Frames[_candidate], notReached) { Segment = anchor?.Segment });
+            bool early = !_finishing && !notReached && _earlyTimingEligible && _earlyTimedFrames >= MinimumEarlyTimedFrames
+                && _clock.TrustedAbsolute;
+            _earlyOffered = early;
+            emit(new(request, Frames[_candidate], notReached) { Segment = anchor?.Segment, CanDisplayBeforeEnd = early });
         }
     }
 

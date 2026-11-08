@@ -333,7 +333,8 @@ public sealed partial class MainWindowViewModel
             selectedXts = frame?.Xts, missing = frame == null, busy = IsBeforeBusy });
         if (frame != null)
         {
-            DisplayBeforeFrame(frame, Volatile.Read(ref _generation), finishBusy: true, revisionContext: context);
+            if (!CompleteEarlyBeforeFrame(context, frame))
+                DisplayBeforeFrame(frame, Volatile.Read(ref _generation), finishBusy: true, revisionContext: context);
             return;
         }
         if (retryLimitedRescue)
@@ -518,21 +519,28 @@ public sealed partial class MainWindowViewModel
         return frames[index];
     }
 
-    private void DisplayBeforeFrame(Y4mFrame frame, long generation, bool finishBusy = false, RequestContext? revisionContext = null)
+    private void DisplayBeforeFrame(Y4mFrame frame, long generation, bool finishBusy = false, RequestContext? revisionContext = null,
+        PreviewSegmentSnapshot? sourceSegment = null, bool earlyDisplay = false)
     {
         // 変換中に選択済みの区間が回収されると再取得になるため、表示準備を始めた時点から守る。
-        SelectBeforePresentationSegment(_beforeIntervalSegment?.SegmentId);
+        SelectBeforePresentationSegment((sourceSegment ?? _beforeIntervalSegment)?.SegmentId);
         revisionContext ??= Volatile.Read(ref _context);
         long revision = revisionContext == null ? 0 : Volatile.Read(ref revisionContext.DisplayRevision);
         long imageGeneration = Interlocked.Increment(ref _beforeImageGeneration);
         var request = _beforeSelectionRequest;
-        var clock = _beforeIntervalSegment?.Clock ?? (request == null ? null : ClockFor(request, new[] { frame }));
-        EnqueueImage(new ImageWork(frame, generation, Volatile.Read(ref _editEpoch), Before: true,
+        var source = sourceSegment ?? _beforeIntervalSegment;
+        var clock = source?.Clock ?? (request == null ? null : ClockFor(request, new[] { frame }));
+        var work = new ImageWork(frame, generation, Volatile.Read(ref _editEpoch), Before: true,
             BeforeVersion: imageGeneration, FinishBeforeBusy: finishBusy,
             DisplaySeconds: PerfTrace.Enabled && frame.Xts.HasValue && request != null && clock != null
                 ? clock.ToInputSeconds(frame, 0, request.Fps) : null,
-            SegmentId: _beforeIntervalSegment?.SegmentId, TrustedAbsolute: clock?.TrustedAbsolute ?? false,
-            RevisionContext: revisionContext, DisplayRevision: revision));
+            SegmentId: source?.SegmentId, TrustedAbsolute: clock?.TrustedAbsolute ?? false,
+            RevisionContext: revisionContext, DisplayRevision: revision);
+        EnqueueImage(work);
+        if (earlyDisplay && PerfTrace.Enabled) PerfTrace.Write("vm.before.early.queued", new {
+            generation, correlationId = revisionContext?.Request.CorrelationId, work.TraceId,
+            frame.FrameId, frame.Xts, frame.Xdur, target = CurrentSeconds,
+            reason = "単調な等間隔の受信列で目標を読み越した" });
     }
 
     private void CaptureBeforeFallbackDiagnostic(string diagnostics)

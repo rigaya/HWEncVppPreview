@@ -411,7 +411,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         // 完了列で選ぶ元画像と隣不足は、callback中に選択1枚の所有slotへ移す。
         if (context.Kind == RequestKind.Before || context.NeighborDirection != 0)
         {
-            try { if (IsCurrent(context) && segment != null) context.Segment = segment; }
+            try
+            {
+                if (IsCurrent(context) && segment != null) context.Segment = segment;
+                if (context.Kind == RequestKind.Before) QueueEarlyBeforeFrame(context, value, segment);
+            }
             finally
             {
                 // callback開始後に現役contextが交換されても、遅い代入の所有をここで閉じる。
@@ -471,6 +475,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         var context = ContextFor(value.Request);
         if (_disposed || context == null) return;
+        if (context.Kind == RequestKind.Before) Interlocked.Exchange(ref context.BeforeCompletionReceived, 1);
         if (value.IsReplay)
         {
             DropRawPosts(candidate => ReferenceEquals(candidate, context));
@@ -582,6 +587,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         }
         if (context.Kind == RequestKind.Before)
         {
+            context.BeforeEarlyFallbackReason = value.EarlyDisplayFallbackReason
+                ?? (value.IsReplay ? "時刻条件の再取得に切り替わった" : context.BeforeEarlyFallbackReason);
             CaptureBeforeFallbackDiagnostic(value.Result.StandardError);
             CompleteBeforeWithWindows(context, frames, sources, retryLimitedBeforeRescue);
             return;
@@ -1101,6 +1108,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         public CancellationTokenSource? BeforeCancellation { get; } = beforeCancellation;
         public long DisplayRevision;
         public int ReplayStarted;
+        public int BeforeCompletionReceived;
+        public Y4mFrame? BeforeEarlyFrame;
+        public double BeforeEarlyTarget;
+        public string? BeforeEarlyFallbackReason;
         public bool ReplayUiStarted;
         public bool NeighborResolved { get; set; }
         public double? ResolvedTargetSeconds { get; set; }
