@@ -93,7 +93,7 @@ public sealed partial class PreviewController
     private sealed class ProbeBackendLease(PreviewController owner, IPreviewBackend backend) : IPreviewBackend
     {
         public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
-            => owner.RunTrackedBackendAsync(backend, request, sink, token);
+            => owner.RunTrackedBackendAsync(backend, request, sink, token, forceLegacy: true);
         public ValueTask AbortAsync() => backend.AbortAsync();
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

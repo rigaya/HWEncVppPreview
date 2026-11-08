@@ -221,7 +221,8 @@ public sealed class CliTests
             "--input-args", "--avhw");
         if (filter.Length > 0) args = args.Concat(new[] { "--vpp", filter }).ToArray();
         var run = await RunProcessAsync(args, capabilities: true, readyEncoder: encoder);
-        Assert.Equal(0, run.ExitCode);
+        Assert.True(run.ExitCode == 0,
+            $"CLI終了コードが0ではありません: rc={run.ExitCode}, mode={mode}, encoder={encoder}, filter={filter}\nstdout:\n{run.Output}\nstderr:\n{run.StandardError}");
         using var json = ParseSingleLine(run.Output);
         var root = json.RootElement;
         Assert.True(root.GetProperty("trustedAbsolute").GetBoolean());

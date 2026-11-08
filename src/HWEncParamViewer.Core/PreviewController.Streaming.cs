@@ -163,8 +163,10 @@ public sealed partial class PreviewController
                 && request.TimestampOriginSeconds is double origin && double.IsFinite(origin) && !IsLegacySource(request);
             var active = _stream is { } existing && !existing.Cancellation.IsCancellationRequested ? existing : null;
             PreviewSegmentSnapshot? cached = null;
-            if (!bypassCache && !IsLegacySource(request) && _cache.TryGetAt(request, request.TargetSeconds, out var available)) cached = available;
+            if (!bypassCache && !IsLegacySource(request) && _cache.TryGetAt(request, request.TargetSeconds, out var available))
+                cached = available;
 
+            // 再利用の判定は時計と範囲だけを読むため、現在区間の画素を全て固定しない。
             var current = active == null || active.SegmentId == 0 ? null : _cache.GetSegment(active.SegmentId);
             if (active != null && TryKeepForwardPrefetchCore(active, request, cached, current, bypassCache, navigation, externalToken)) return true;
             if (active is { IsForwardPrefetch: true })
@@ -237,8 +239,13 @@ public sealed partial class PreviewController
                     PulseStreamState();
                     active.ReadAllowed.TrySetResult();
                 }
-                TryPublishDemand(active);
-                return true;
+                if (TryPublishDemand(active)) return true;
+                // pause中に表示元が消えた需要を取り残さず、同じ要求を新しいstreamで取得する。
+                CancelStreamCore("selection_source_lost");
+                active = null;
+                current = null;
+                cached = null;
+                bypassCache = true;
             }
 
             if (active != null) CancelStreamCore("submit_incompatible_or_before_retained");
@@ -251,8 +258,9 @@ public sealed partial class PreviewController
             if (cached != null && !bypassCache)
             {
                 _cache.PinCurrent(cached.SegmentId, request.TargetSeconds);
-                PublishSegmentSelection(request, cached, version, navigation, false, _lastEditVersion, externalToken, true);
-                return true;
+                if (PublishSegmentSelection(request, cached, version, navigation, false, _lastEditVersion, externalToken, true))
+                    return true;
+                // 選択画像が消えたcacheは成功扱いにせず、下の新しいstream取得へ進む。
             }
             var physical = PhysicalAfterRequest(request, false) with { Continuous = true };
             var cancellation = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
@@ -269,20 +277,43 @@ public sealed partial class PreviewController
         }
     }
 
-    private void PublishSegmentSelection(PreviewRequest request, PreviewSegmentSnapshot segment, long version,
+    private bool TryPrepareSegmentFrame(PreviewRequest request, PreviewSegmentSnapshot segment, CancellationToken token,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PreviewFrameResult? frame, out OwnedPreviewEnvelope? owned)
+    {
+        frame = null;
+        owned = null;
+        if (token.IsCancellationRequested || segment.Frames.Count == 0) return false;
+        int selected = FrameSelector.Select(segment, request.TargetSeconds, request.Fps);
+        if (selected < 0) return false;
+        frame = new(request, segment.Frames[selected], false) { Segment = segment };
+        return TryPrepareFrameNotification(frame, out owned);
+    }
+
+    private bool PublishSegmentSelection(PreviewRequest request, PreviewSegmentSnapshot segment, long version,
         bool navigation, bool background, long editVersion, CancellationToken token, bool fromCache)
     {
-        if (token.IsCancellationRequested || segment.Frames.Count == 0) return;
-        int selected = FrameSelector.Select(segment, request.TargetSeconds, request.Fps);
-        if (selected < 0) return;
+        if (!TryPrepareSegmentFrame(request, segment, token, out var frame, out var owned)) return false;
+        using (owned) return PublishPreparedSegmentSelection(frame, owned, version, navigation, background, editVersion, fromCache);
+    }
+
+    private bool PublishPreparedSegmentSelection(PreviewFrameResult frame, OwnedPreviewEnvelope? owned, long version,
+        bool navigation, bool background, long editVersion, bool fromCache)
+    {
+        bool published = false;
         void Emit()
         {
-            FrameReady?.Invoke(new(request, segment.Frames[selected], false) { Segment = segment });
-            SegmentUpdated?.Invoke(new(request, segment, true, true));
-            Completed?.Invoke(new(request, new(0, ""), fromCache, false) { Frames = segment.Frames, Segment = segment });
+            EmitPreparedFrame(frame, owned);
+            EmitSegment(new(frame.Request, frame.Segment!, true, true));
+            EmitCompletion(new(frame.Request, new(0, ""), fromCache, false)
+            {
+                Frames = frame.Segment!.Frames,
+                Segment = frame.Segment
+            });
+            published = true;
         }
         if (background) NotifyBackground(version, editVersion, Emit);
         else Notify(version, navigation, Emit, currentOnly: true);
+        return published;
     }
 
     private async Task RunStreamAsync(StreamingSession session, CancellationTokenSource scheduled, bool bypassDebounce)
@@ -356,15 +387,20 @@ public sealed partial class PreviewController
                 lock (_sync)
                 {
                     session.Ended = naturalEnd;
-                    TryPublishDemand(session, finish: true);
+                    bool finalAvailable = TryPublishDemand(session, finish: true);
                     if (!session.IsForwardPrefetch && ReferenceEquals(_stream, session) && session.LastNotifiedVersion != session.Version)
                         Notify(session.Version, session.Navigation, () => Failed?.Invoke(new(session.LatestRequest,
                             CoreText.FrameUnavailable, result)
                             { WindowShortfall = PreviewWindowShortfall.FromSegment(session.LatestRequest, _cache.GetSegment(session.SegmentId)) }), true);
-                    else if (!session.IsForwardPrefetch && ReferenceEquals(_stream, session) && _cache.GetSegment(session.SegmentId) is { } segment)
-                        Notify(session.Version, session.Navigation, () => Completed?.Invoke(new(session.LatestRequest,
-                            result, false, !session.Satisfied)
-                            { Frames = segment.Frames, Segment = segment }), true);
+                    else if (finalAvailable && !session.IsForwardPrefetch && ReferenceEquals(_stream, session))
+                    {
+                        // 完了の画素は同期callbackが必要な救済だけTry取得するため、全窓を固定しない。
+                        var segment = _cache.GetSegment(session.SegmentId);
+                        if (segment != null)
+                            Notify(session.Version, session.Navigation, () => EmitCompletion(new(session.LatestRequest,
+                                result, false, !session.Satisfied)
+                                { Frames = segment.Frames, Segment = segment }), true);
+                    }
                 }
             }
             else if (!session.Cancellation.IsCancellationRequested && !result.IsCancelled)
@@ -428,13 +464,15 @@ public sealed partial class PreviewController
         }
     }
 
-    private void TryPublishDemand(StreamingSession session, bool finish = false)
+    private bool TryPublishDemand(StreamingSession session, bool finish = false)
     {
-        if (!ReferenceEquals(_stream, session) || _disposed || session.ExternalToken.IsCancellationRequested) return;
+        if (!ReferenceEquals(_stream, session) || _disposed || session.Cancellation.IsCancellationRequested
+            || session.ExternalToken.IsCancellationRequested) return true;
         var segment = _cache.GetSegment(session.SegmentId);
-        if (segment == null || segment.Frames.Count == 0) return;
+        if (segment == null) return session.SegmentId == 0;
+        if (segment.Frames.Count == 0) return true;
         // 先読みは受理済み表示を置き換えない。画像・完了・Before用の通知は実需要への合流後だけ送る。
-        if (session.IsForwardPrefetch) return;
+        if (session.IsForwardPrefetch) return true;
         var request = session.LatestRequest;
         int selected = FrameSelector.Select(segment, request.TargetSeconds, request.Fps);
         double last = segment.Clock.ToInputSeconds(segment.Frames[^1], segment.Frames.Count - 1, request.Fps);
@@ -446,21 +484,38 @@ public sealed partial class PreviewController
             || (finish && request.TargetSeconds <= last + tolerance));
 
         // EOFでも窓が足りない目標を、最後の別フレームで成功扱いにしない。
-        if (finish && !confirmed && PreviewWindowShortfall.FromSegment(request, segment) != null) return;
+        if (finish && !confirmed && PreviewWindowShortfall.FromSegment(request, segment) != null) return true;
         bool notifyFrame = (confirmed || finish) && selected >= 0 && session.LastNotifiedVersion != session.Version;
         if (notifyFrame)
         {
-            session.LastNotifiedVersion = session.Version;
-            session.Satisfied = confirmed;
-            Notify(session.Version, session.Navigation, () => FrameReady?.Invoke(new(request, segment.Frames[selected], !confirmed)
-                { Segment = segment }), true);
-            session.Demand.TrySetResult();
+            var frame = new PreviewFrameResult(request, segment.Frames[selected], !confirmed) { Segment = segment };
+            if (!TryPublishSelectedFrame(session, frame, confirmed)) return false;
         }
         // 中心確定後も隣の1枚を待つVMへ区間を知らせ、先読み2秒のpauseまで表示を止めない。
         // 隣需要の状態はVMが持つため、中心確定後も区間更新を送り、VMの最新値集約に任せる。
         if (notifyFrame || session.IsPaused || finish || confirmed)
-            Notify(session.Version, session.Navigation, () => SegmentUpdated?.Invoke(new(request, segment,
+            Notify(session.Version, session.Navigation, () => EmitSegment(new(request, segment,
                 session.IsPaused, confirmed)), true);
+        return true;
+    }
+
+    private bool TryPublishSelectedFrame(StreamingSession session, PreviewFrameResult frame, bool confirmed)
+    {
+        // 選択画像の取得に成功してから通知済み状態と需要を確定し、失敗を表示成功にしない。
+        if (!TryPrepareFrameNotification(frame, out var owned)) return false;
+        using (owned)
+        {
+            bool published = false;
+            Notify(session.Version, session.Navigation, () =>
+            {
+                session.LastNotifiedVersion = session.Version;
+                session.Satisfied = confirmed;
+                EmitPreparedFrame(frame, owned);
+                session.Demand.TrySetResult();
+                published = true;
+            }, true);
+            return published;
+        }
     }
 
     private sealed class StreamingSession(PreviewRequest physical, PreviewRequest logical, long version, bool navigation,
@@ -494,7 +549,7 @@ public sealed partial class PreviewController
         public ForwardReadProgress ReadProgress { get; } = new();
     }
 
-    private sealed class StreamSink(PreviewController owner, StreamingSession session, OutputWatchdog watchdog) : IPreviewSink
+    private sealed class StreamSink(PreviewController owner, StreamingSession session, OutputWatchdog watchdog) : IRawOwnedSink
     {
         private readonly PreviewTimestampGuard _timestampGuard = new(session.PhysicalRequest.Fps);
         private bool? _lastTraceReading;
@@ -520,7 +575,7 @@ public sealed partial class PreviewController
                 owner.PulseStreamState();
                 if (!reading)
                 {
-                    owner.TryPublishDemand(session);
+                    if (!owner.TryPublishDemand(session)) throw new InvalidOperationException(CoreText.FrameUnavailable);
                     owner.TryStartReversePrefetchCore();
                 }
             }
@@ -530,6 +585,7 @@ public sealed partial class PreviewController
             lock (owner._sync)
             {
                 if (token.IsCancellationRequested || !ReferenceEquals(owner._stream, session)) return ValueTask.CompletedTask;
+                // 先読みの予算と末尾時刻の計算では画素を使わず、記述子だけで停止位置を決める。
                 var segment = owner._cache.GetSegment(session.SegmentId);
                 bool trusted = segment?.Clock.TrustedAbsolute != false;
                 double last = segment?.Frames.Count > 0
@@ -600,7 +656,7 @@ public sealed partial class PreviewController
                 owner.RememberOutputFrame(session.PhysicalRequest, frame);
                 if (!owner._cache.Append(session.SegmentId, frame))
                     throw new InvalidOperationException(CoreText.ReadAheadCacheFull);
-                session.LastFrameBytes = frame.Data.LongLength;
+                session.LastFrameBytes = frame.RawByteLength;
                 if (_observedClock is { TrustedAbsolute: true } observedClock && frame.Xts is double actualTimestamp && double.IsFinite(actualTimestamp))
                 {
                     double input = observedClock.ToInputSeconds(frame, 0, session.PhysicalRequest.Fps);
@@ -622,7 +678,7 @@ public sealed partial class PreviewController
                     session.ReadAllowed.TrySetResult();
                     return;
                 }
-                owner.TryPublishDemand(session);
+                if (!owner.TryPublishDemand(session)) throw new InvalidOperationException(CoreText.FrameUnavailable);
 
             }
         }

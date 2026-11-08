@@ -38,20 +38,35 @@ public static partial class YuvToBgra
     /// 範囲外の値はRGB変換後に飽和させる。PQ/HLGだけを線形化し、基準白と高輝度の肩を使ってSDRへ変換する。
     /// </remarks>
     public static byte[] Convert(Y4mFrame frame, HdrDisplaySettings? settings = null)
-        => ConvertCore(frame, settings, null);
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        if (frame.RawOwner != null)
+            throw new InvalidOperationException("owned変換にはleaseが必要です。");
+        return ConvertCore(frame, settings, null);
+    }
 
     /// <summary>呼出側が所有する幅×高さ×4の配列へ変換し、入力画像は変更しない。</summary>
     public static void ConvertInto(Y4mFrame frame, byte[] output, HdrDisplaySettings? settings = null)
     {
         ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(frame);
+        if (frame.RawOwner != null)
+            throw new InvalidOperationException("owned変換にはleaseが必要です。");
         ConvertCore(frame, settings, output);
+    }
+
+    internal static void ConvertInto(RawFrameLease frame, byte[] output, HdrDisplaySettings? settings = null)
+    {
+        using var retained = frame.Retain("Conversion");
+        ArgumentNullException.ThrowIfNull(output);
+        _ = ConvertCore(retained.Frame, settings, output);
     }
 
     private static byte[] ConvertCore(Y4mFrame frame, HdrDisplaySettings? settings, byte[]? output)
     {
         ArgumentNullException.ThrowIfNull(frame);
         ArgumentNullException.ThrowIfNull(frame.Header);
-        ArgumentNullException.ThrowIfNull(frame.Data);
+        ArgumentNullException.ThrowIfNull(frame.RawPixels);
         var header = frame.Header;
         int width = header.Width, height = header.Height;
         if (width <= 0 || height <= 0) throw new ArgumentException(CoreText.ImageSizePositive, nameof(frame));
@@ -59,7 +74,7 @@ public static partial class YuvToBgra
         if (!Enum.IsDefined(header.Chroma)) throw new ArgumentException(CoreText.ChromaUnsupported, nameof(frame));
         long pixels = (long)width * height;
         if (pixels > int.MaxValue / 4) throw new ArgumentException(CoreText.ImageTooLarge, nameof(frame));
-        if (output != null && (output.Length != pixels * 4 || ReferenceEquals(output, frame.Data)))
+        if (output != null && (output.Length != pixels * 4 || ReferenceEquals(output, frame.RawPixels)))
             throw new ArgumentException("出力は入力とは別の幅×高さ×4byteの配列にしてください。", nameof(output));
         int lumaSamples = (int)pixels;
         int chromaWidth = header.Chroma is Y4mChroma.C420 or Y4mChroma.C422 ? (width + 1) / 2 : width;
@@ -67,8 +82,8 @@ public static partial class YuvToBgra
         int chromaSamples = header.Chroma == Y4mChroma.Mono ? 0 : checked(chromaWidth * chromaHeight);
         int sampleBytes = header.BytesPerSample;
         long expectedBytes = ((long)lumaSamples + 2L * chromaSamples) * sampleBytes;
-        if (frame.Data.LongLength != expectedBytes)
-            throw new ArgumentException(CoreText.PlaneDataLengthInvalid(expectedBytes, frame.Data.LongLength), nameof(frame));
+        if (frame.RawByteLength != expectedBytes)
+            throw new ArgumentException(CoreText.PlaneDataLengthInvalid(expectedBytes, frame.RawByteLength), nameof(frame));
 
         var color = GetColorInfo(header);
         if (color.IsHdr) return ConvertHdr(frame, settings ?? new HdrDisplaySettings(), output);
@@ -87,7 +102,7 @@ public static partial class YuvToBgra
         double blueCb = 2 * (1 - kb) * cFactor;
         double greenCb = 2 * kb * (1 - kb) / kg * cFactor;
         double greenCr = 2 * kr * (1 - kr) / kg * cFactor;
-        byte[] data = frame.Data;
+        byte[] data = frame.RawPixels;
         byte[] result = output ?? new byte[lumaSamples * 4];
         if (header.Chroma == Y4mChroma.C420)
         {

@@ -59,13 +59,17 @@ public sealed partial class PreviewController
         if (physicalSegment is { CanStitch: true, Clock.TrustedAbsolute: true }
             && PreviewSafeRange.Contains(request.TargetSeconds, physicalSegment.SafeStartSeconds, physicalSegment.SafeEndSeconds)
             && FrameSelector.Select(physicalSegment, request.TargetSeconds, request.Fps) >= 0) return false;
-        session.LatestRequest = request;
-        session.Version = ++_version;
-        session.Navigation = true;
-        session.ExternalToken = externalToken;
-        if (externalToken.CanBeCanceled) session.Registrations.Add(externalToken.Register(() => session.Cancellation.Cancel()));
-        _cache.PinCurrent(cached.SegmentId, request.TargetSeconds);
-        PublishSegmentSelection(request, cached, session.Version, true, false, _lastEditVersion, externalToken, true);
-        return true;
+        // 表示元を確保できないcacheでは先読みの需要を書き換えず、通常のmiss処理へ戻す。
+        if (!TryPrepareSegmentFrame(request, cached, externalToken, out var frame, out var owned)) return false;
+        using (owned)
+        {
+            session.LatestRequest = request;
+            session.Version = ++_version;
+            session.Navigation = true;
+            session.ExternalToken = externalToken;
+            if (externalToken.CanBeCanceled) session.Registrations.Add(externalToken.Register(() => session.Cancellation.Cancel()));
+            _cache.PinCurrent(cached.SegmentId, request.TargetSeconds);
+            return PublishPreparedSegmentSelection(frame, owned, session.Version, true, false, _lastEditVersion, true);
+        }
     }
 }

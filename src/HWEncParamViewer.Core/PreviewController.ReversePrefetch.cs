@@ -79,8 +79,10 @@ public sealed partial class PreviewController
         }
         if(stream!=null)
         {
-            if(_cache.GetSegment(stream.SegmentId) is { } trimmed)
-                Notify(stream.Version,stream.Navigation,()=>SegmentUpdated?.Invoke(new(stream.LatestRequest,trimmed,true,true)),true);
+            // 区間更新は記述子だけを渡し、UIが使う画素は選択時に取得する。
+            var trimmed = _cache.GetSegment(stream.SegmentId);
+            if (trimmed != null)
+                Notify(stream.Version, stream.Navigation, () => EmitSegment(new(stream.LatestRequest, trimmed, true, true)), true);
             CancelStreamCore("reverse_prefetch");
         }
         if (_reversePrefetch is { } previous) previous.Cancellation.Dispose();

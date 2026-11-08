@@ -39,18 +39,18 @@ public static partial class YuvToBgra
             try
             {
                 Parallel.For(0, ch, y => ExpandChromaRow(y, color.ChromaLocation == "center", width, cw,
-                    luma, chroma, expandedSize, bytes, neutral, frame.Data, expanded));
+                    luma, chroma, expandedSize, bytes, neutral, frame.RawPixels, expanded));
                 Parallel.For(0, height, y =>
                 {
                     Axis(y, color.ChromaLocation != "topleft", ch, out int y0, out int y1, out double phase);
-                    HdrRow(y, width, luma, bytes, black, yf, parameters, frame.Data, output, expanded,
+                    HdrRow(y, width, luma, bytes, black, yf, parameters, frame.RawPixels, output, expanded,
                         expandedSize, y0 * width, y1 * width, (float)phase, cw, chroma, neutral, false, false);
                 });
             }
             finally { ArrayPool<float>.Shared.Return(expanded); }
         }
         else
-            Parallel.For(0, height, y => HdrRow(y, width, luma, bytes, black, yf, parameters, frame.Data,
+            Parallel.For(0, height, y => HdrRow(y, width, luma, bytes, black, yf, parameters, frame.RawPixels,
                 output, null, 0, 0, 0, 0, cw, chroma, neutral, h.Chroma == Y4mChroma.C422,
                 color.ChromaLocation == "center", h.Chroma == Y4mChroma.Mono));
         return output;

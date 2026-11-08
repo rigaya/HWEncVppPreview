@@ -303,6 +303,7 @@ public sealed partial class PreviewController : IAsyncDisposable
         long backendStart = 0;
         long pendingSource = 0;
         CancellationTokenSource? active = null;
+        using var rawSinks = _rawScope == null ? null : new RawDisposableBag();
         using var finiteWindow = _finiteBudget.Open(_cache.CapacityBytes, request.RetainedByteLimit);
         bool IsCurrent() => prefetch != null
             ? !_disposed && !scheduled.IsCancellationRequested && ReferenceEquals(_reversePrefetch, prefetch)
@@ -367,29 +368,37 @@ public sealed partial class PreviewController : IAsyncDisposable
             {
                 if (PerfTrace.Enabled) PerfTrace.Write("core.target_frame", new { request.CorrelationId, version,
                     frame.Frame.Xts, frame.TargetNotReached });
-                Publish(() => FrameReady?.Invoke(frame with { IsReplay = isReplay }));
+                Publish(() => EmitFrame(frame with { IsReplay = isReplay }));
             };
-            var sink = new SelectionSink(request, emit, background, physicalRequest);
+            var sink = new SelectionSink(rawSinks, request, emit, background, physicalRequest);
             var physicalKey = physicalRequest with
             { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
             if (!bypassCache && !IsLegacySource(request) && request.Capabilities.TimestampPassthrough && request.TimestampOriginSeconds.HasValue
                 && _cache.TryGetAt(request, request.TargetSeconds, out var cachedSegment))
             {
-                if (!background) _cache.PinCurrent(cachedSegment.SegmentId, request.TargetSeconds);
-                PublishSegmentSelection(request, cachedSegment, version, navigation, background, editVersion, cancellationToken, true);
-                return;
+                if (!background)
+                    _cache.PinCurrent(cachedSegment!.SegmentId, request.TargetSeconds);
+                if (PublishSegmentSelection(request, cachedSegment!, version, navigation, background, editVersion, cancellationToken, true))
+                    return;
+                if (!IsCurrent() || cancellationToken.IsCancellationRequested) return;
+                // 消えた正ID候補をexact窓へ再投入せず、同じ要求の通常取得へ一度だけ戻す。
+                bypassCache = true;
             }
-            if (!bypassCache && (_cache.TryGet(request, out var frames, out var cachedPhysical)
-                || _cache.TryGet(physicalKey, out frames, out cachedPhysical)))
+            PreviewRequest cachedPhysical = request;
+            using var framesOwned = _rawScope != null && !bypassCache ? _cache.TryGetOwned(request, "ControllerCacheRead", out cachedPhysical) : null;
+            using var physicalOwned = _rawScope != null && !bypassCache && framesOwned == null ? _cache.TryGetOwned(physicalKey, "ControllerCacheRead", out cachedPhysical) : null;
+            IReadOnlyList<Y4mFrame> frames = (framesOwned ?? physicalOwned)?.Frames ?? Array.Empty<Y4mFrame>();
+            if (!bypassCache && (_rawScope != null ? framesOwned != null || physicalOwned != null
+                : _cache.TryGet(request, out frames, out cachedPhysical) || _cache.TryGet(physicalKey, out frames, out cachedPhysical)))
             {
                 // keyが一致する保存windowを使う。新targetのcanonical窓へ置換すると生Xtsの基準がずれる。
-                sink = new SelectionSink(request, emit, background, cachedPhysical);
+                sink = new SelectionSink(rawSinks, request, emit, background, cachedPhysical);
                 if (PerfTrace.Enabled) PerfTrace.Write("core.cache_hit", new { request.CorrelationId, version, frames = frames.Count });
                 foreach (var frame in frames) sink.OnFrame(frame);
                 sink.Finish();
                 if (!sink.HasSelection && prefetch == null && !background && request.Capabilities.TimestampPassthrough && request.TimestampOriginSeconds.HasValue)
                 { Publish(() => Failed?.Invoke(new(request, CoreText.FrameUnavailable)), currentOnly: true); return; }
-                Publish(() => Completed?.Invoke(new(request, WithLegacyDiagnostic(request, new(0, "")), true, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly(), Segment = sink.Segment, IsReplay = isReplay }));
+                Publish(() => EmitCompletion(new(request, WithLegacyDiagnostic(request, new(0, "")), true, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly(), Segment = sink.Segment, IsReplay = isReplay }));
                 return;
             }
             if (!background && prefetch == null) pendingSource = _cache.BeginPendingSource(request);
@@ -402,7 +411,7 @@ public sealed partial class PreviewController : IAsyncDisposable
             physicalKey = physicalRequest with
             { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
             finiteWindow.Reset();
-            sink = new SelectionSink(request, emit, background, physicalRequest, finiteWindow);
+            sink = new SelectionSink(rawSinks, request, emit, background, physicalRequest, finiteWindow);
             sink.HeaderObserved = header => RememberOutputHeader(request, header);
             sink.FrameObserved = frame => RememberOutputFrame(request, frame);
             PreviewRunResult result;
@@ -473,7 +482,7 @@ public sealed partial class PreviewController : IAsyncDisposable
                     physicalRequest = physicalRequest with { DisableOutputStart = true };
                     physicalKey = physicalRequest with { Capabilities=request.Capabilities, InputArgs=request.InputArgs, VppArgs=request.VppArgs };
                     finiteWindow.Reset();
-                    sink = new SelectionSink(request, emit, background, physicalRequest, finiteWindow)
+                    sink = new SelectionSink(rawSinks, request, emit, background, physicalRequest, finiteWindow)
                     {
                         HeaderObserved = header => RememberOutputHeader(request, header),
                         FrameObserved = frame => RememberOutputFrame(request, frame),
@@ -501,7 +510,7 @@ public sealed partial class PreviewController : IAsyncDisposable
                         physicalKey = physicalRequest with
                         { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
                         finiteWindow.Reset();
-                        sink = new SelectionSink(request, emit, background, physicalRequest, finiteWindow)
+                        sink = new SelectionSink(rawSinks, request, emit, background, physicalRequest, finiteWindow)
                         {
                             HeaderObserved = header => RememberOutputHeader(request, header),
                             FrameObserved = frame => RememberOutputFrame(request, frame),
@@ -542,7 +551,7 @@ public sealed partial class PreviewController : IAsyncDisposable
             if (PerfTrace.Enabled) PerfTrace.Write("core.cache_store", new { request.CorrelationId, version,
                 frames = sink.Frames.Count, bytes = sink.ReceivedBytes, cacheBytes = _cache.SizeBytes,
                 cacheEntries = _cache.Count });
-            Publish(() => Completed?.Invoke(new(request, result, false, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly(), Segment = sink.Segment, IsReplay = isReplay }));
+            Publish(() => EmitCompletion(new(request, result, false, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly(), Segment = sink.Segment, IsReplay = isReplay }));
 
             async Task<PreviewRunResult> RunWithFallbackAsync()
             {
@@ -555,7 +564,7 @@ public sealed partial class PreviewController : IAsyncDisposable
                     physicalKey = physicalRequest with
                     { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
                     finiteWindow.Reset();
-                    sink = new SelectionSink(request, emit, background, physicalRequest, finiteWindow)
+                    sink = new SelectionSink(rawSinks, request, emit, background, physicalRequest, finiteWindow)
                     {
                         HeaderObserved = header => RememberOutputHeader(request, header),
                         FrameObserved = frame => RememberOutputFrame(request, frame),
@@ -626,7 +635,7 @@ public sealed partial class PreviewController : IAsyncDisposable
     }
 
     private async Task<PreviewRunResult> RunTrackedBackendAsync(IPreviewBackend backend, PreviewRequest request,
-        IPreviewSink sink, CancellationToken token)
+        IPreviewSink sink, CancellationToken token, bool forceLegacy = false)
     {
         token.ThrowIfCancellationRequested();
         var running = new BackendRun();
@@ -637,7 +646,11 @@ public sealed partial class PreviewController : IAsyncDisposable
         }
         try
         {
-            Task<PreviewRunResult> run = backend.RunAsync(request, sink, token);
+            Task<PreviewRunResult> run = _rawScope != null && !forceLegacy
+                ? backend is IRawOwnedBackend owned && sink is IRawOwnedSink target
+                    ? owned.RunOwnedAsync(request, target, _rawScope, token)
+                    : throw new InvalidOperationException("owned経路を公開sinkへ接続できません。")
+                : backend.RunAsync(request, sink, token);
             lock (_sync) running.Task = run;
             return await run.ConfigureAwait(false);
         }
@@ -752,14 +765,33 @@ public sealed partial class PreviewController : IAsyncDisposable
         _backgroundExecution.Dispose();
     }
 
-    private sealed class SelectionSink(PreviewRequest request, Action<PreviewFrameResult> emit, bool background = false, PreviewRequest? physicalRequest = null, PreviewFiniteBudget.Window? budget = null) : IPreviewSink
+    private sealed class SelectionSink : IRawOwnedSink, IDisposable
     {
-        private readonly PreviewRequest _physicalRequest = physicalRequest ?? request;
-        private readonly PreviewTimestampGuard _timestampGuard = new(request.Fps);
+        private readonly PreviewRequest request;
+        private readonly Action<PreviewFrameResult> emit;
+        private readonly bool background;
+        private readonly PreviewFiniteBudget.Window? budget;
+        private readonly object _rawGate = new();
+        private bool _rawClosed;
+        internal SelectionSink(RawDisposableBag? bag, PreviewRequest request, Action<PreviewFrameResult> emit, bool background = false,
+            PreviewRequest? physicalRequest = null, PreviewFiniteBudget.Window? budget = null)
+        {
+            this.request = request;
+            this.emit = emit;
+            this.background = background;
+            this.budget = budget;
+            _physicalRequest = physicalRequest ?? request;
+            _timestampGuard = new(request.Fps);
+            _target = CommandBuilder.Plan(_physicalRequest).ActualPreMargin;
+            _clock = new(request.TimestampOriginSeconds, CommandBuilder.Plan(_physicalRequest).SeekSeconds ?? 0, false);
+            bag?.Add(this);
+        }
+        private readonly PreviewRequest _physicalRequest;
+        private readonly PreviewTimestampGuard _timestampGuard;
         public Action<string>? ReplayRequired { get; set; }
         public bool NeedsLegacyReplay { get; private set; }
-        private double _target = CommandBuilder.Plan(physicalRequest ?? request).ActualPreMargin;
-        private PreviewClockMap _clock = new(request.TimestampOriginSeconds, CommandBuilder.Plan(physicalRequest ?? request).SeekSeconds ?? 0, false);
+        private double _target;
+        private PreviewClockMap _clock;
         public PreviewSegmentSnapshot? Segment { get; set; }
         public Action<bool>? ReadState { get; set; }
         public void OnReadStateChanged(bool reading) => ReadState?.Invoke(reading);
@@ -768,7 +800,7 @@ public sealed partial class PreviewController : IAsyncDisposable
         private double _lastTime = double.NegativeInfinity;
         private bool _confirmed;
         private bool _hasTimestamp;
-        public List<Y4mFrame> Frames { get; } = new();
+        public RawFrameList Frames { get; } = new("Finite");
         private int _receivedFrames;
         private double _receivedEnd = double.NegativeInfinity;
         private bool _guardMetadataOnly;
@@ -786,6 +818,19 @@ public sealed partial class PreviewController : IAsyncDisposable
         public void OnHeader(Y4mHeader header) => HeaderObserved?.Invoke(header);
         public void OnFrame(Y4mFrame frame)
         {
+            if (frame.RawOwner == null)
+            {
+                OnFrameCore(frame);
+                return;
+            }
+            lock (_rawGate)
+            {
+                if (!_rawClosed)
+                    OnFrameCore(frame);
+            }
+        }
+        private void OnFrameCore(Y4mFrame frame)
+        {
             int index = _receivedFrames;
             if (index == 0) HeaderObserved?.Invoke(frame.Header);
             if (_physicalRequest.Capabilities.TimestampPassthrough)
@@ -798,9 +843,12 @@ public sealed partial class PreviewController : IAsyncDisposable
             FrameObserved?.Invoke(frame);
             if (PerfTrace.Enabled)
             {
-                ReceivedBytes += frame.Data.LongLength;
+                ReceivedBytes += frame.RawByteLength;
                 if (index == 0) PerfTrace.Write("core.first_frame", new { request.CorrelationId, frame.Xts,
-                    bytes = frame.Data.LongLength, frame.Header.Width, frame.Header.Height });
+                    bytes = frame.RawByteLength,
+                    frame.Header.Width,
+                    frame.Header.Height
+                });
             }
             ++_receivedFrames;
             if (index == 0)
@@ -814,7 +862,7 @@ public sealed partial class PreviewController : IAsyncDisposable
                 double warmup = plan.SeekSeconds > 0 ? _physicalRequest.WarmupSeconds : 0;
                 double retainedSeconds = Math.Max(0, plan.ActualPreMargin + _physicalRequest.PostMarginSeconds - warmup);
                 _guardMetadataOnly = budget != null
-                    && (Math.Ceiling(retainedSeconds * FrameSelector.FrameRate(frame, request.Fps)) + 2) * frame.Data.LongLength > budget.CapacityBytes;
+                    && (Math.Ceiling(retainedSeconds * FrameSelector.FrameRate(frame, request.Fps)) + 2) * frame.RawByteLength > budget.CapacityBytes;
             }
             bool timed = frame.Xts is double;
             // 全列欠落と判明する前のfps仮候補は、最初のXtsが現れた時点で無効にする。
@@ -845,12 +893,12 @@ public sealed partial class PreviewController : IAsyncDisposable
             }
             if (budget != null)
             {
-                while (!budget.TryAdd(frame.Data.LongLength))
+                while (!budget.TryAdd(frame.RawByteLength))
                 {
                     // 候補より古いprefixだけを解放する。候補とguardが収まらなければ成功扱いにはしない。
                     if (Frames.Count == 0 || !replacesCandidate && _candidate <= 0)
                         throw new InvalidOperationException("The preview raw byte budget cannot retain the selected frame and its tail guard.");
-                    budget.Remove(Frames[0].Data.LongLength);
+                    budget.Remove(Frames[0].RawByteLength);
                     Frames.RemoveAt(0);
                     _discardedRetainedPrefix = true;
                     --_candidate;
@@ -882,6 +930,14 @@ public sealed partial class PreviewController : IAsyncDisposable
             if (PerfTrace.Enabled) PerfTrace.Write("core.retention_limited", new { request.CorrelationId,
                 capacityBytes = budget?.CapacityBytes, reason = "rolling_prefix" });
         }
+        public void Dispose()
+        {
+            lock (_rawGate)
+            {
+                _rawClosed = true;
+                Frames.Dispose();
+            }
+        }
         public void KeepSelectionOnly()
         {
             if (_candidate < 0 || Segment == null) return;
@@ -890,9 +946,11 @@ public sealed partial class PreviewController : IAsyncDisposable
             int count = Math.Min(Frames.Count - first, 3);
             if (first == 0 && count == Frames.Count) return;
             var retained = Frames.Skip(first).Take(count).ToArray();
-            long removed = Frames.Sum(f => f.Data.LongLength) - retained.Sum(f => f.Data.LongLength);
+            long removed = Frames.Sum(f => f.RawByteLength) - retained.Sum(f => f.RawByteLength);
             budget?.Remove(removed);
-            Frames.Clear(); Frames.AddRange(retained);
+            using var keep = RawFrameSetLease.Capture(retained, "FiniteCandidate");
+            Frames.Clear();
+            Frames.AddRange(keep.Frames);
             _candidate -= first;
             _clock = _clock with { FrameIndexOffset = _clock.FrameIndexOffset + first };
             Segment = Segment with { Frames = Array.AsReadOnly(retained), Clock = _clock,

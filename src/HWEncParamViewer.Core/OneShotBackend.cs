@@ -3,7 +3,7 @@
 namespace HWEncParamViewer.Core;
 
 /// <summary>要求ごとにプロセスを起動し、キャンセル時はツリー全体を停止する。</summary>
-public sealed class OneShotBackend : IPreviewBackend
+public sealed class OneShotBackend : IPreviewBackend, IRawOwnedBackend
 {
     private readonly object _sync = new();
     private readonly Dictionary<Process, ActiveRun> _processes = [];
@@ -22,9 +22,13 @@ public sealed class OneShotBackend : IPreviewBackend
         if (_stopTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(stopTimeout));
     }
 
-    public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink,
-        CancellationToken cancellationToken = default)
+    public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
+        => RunCoreAsync(request, sink, cancellationToken, null);
+    Task<PreviewRunResult> IRawOwnedBackend.RunOwnedAsync(PreviewRequest request, IRawOwnedSink sink, RawOwnershipScope scope, CancellationToken cancellationToken)
+        => RunCoreAsync(request, sink, cancellationToken, scope);
+    private async Task<PreviewRunResult> RunCoreAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken, RawOwnershipScope? rawScope)
     {
+        long runId = rawScope?.NewRunId() ?? 0;
         using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         CancellationToken token = execution.Token;
         token.ThrowIfCancellationRequested();
@@ -50,8 +54,12 @@ public sealed class OneShotBackend : IPreviewBackend
             while (true)
             {
                 await PreviewReadGate.WaitAsync(sink, token).ConfigureAwait(false);
-                if (reader.ReadFrame() is not { } frame) break;
-                if (!token.IsCancellationRequested) sink.OnFrame(frame);
+                using var raw = rawScope == null ? null : reader.ReadOwnedFrame(rawScope, runId);
+                var frame = rawScope == null ? reader.ReadFrame() : raw?.Frame;
+                if (frame == null)
+                    break;
+                if (!token.IsCancellationRequested)
+                    sink.OnFrame(frame);
             }
         });
         CleanupDeadline? cleanup = null;

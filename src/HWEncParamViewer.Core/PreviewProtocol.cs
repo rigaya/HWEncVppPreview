@@ -54,8 +54,11 @@ public sealed class PreviewProtocolReader
     /// <summary>次のイベントを返す。ストリームの終端 (EOF) では null。</summary>
     /// <exception cref="PreviewProtocolException">仕様にない行が来た</exception>
     /// <exception cref="Y4mTruncatedException">フレームの途中でストリームが切れた (サーバが落ちた等)</exception>
-    public PreviewEvent? ReadEvent()
+    public PreviewEvent? ReadEvent() => ReadEventCore(null, 0, out _);
+    internal PreviewEvent? ReadOwnedEvent(RawOwnershipScope scope, long runId, out RawFrameLease? frame) => ReadEventCore(scope, runId, out frame);
+    private PreviewEvent? ReadEventCore(RawOwnershipScope? scope, long runId, out RawFrameLease? ownedFrame)
     {
+        ownedFrame = null;
         bool trace = PerfTrace.Enabled;
         long eventStart = trace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         PreviewEvent? result = null;
@@ -106,7 +109,13 @@ public sealed class PreviewProtocolReader
             if (line == "FRAME" || line.StartsWith("FRAME ", StringComparison.Ordinal))
             {
                 if (_y4m == null) throw new PreviewProtocolException(CoreText.FrameBeforeY4mHeader);
-                result = new PreviewFrame(_y4m.ReadFrameBody(line));
+                if (scope == null)
+                    result = new PreviewFrame(_y4m.ReadFrameBody(line));
+                else
+                {
+                    ownedFrame = _y4m.ReadOwnedFrameBody(line, scope, runId);
+                    result = new PreviewFrame(ownedFrame.Frame);
+                }
                 completed = true;
                 return result;
             }

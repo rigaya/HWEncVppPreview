@@ -79,7 +79,12 @@ public sealed partial class FrameCache
         var key = new CacheKey(request);
         var snapshot = Array.AsReadOnly(frames.ToArray());
         long bytes = 0;
-        foreach (var frame in snapshot) bytes = checked(bytes + frame.Data.LongLength);
+        foreach (var frame in snapshot)
+        {
+            ValidateRawScope(frame);
+            bytes = checked(bytes + frame.RawByteLength);
+        }
+        using var release = ReleaseRawOutsideGate();
         lock (_gate)
         {
             if (_entries.TryGetValue(key, out var previous)) Remove(previous);
@@ -89,7 +94,7 @@ public sealed partial class FrameCache
                 if (!EvictOne()) return;
             var physical = physicalRequest ?? request;
             physical = physical with { InputArgs = physical.InputArgs.ToArray(), VppArgs = physical.VppArgs.ToArray() };
-            var entry = new Entry(key, snapshot, bytes, physical) { LastUse = ++_useSequence };
+            var entry = new Entry(key, snapshot, bytes, physical) { LastUse = ++_useSequence, RawLease = snapshot.Any(f => f.RawOwner != null) ? RawFrameSetLease.Capture(snapshot, "Cache") : null };
             _entries.Add(key, _lru.AddFirst(entry));
             _sizeBytes += bytes;
         }
@@ -98,7 +103,23 @@ public sealed partial class FrameCache
     /// <summary>保存区間をすべて捨てる。F5の明示的な再実行で利用する。</summary>
     public void Clear()
     {
-        lock (_gate) { _entries.Clear(); _lru.Clear(); _segments.Clear(); _activeSegments.Clear(); _stitchDisabled.Clear(); _pendingSources.Clear(); _currentSegmentId = null; _sizeBytes = 0; }
+        using var release = ReleaseRawOutsideGate();
+        lock (_gate)
+        {
+            foreach (var entry in _segments.Values)
+                DeferRawRelease(entry.Frames);
+            foreach (var node in _entries.Values)
+                if (node.Value.RawLease != null)
+                    DeferRawRelease(node.Value.RawLease);
+            _entries.Clear();
+            _lru.Clear();
+            _segments.Clear();
+            _activeSegments.Clear();
+            _stitchDisabled.Clear();
+            _pendingSources.Clear();
+            _currentSegmentId = null;
+            _sizeBytes = 0;
+        }
     }
 
     /// <summary>同じ入力・引数で、表示可能な時刻を含む信頼済み区間を探す。</summary>
@@ -135,6 +156,7 @@ public sealed partial class FrameCache
     /// <summary>foregroundのsource切替時だけ診断をやり直す。未信頼の旧フレームは復活させない。</summary>
     public void ResetSourceDiagnosis(PreviewRequest request, bool discard = false)
     {
+        using var release = ReleaseRawOutsideGate();
         lock (_gate)
         {
             bool diagnosed = _stitchDisabled.RemoveAll(source => SameContent(source, request)) > 0;
@@ -147,6 +169,7 @@ public sealed partial class FrameCache
     /// <summary>absolute時計が壊れたsourceの旧フレームを破棄し、区間接続を停止する。</summary>
     public void InvalidateSource(PreviewRequest request)
     {
+        using var release = ReleaseRawOutsideGate();
         lock (_gate)
         {
             if (!_stitchDisabled.Any(source => SameContent(source, request))) _stitchDisabled.Add(request);
@@ -164,6 +187,7 @@ public sealed partial class FrameCache
     /// <summary>同じ入力・処理の信頼済み区間から、安全な移動候補を区間跨ぎの重複を除いて返す。</summary>
     public IReadOnlyList<PreviewFrameReference> GetNavigationFrames(PreviewRequest request)
     {
+        using var release = ReleaseRawOutsideGate();
         lock (_gate)
         {
             if (_pendingSources.Values.Any(source => SameContent(source, request))) return Array.Empty<PreviewFrameReference>();
@@ -223,7 +247,7 @@ public sealed partial class FrameCache
         lock (_gate)
         {
             long id = ++_nextSegmentId;
-            var entry = new SegmentEntry(id, request, clock, safeStartSeconds) { LastUse = ++_useSequence, CanStitch = clock.TrustedAbsolute };
+            var entry = new SegmentEntry(id, request, clock, safeStartSeconds, DeferRawRelease) { LastUse = ++_useSequence, CanStitch = clock.TrustedAbsolute };
             _segments.Add(id, entry);
             if (active) _activeSegments.Add(id);
             return id;
@@ -243,20 +267,24 @@ public sealed partial class FrameCache
     /// <summary>次のフレームを保持できるか確認する。未読の未来を捨てず、足りなければ早くpauseする。</summary>
     public bool CanAppend(long segmentId, long bytes)
     {
+        using var release = ReleaseRawOutsideGate();
         lock (_gate) return _segments.ContainsKey(segmentId) && MakeRoom(bytes, segmentId);
     }
 
     /// <summary>取得した1枚をすぐ保存する。上限で未来の穴を作らないよう、呼出し前にCanAppendする。</summary>
     public bool Append(long segmentId, Y4mFrame frame)
     {
+        ValidateRawScope(frame);
+        using var release = ReleaseRawOutsideGate();
         lock (_gate)
         {
-            if (!_segments.TryGetValue(segmentId, out var entry) || !MakeRoom(frame.Data.LongLength, segmentId)) return false;
+            if (!_segments.TryGetValue(segmentId, out var entry) || !MakeRoom(frame.RawByteLength, segmentId))
+                return false;
             if (entry.Frames.Count == 0)
                 entry.SafeStart = SafeStartIncludingFirst(entry.SafeStart, entry.Clock, frame, entry.Request.Fps);
             entry.Frames.Add(frame);
-            entry.Bytes += frame.Data.LongLength;
-            _sizeBytes += frame.Data.LongLength;
+            entry.Bytes += frame.RawByteLength;
+            _sizeBytes += frame.RawByteLength;
             entry.SafeEnd = entry.Clock.ToInputSeconds(frame, entry.Frames.Count - 1, entry.Request.Fps) + FrameSelector.Duration(frame, entry.Request.Fps);
             entry.LastUse = ++_useSequence;
             ValidateAfterChange(entry, closed: false);
@@ -280,6 +308,7 @@ public sealed partial class FrameCache
     /// <summary>区間を終了し、有限の末尾ガードまたは自然EOFの末尾を確定する。</summary>
     public void CompleteSegment(long segmentId, bool reachedInputEnd, double tailGuardSeconds = 0)
     {
+        using var release = ReleaseRawOutsideGate();
         lock (_gate)
         {
             _activeSegments.Remove(segmentId);
@@ -290,6 +319,12 @@ public sealed partial class FrameCache
         }
     }
 
+    // 存在確認はsnapshot/画素所有を作らない。成功後の画素取得には別途生存確認が必要。
+    internal bool ContainsSegment(long segmentId)
+    {
+        lock (_gate) return _segments.ContainsKey(segmentId);
+    }
+
     public PreviewSegmentSnapshot? GetSegment(long segmentId)
     {
         lock (_gate) return _segments.TryGetValue(segmentId, out var entry) ? Snapshot(entry) : null;
@@ -297,6 +332,7 @@ public sealed partial class FrameCache
 
     public void RemoveSegment(long segmentId)
     {
+        using var release = ReleaseRawOutsideGate();
         lock (_gate) RemoveSegmentCore(segmentId);
     }
 
@@ -304,7 +340,10 @@ public sealed partial class FrameCache
     public PreviewSegmentSnapshot? StoreSegment(PreviewRequest request, IReadOnlyList<Y4mFrame> frames,
         PreviewClockMap clock, double safeStartSeconds, double safeEndSeconds, bool reachedInputEnd = false, bool reverseWindow = false, double? firstOutputInputSeconds = null, bool pinCurrent = false)
     {
-        long bytes = frames.Sum(x => x.Data.LongLength);
+        foreach (var frame in frames)
+            ValidateRawScope(frame);
+        long bytes = frames.Sum(x => x.RawByteLength);
+        using var release = ReleaseRawOutsideGate();
         lock (_gate)
         {
             // 前景の旧pin解除から新pinまでを同じgateで行い、背景保存の割込みで新Afterを失わないようにする。
@@ -318,8 +357,11 @@ public sealed partial class FrameCache
             // 暖機pixelを保持しない窓でも、実際に受信した元の先頭時刻で従来と同じ安全判定を行う。
             double start = firstOutputInputSeconds is double first && double.IsFinite(first)
                 ? Math.Max(safeStartSeconds, first) : SafeStartIncludingFirst(safeStartSeconds, clock, frames.FirstOrDefault(), request.Fps);
-            var entry = new SegmentEntry(id, request, clock, start)
+            var entry = new SegmentEntry(id, request, clock, start, DeferRawRelease)
             { SafeEnd = safeEndSeconds, Bytes = bytes, ReachedInputEnd = reachedInputEnd, LastUse = ++_useSequence };
+            bool committed = false;
+            try
+            {
             entry.Frames.AddRange(frames);
             // 容量不足で保存できない場合も、残る旧区間との整合を先に確認する。
             ValidateOverlap(entry, closed: true);
@@ -337,11 +379,19 @@ public sealed partial class FrameCache
                 return null;
             }
             _segments.Add(id, entry);
+            committed=true;
             _sizeBytes += bytes;
             ValidateAfterChange(entry, closed: true);
             if (!_segments.ContainsKey(id)) return null;
             if (pinCurrent) _currentSegmentId = id;
             return Snapshot(entry);
+            }
+            finally
+            {
+                // 列挙やRetain/照合の例外でも、未保存候補の所有だけはgate外で確実に閉じる。
+                if (!committed)
+                    DeferRawRelease(entry.Frames);
+            }
         }
     }
 
@@ -385,6 +435,7 @@ public sealed partial class FrameCache
             if (PreviewSafeRange.IsAfter(start, end)) continue;
             var current = Snapshot(entry);
             var old = Snapshot(previous);
+            using var rawComparison = new DeferredRaw(this, RawFrameSetLease.Capture(current.Frames.Concat(old.Frames), "StitchComparison"));
             var matches = new List<(PreviewFrameReference Current, PreviewFrameReference Old)>();
             var oldFrames = Enumerable.Range(0, old.Frames.Count).Select(index => new PreviewFrameReference(old, index))
                 .Where(frame => frame.IsSafe && frame.Frame.Xts is double time && double.IsFinite(time)).OrderBy(frame => frame.InputSeconds).ToArray();
@@ -426,7 +477,7 @@ public sealed partial class FrameCache
             foreach (int sample in samples)
             {
                 var pair = matches[sample];
-                if (!pair.Current.Frame.Data.AsSpan().SequenceEqual(pair.Old.Frame.Data))
+                if (!pair.Current.Frame.RawPixels.AsSpan().SequenceEqual(pair.Old.Frame.RawPixels))
                 {
                     if (PerfTrace.Enabled) PerfTrace.Write("cache.overlap_reject", new { entry.Id, peerId = previous.Id,
                         entry.Request.CorrelationId, reason = "pixel_mismatch", matches = matches.Count, required,
@@ -536,7 +587,7 @@ public sealed partial class FrameCache
 
     private void RemoveFirst(SegmentEntry entry)
     {
-        long bytes = entry.Frames[0].Data.LongLength;
+        long bytes = entry.Frames[0].RawByteLength;
         entry.Frames.RemoveAt(0);
         entry.Clock = entry.Clock with { FrameIndexOffset = entry.Clock.FrameIndexOffset + 1 };
         entry.Bytes -= bytes;
@@ -547,7 +598,11 @@ public sealed partial class FrameCache
 
     private void RemoveSegmentCore(long id)
     {
-        if (_segments.Remove(id, out var entry)) _sizeBytes -= entry.Bytes;
+        if (_segments.Remove(id, out var entry))
+        {
+            _sizeBytes -= entry.Bytes;
+            DeferRawRelease(entry.Frames);
+        }
         _activeSegments.Remove(id);
         if (_currentSegmentId == id) _currentSegmentId = null;
     }
@@ -555,14 +610,14 @@ public sealed partial class FrameCache
     private PreviewSegmentSnapshot Snapshot(SegmentEntry entry) => new(entry.Id, entry.Request, entry.Clock,
         Array.AsReadOnly(entry.Frames.ToArray()), entry.SafeStart, entry.SafeEnd, _activeSegments.Contains(entry.Id), entry.ReachedInputEnd) { CanStitch = entry.CanStitch };
 
-    private sealed class SegmentEntry(long id, PreviewRequest request, PreviewClockMap clock, double safeStart)
+    private sealed class SegmentEntry(long id, PreviewRequest request, PreviewClockMap clock, double safeStart, Action<IDisposable> release)
     {
         public long Id { get; } = id;
         public PreviewRequest Request { get; } = request;
         public PreviewClockMap Clock { get; set; } = clock;
         public double SafeStart { get; set; } = safeStart;
         public double SafeEnd { get; set; } = double.NegativeInfinity;
-        public List<Y4mFrame> Frames { get; } = new();
+        public RawFrameList Frames { get; } = new("Cache", release);
         public long Bytes { get; set; }
         public long LastUse { get; set; }
         public bool ReachedInputEnd { get; set; }
@@ -572,6 +627,8 @@ public sealed partial class FrameCache
 
     private void Remove(LinkedListNode<Entry> node)
     {
+        if (node.Value.RawLease != null)
+            DeferRawRelease(node.Value.RawLease);
         _entries.Remove(node.Value.Key);
         _lru.Remove(node);
         _sizeBytes -= node.Value.Bytes;
@@ -579,6 +636,10 @@ public sealed partial class FrameCache
 
     private sealed record Entry(CacheKey Key, IReadOnlyList<Y4mFrame> Frames, long Bytes, PreviewRequest PhysicalRequest)
     {
+        internal RawFrameSetLease? RawLease
+        {
+            get; init;
+        }
         public long LastUse { get; set; }
     }
 

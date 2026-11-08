@@ -21,7 +21,7 @@ internal static class PreviewForwardReadBudget
                 if (frame.Xts is not double xts || !double.IsFinite(xts)) { actual = false; break; }
                 double seconds = segment.Clock.ToInputSeconds(frame, index, segment.PhysicalRequest.Fps);
                 if (seconds <= demand + 1e-8) continue;
-                bytes = checked(bytes + frame.Data.LongLength);
+                bytes = checked(bytes + frame.RawByteLength);
                 ++frames;
             }
         }

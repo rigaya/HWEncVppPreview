@@ -104,7 +104,8 @@ public sealed partial class FrameCache
             last = Math.Max(last, required.Max());
         }
         long retained=0;
-        for(int i=first;i<=last;i++)retained+=entry.Frames[i].Data.LongLength;
+        for (int i = first; i <= last; i++)
+            retained += entry.Frames[i].RawByteLength;
         long free=_capacityBytes-(_sizeBytes-entry.Bytes)-retained;
         return free>0?(entry,first,last,free):null;
     }
@@ -141,6 +142,7 @@ public sealed partial class FrameCache
 
     internal bool TryTrimReverseWindow(PreviewRequest request,double boundary,double target,double overlap,long bytes)
     {
+        using var release = ReleaseRawOutsideGate();
         lock (_gate)
         {
             // 先に古いclosed区間を通常のLRU順で回収し、それでも不足するときだけcurrentのbridgeを縮める。
@@ -165,7 +167,7 @@ public sealed partial class FrameCache
             bool tailRemoved=entry.Frames.Count>kept;
             while(entry.Frames.Count>kept)
             {
-                long removed=entry.Frames[^1].Data.LongLength;
+                long removed = entry.Frames[^1].RawByteLength;
                 entry.Frames.RemoveAt(entry.Frames.Count-1);entry.Bytes-=removed;_sizeBytes-=removed;
             }
             if (tailRemoved)

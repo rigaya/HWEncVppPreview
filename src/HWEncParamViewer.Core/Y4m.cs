@@ -188,7 +188,7 @@ public sealed class Y4mFrame
         Header = header;
         Xts = xts;
         Xdur = xdur;
-        Data = data;
+        _legacyData = data;
     }
 
     public Y4mHeader Header { get; }
@@ -197,7 +197,23 @@ public sealed class Y4mFrame
     /// <summary>FRAME 行の Xdur (秒)。無ければ null。</summary>
     public double? Xdur { get; }
     /// <summary>Y、U、V の順に詰めたプレーンデータ。</summary>
-    public byte[] Data { get; }
+    private readonly byte[]? _legacyData;
+    internal RawFrameOwner? RawOwner
+    {
+        get;
+    }
+    internal long FrameId => RawOwner?.FrameId ?? 0;
+    internal long RawRunId => RawOwner?.RawRunId ?? 0;
+    internal long RawByteLength => RawOwner?.Bytes ?? _legacyData!.LongLength;
+    internal byte[] RawPixels => RawOwner?.ReadBuffer() ?? _legacyData!;
+    internal Y4mFrame(Y4mHeader header, double? xts, double? xdur, RawFrameOwner owner, bool owned)
+    {
+        Header = header;
+        Xts = xts;
+        Xdur = xdur;
+        RawOwner = owner;
+    }
+    public byte[] Data => RawOwner == null ? _legacyData! : throw new InvalidOperationException("owned rawは公開Dataへ出せません。");
 }
 
 /// <summary>y4m を Stream から逐次読む。</summary>
@@ -238,7 +254,14 @@ public sealed class Y4mReader
     }
 
     /// <summary>FRAME 行を読み済みとして、データ部を読む。</summary>
-    internal Y4mFrame ReadFrameBody(string frameLine)
+    internal Y4mFrame ReadFrameBody(string frameLine) => ReadFrameBodyCore(frameLine, null, 0).Frame;
+    internal RawFrameLease? ReadOwnedFrame(RawOwnershipScope scope, long runId)
+    {
+        string? line = ReadLine(_stream);
+        return line == null ? null : ReadFrameBodyCore(line, scope, runId).Lease;
+    }
+    internal RawFrameLease ReadOwnedFrameBody(string line, RawOwnershipScope scope, long runId) => ReadFrameBodyCore(line, scope, runId).Lease!;
+    private (Y4mFrame Frame, RawFrameLease? Lease) ReadFrameBodyCore(string frameLine, RawOwnershipScope? scope, long runId)
     {
         bool trace = PerfTrace.Enabled;
         long parseStart = trace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
@@ -256,6 +279,10 @@ public sealed class Y4mReader
         double parseMs = trace ? System.Diagnostics.Stopwatch.GetElapsedTime(parseStart).TotalMilliseconds : 0;
         long allocationStart = trace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         var data = new byte[size];
+        // 実Readの待機中から所有を記録する。取消要求は返却点ではない。
+        RawFrameLease? owned = scope?.Create(Header, xts, xdur, data, runId, "Reader");
+        try
+        {
         double allocationMs = trace ? System.Diagnostics.Stopwatch.GetElapsedTime(allocationStart).TotalMilliseconds : 0;
         long readStart = trace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         int got = 0, readCalls = 0;
@@ -269,7 +296,13 @@ public sealed class Y4mReader
         // 読取時間にはパイプやエンコーダの出力待ちも含み、CPU時間とは区別する。
         if (trace) PerfTrace.Write("y4m.frame", new { readerId = _traceReaderId, Xts = xts, Xdur = xdur,
             bytes = size, parseMs, allocationMs, readMs = System.Diagnostics.Stopwatch.GetElapsedTime(readStart).TotalMilliseconds, readCalls });
-        return new Y4mFrame(Header, xts, xdur, data);
+            return (owned?.Frame ?? new Y4mFrame(Header, xts, xdur, data), owned);
+        }
+        catch
+        {
+            owned?.Dispose();
+            throw;
+        }
     }
 
     private static double? ParseDouble(string s) =>

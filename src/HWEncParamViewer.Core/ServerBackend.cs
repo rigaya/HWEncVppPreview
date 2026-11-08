@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace HWEncParamViewer.Core;
 
 /// <summary>常駐プロトコルを順次実行する。重なった要求は先行要求を中断してから開始する。</summary>
-public sealed partial class ServerBackend : IPreviewBackend
+public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
 {
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _readyTimeout;
@@ -109,7 +109,12 @@ public sealed partial class ServerBackend : IPreviewBackend
         return await RunCoreAsync(request, sink, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<PreviewRunResult> RunCoreAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken)
+    async Task<PreviewRunResult> IRawOwnedBackend.RunOwnedAsync(PreviewRequest request, IRawOwnedSink sink, RawOwnershipScope scope, CancellationToken cancellationToken)
+    {
+        await WaitForInitializationAsync(request.EncoderPath, cancellationToken).ConfigureAwait(false);
+        return await RunCoreAsync(request, sink, cancellationToken, scope).ConfigureAwait(false);
+    }
+    private async Task<PreviewRunResult> RunCoreAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken, RawOwnershipScope? rawScope = null)
     {
         using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         lock (_sync)
@@ -162,7 +167,7 @@ public sealed partial class ServerBackend : IPreviewBackend
             if (windowSeek) command["window_seek"] = true;
             if (outputStartUs is long startUs) command["output_start_us"] = startUs;
             await session.SendAsync(command).ConfigureAwait(false);
-            var readTask = Task.Run(() => ReadRequestAsync(session, id, request.CorrelationId, sink, execution.Token));
+            var readTask = Task.Run(() => ReadRequestAsync(session, id, request.CorrelationId, sink, execution.Token, rawScope, rawScope?.NewRunId() ?? 0));
             session.LastRead = readTask;
             var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             using var registration = execution.Token.Register(() => cancelled.TrySetResult());
@@ -223,7 +228,7 @@ public sealed partial class ServerBackend : IPreviewBackend
         }
     }
 
-    private static async Task<PreviewEnd> ReadRequestAsync(Session session, long id, long correlationId, IPreviewSink sink, CancellationToken token)
+    private static async Task<PreviewEnd> ReadRequestAsync(Session session, long id, long correlationId, IPreviewSink sink, CancellationToken token, RawOwnershipScope? rawScope = null, long rawRunId = 0)
     {
         bool begun = false;
         int frames = 0;
@@ -244,7 +249,10 @@ public sealed partial class ServerBackend : IPreviewBackend
                 }
             }
             long eventStart = PerfTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
-            var item = session.Reader.ReadEvent();
+            RawFrameLease? ownedFrame = null;
+            try
+            {
+            var item=rawScope==null?session.Reader.ReadEvent():session.Reader.ReadOwnedEvent(rawScope,rawRunId,out ownedFrame);
             if (PerfTrace.Enabled) PerfTrace.Write("server.read", new { correlationId, id,
                 kind = item?.GetType().Name ?? "EOF", Xts = (item as PreviewFrame)?.Frame.Xts,
                 elapsedMs = Stopwatch.GetElapsedTime(eventStart).TotalMilliseconds });
@@ -264,10 +272,10 @@ public sealed partial class ServerBackend : IPreviewBackend
                     if (PerfTrace.Enabled)
                     {
                         frames++;
-                        bytes += frame.Frame.Data.LongLength;
+                        bytes += frame.Frame.RawByteLength;
                         lastFrameMs = Stopwatch.GetElapsedTime(readStart).TotalMilliseconds;
                         PerfTrace.Write("server.frame", new { correlationId, id, index = frames - 1, frame.Frame.Xts,
-                            bytes = frame.Frame.Data.Length, elapsedMs = lastFrameMs });
+                            bytes = frame.Frame.RawPixels.Length, elapsedMs = lastFrameMs });
                         if (firstFrameMs == null)
                         {
                             firstFrameMs = lastFrameMs;
@@ -293,6 +301,8 @@ public sealed partial class ServerBackend : IPreviewBackend
                 default:
                     throw new PreviewProtocolException(CoreText.ServerEventMismatch);
             }
+            }
+            finally { ownedFrame?.Dispose(); }
         }
         throw new EndOfStreamException(CoreText.EncoderExitedBeforeEnd);
     }
