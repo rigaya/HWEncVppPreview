@@ -278,9 +278,9 @@ public sealed class Y4mReader
         int size = Header.FrameBytes;
         double parseMs = trace ? System.Diagnostics.Stopwatch.GetElapsedTime(parseStart).TotalMilliseconds : 0;
         long allocationStart = trace ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
-        var data = new byte[size];
-        // 実Readの待機中から所有を記録する。取消要求は返却点ではない。
-        RawFrameLease? owned = scope?.Create(Header, xts, xdur, data, runId, "Reader");
+        // 全量読取を終えるまで公開しないため、前の入力や形式で使った同長配列も安全に借りられる。
+        RawFrameLease? owned = scope?.RentReader(Header, xts, xdur, runId);
+        var data = owned == null ? new byte[size] : owned.Frame.RawPixels;
         try
         {
         double allocationMs = trace ? System.Diagnostics.Stopwatch.GetElapsedTime(allocationStart).TotalMilliseconds : 0;

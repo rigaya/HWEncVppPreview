@@ -77,7 +77,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _clock = timeProvider ?? TimeProvider.System;
         _probe = probe ?? new InputProbe(_clock);
         _borrowInputProbe = probe == null && preferred == null;
-        _rawOwnershipScope = _usesOwnedRaw ? new RawOwnershipScope() : null;
+        // 同じ長さなら読取が全体を上書きし、所有権が貸出中の画素を守るため、入力世代や形式では分けない。
+        _rawOwnershipScope = _usesOwnedRaw ? new RawOwnershipScope(new RawBufferPool()) : null;
         _cache = cache ?? (_rawOwnershipScope != null ? new FrameCache(_rawOwnershipScope) : new FrameCache());
         var first = preferred ?? new ServerBackend(_clock);
         var second = fallback ?? new OneShotBackend(timeProvider: _clock);
@@ -334,6 +335,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         }
         finally { _suspendChanges = suspended; }
         if (!_initialized || _suspendChanges || _disposed) return;
+        // 入力切替時の未使用配列は片付ける。貸出中の配列は最後の所有解放まで変更しない。
+        _rawOwnershipScope?.ClearFreeBuffers();
         lock (_taskLock) _preparationCancellation?.Cancel();
         BeginIntent(navigation: false);
         if (bypassDebounce) { CancelInputEdit(); _ = QueuePreview(bypassDebounce: true); }
@@ -969,6 +972,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         TraceDisposeStage("enter");
         _disposed = true;
+        _rawOwnershipScope?.ClosePool();
         _bgraPool.Dispose();
         DropRawPosts(_ => true);
         UiLanguage.Changed -= OnLanguageChanged;

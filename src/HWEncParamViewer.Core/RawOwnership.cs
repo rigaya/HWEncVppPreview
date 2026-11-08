@@ -11,11 +11,24 @@ namespace HWEncParamViewer.Core;
 // Try成功前に選択の副作用をcommitしない。再queryは呼出元で有限回にし、無制限retryはしない。
 // ID0/null/Completedの例外窓は設定時1回だけ長期所有し、移動やrefreshで取り直さない。
 // 最後のReleaseで画素配列を切り離す。metadataはその後も読めるが、画素は読めない。
-// 段階1は毎回new。最後のReleaseは配列を切り離すだけで、再貸出しない。
+// 外部提供の配列は再利用しない。通常画面の読取で借りた配列だけを、最終所有の解放後に返す。
 internal sealed class RawOwnershipScope
 {
     private readonly object _gate = new();
     private readonly Dictionary<long, RawFrameOwner> _live = new();
+    private readonly RawBufferPool? _pool;
+    internal RawOwnershipScope(RawBufferPool? pool = null) => _pool = pool;
+    internal void ClearFreeBuffers() => _pool?.ClearFreeBuffers();
+    internal void ClosePool() => _pool?.Close();
+    internal void SetReturnedBufferPoisonForTesting(byte value) => _pool?.SetReturnedBufferPoisonForTesting(value);
+    internal RawBufferPool.Snapshot CapturePool() => _pool?.Capture() ?? RawBufferPool.Disabled;
+    internal RawFrameLease RentReader(Y4mHeader header, double? xts, double? xdur, long runId)
+    {
+        if (_pool == null) return Create(header, xts, xdur, new byte[header.FrameBytes], runId, "Reader");
+        byte[] buffer = _pool.Rent(header.FrameBytes);
+        try { return CreateCore(header, xts, xdur, buffer, runId, "Reader", _pool); }
+        catch { _pool.Return(buffer); throw; }
+    }
     private long _nextFrame, _nextRun, _newOwners, _newBytes, _released, _releasedBytes, _liveBytes, _peak, _retains, _tokenReleases;
     private readonly Dictionary<string, TryRetainCounts> _tryByCaller = new(StringComparer.Ordinal);
     private long _tryAttempts, _trySuccesses, _tryFailures;
@@ -32,6 +45,7 @@ internal sealed class RawOwnershipScope
         IReadOnlyDictionary<string, TryRetainCallerState> TryRetainsByCaller)
     {
         public bool IsEmpty => LiveOwners == 0 && LiveTokens == 0;
+        public RawBufferPool.Snapshot? Pool { get; init; }
     }
     internal long NewRunId()
     {
@@ -39,27 +53,36 @@ internal sealed class RawOwnershipScope
             return ++_nextRun;
     }
     internal RawFrameLease Create(Y4mHeader header, double? xts, double? xdur, byte[] buffer, long runId, string kind)
+        => CreateCore(header, xts, xdur, buffer, runId, kind, null);
+    private RawFrameLease CreateCore(Y4mHeader header, double? xts, double? xdur, byte[] buffer, long runId, string kind,
+        RawBufferPool? returnPool)
     {
         lock (_gate)
         {
-            var owner = new RawFrameOwner(this, ++_nextFrame, runId, buffer);
+            var owner = new RawFrameOwner(this, ++_nextFrame, runId, buffer, returnPool);
             var frame = new Y4mFrame(Freeze(header), xts, xdur, owner, true);
             owner.Frame = frame;
+            // 配列を返してよい失敗と公開済みの所有を分けるため、初期所有の確保を登録より先に終える。
+            var initial = new RawFrameLease(frame, owner, kind);
+            owner.Kinds.Add(kind, 1);
+            owner.Tokens = 1;
             _live.Add(owner.FrameId, owner);
+            ++_retains;
             ++_newOwners;
             _newBytes += buffer.LongLength;
             _liveBytes += buffer.LongLength;
             _peak = Math.Max(_peak, _liveBytes);
-            return RetainCore(owner, kind);
+            return initial;
         }
     }
     private RawFrameLease RetainCore(RawFrameOwner owner, string kind)
     {
         // 初期Reader tokenも含む、成功した所有取得の累積回数。
+        var lease = new RawFrameLease(owner.Frame!, owner, kind);
+        owner.Kinds[kind] = owner.Kinds.GetValueOrDefault(kind) + 1;
         ++_retains;
         ++owner.Tokens;
-        owner.Kinds[kind] = owner.Kinds.GetValueOrDefault(kind) + 1;
-        return new RawFrameLease(owner.Frame!, owner, kind);
+        return lease;
     }
     internal RawFrameLease Retain(RawFrameOwner owner, string kind)
     {
@@ -98,6 +121,7 @@ internal sealed class RawOwnershipScope
     }
     internal void Release(RawFrameOwner owner, string kind)
     {
+        byte[]? returned = null;
         lock (_gate)
         {
             if (owner.Tokens <= 0)
@@ -107,12 +131,15 @@ internal sealed class RawOwnershipScope
                 owner.Kinds.Remove(kind);
             if (--owner.Tokens != 0)
                 return;
+            returned = owner.Buffer;
             owner.Buffer = null;
             _live.Remove(owner.FrameId);
             ++_released;
             _releasedBytes += owner.Bytes;
             _liveBytes -= owner.Bytes;
         }
+        // 元の所有を切り離したあとだけ返し、検証用番兵や配列保持の排他を所有の排他へ持ち込まない。
+        if (returned != null && owner.ReturnPool is { } pool) pool.Return(returned);
     }
     internal State Capture()
     {
@@ -127,7 +154,7 @@ internal sealed class RawOwnershipScope
                     pair => new TryRetainCallerState(pair.Value.Attempts, pair.Value.Successes, pair.Value.Failures), StringComparer.Ordinal));
             return new(true, _newOwners, _newBytes, _released, _releasedBytes, _live.Count, _liveBytes, _peak,
                 _live.Values.Sum(x => x.Tokens), kinds, _live.Values.Select(x => new OwnerState(x.FrameId, x.RawRunId, x.Bytes, x.Tokens, new Dictionary<string, long>(x.Kinds))).ToArray(), _retains, _tokenReleases,
-                _tryAttempts, _trySuccesses, _tryFailures, tries);
+                _tryAttempts, _trySuccesses, _tryFailures, tries) { Pool = _pool?.Capture() };
         }
     }
     private static Y4mHeader Freeze(Y4mHeader h) => new()
@@ -145,11 +172,13 @@ internal sealed class RawOwnershipScope
         ExtTags = new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(h.ExtTags))
     };
 }
-internal sealed class RawFrameOwner(RawOwnershipScope scope, long frameId, long rawRunId, byte[] buffer)
+internal sealed class RawFrameOwner(RawOwnershipScope scope, long frameId, long rawRunId, byte[] buffer,
+    RawBufferPool? returnPool = null)
 {
     internal readonly RawOwnershipScope Scope = scope;
     internal readonly long FrameId = frameId, RawRunId = rawRunId, Bytes = buffer.LongLength;
     internal byte[]? Buffer = buffer;
+    internal readonly RawBufferPool? ReturnPool = returnPool;
     internal Y4mFrame? Frame;
     internal long Tokens;
     internal readonly Dictionary<string, long> Kinds = new(StringComparer.Ordinal);

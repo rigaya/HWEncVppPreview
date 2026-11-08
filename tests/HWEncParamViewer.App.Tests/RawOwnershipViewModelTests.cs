@@ -40,6 +40,7 @@ public sealed class RawOwnershipViewModelTests
         await using var ownership = new OwnedVmCheck(vm, requireOwned: owned);
         Assert.Equal(owned, Field(vm, "_usesOwnedRaw"));
         Assert.Equal(owned, Field(vm, "_rawOwnershipScope") != null);
+        Assert.Equal(owned, ((RawOwnershipScope?)Field(vm, "_rawOwnershipScope"))?.CapturePool().Enabled ?? false);
         // legacyで通常配列を所有slotへ渡しても、raw tokenを追加しない。
         using var raw = (IDisposable?)InvokeStatic("RetainRawFrames", new[] { new Y4mFrame(Header, 1, 1, new byte[6]) }, "Test");
         Assert.Null(raw);
