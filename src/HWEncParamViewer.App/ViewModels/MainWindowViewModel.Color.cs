@@ -41,7 +41,7 @@ public sealed partial class MainWindowViewModel
             if (image.DisplayOnly)
             { if ((image.Before ? _pendingBeforeDisplayRefresh : _pendingAfterDisplayRefresh) != null) return; }
             else if ((image.Before ? _pendingBeforeImage : _pendingAfterImage) != null) return;
-            EnqueueImage(image);
+            EnqueueImage(image.Retain());
         }
     }
 

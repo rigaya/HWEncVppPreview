@@ -17,6 +17,7 @@ public sealed partial class MainWindowViewModel
             await copyToUi(external).ConfigureAwait(false);
             return;
         }
+        using var rawLease = frame.RawOwner == null ? null : RawFrameLease.Capture(frame, "VmConversion");
         token.ThrowIfCancellationRequested();
         long epoch = _bgraPool.RetirementEpoch;
         // 大きい配列の初回確保も従来どおりworker上で行う。UIではepochだけ読む。
@@ -26,7 +27,11 @@ public sealed partial class MainWindowViewModel
             try
             {
                 if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.worker.start", new { frame.Xts });
-                try { YuvToBgra.ConvertInto(frame, rented.Buffer, settings); }
+                try
+                {
+                    if (rawLease != null) YuvToBgra.ConvertInto(rawLease, rented.Buffer, settings);
+                    else YuvToBgra.ConvertInto(frame, rented.Buffer, settings);
+                }
                 finally { if (PerfTrace.Enabled) PerfTrace.Write("vm.convert.worker.end", new { frame.Xts }); }
                 return rented;
             }

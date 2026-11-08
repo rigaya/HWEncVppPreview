@@ -9,7 +9,8 @@ public sealed partial class MainWindowViewModel
         foreach (var context in _afterRequests.Values)
             if (context.Generation < generation) context.Segment = null;
         if (_context is { } current && current.Generation < generation) current.Segment = null;
-        Interlocked.Exchange(ref _pendingSegmentUpdate, null);
+        Interlocked.Exchange(ref _pendingSegmentUpdate, null)?.Dispose();
+        DropRawPosts(context => context.Kind == RequestKind.After && context.Generation < generation);
     }
 
     private void ReleaseIntervalSnapshotsForSubmission()
@@ -17,8 +18,9 @@ public sealed partial class MainWindowViewModel
         // 新しい取得の間も画像は残すが、過去の区間全体をVM側から固定しない。
         // 移動の基準1枚はcacheから再解決するために残す。cache内のコマ移動はこの経路を通らない。
         var anchor = _navigationAnchor;
+        using var retainedAnchor = anchor == null ? null : RetainRawFrames(new[] { anchor.Frame }, "VmAnchor");
         ClearInterval();
-        _navigationAnchor = anchor;
+        SetRawAnchor(ref _navigationAnchor, ref _anchorRaw, anchor);
         ClearBeforeInterval();
     }
 
@@ -28,13 +30,21 @@ public sealed partial class MainWindowViewModel
         {
             var latest = _cache.GetSegment(after.SegmentId);
             if (latest == null) ClearInterval();
-            else { _intervalSegment = latest; _intervalFrames = latest.Frames; }
+            else
+            {
+                _intervalSegment = latest;
+                SetIntervalFrames(latest.Frames);
+            }
         }
         if (_beforeIntervalSegment is { SegmentId: > 0 } before)
         {
             var latest = _cache.GetSegment(before.SegmentId);
             if (latest == null) ClearBeforeInterval();
-            else { _beforeIntervalSegment = latest; _beforeIntervalFrames = latest.Frames; }
+            else
+            {
+                _beforeIntervalSegment = latest;
+                SetBeforeIntervalFrames(latest.Frames);
+            }
         }
         long generation = Volatile.Read(ref _generation);
         foreach (var context in _afterRequests.Values)
@@ -47,8 +57,8 @@ public sealed partial class MainWindowViewModel
             if (obsolete) { context.Segment = null; return; }
             if (context.Segment is not { SegmentId: > 0 } held) return;
             // evict後も実範囲の情報は残し、存在しない画像を計画上の窓で再利用可能と見なさない。
-            context.Segment = _cache.GetSegment(held.SegmentId)
-                ?? held with { Frames = Array.Empty<Y4mFrame>() };
+            // 時計/安全域とdescriptorだけを更新する。後の画素取得は実際の選択元で保証する。
+            context.Segment = _cache.GetSegment(held.SegmentId) ?? held with { Frames = Array.Empty<Y4mFrame>() };
         }
     }
 

@@ -10,17 +10,29 @@ public sealed partial class MainWindowViewModel
     private double _lastIntentTarget;
     private bool _latestIntentReverse;
     private PreviewSegmentSnapshot? _intervalSegment, _beforeIntervalSegment;
-    private PreviewSegmentUpdate? _pendingSegmentUpdate;
+    private OwnedUiPost? _pendingSegmentUpdate;
     private int _segmentPostQueued;
     private PreviewFrameReference? _navigationAnchor;
     private double _navigationAnchorTarget;
 
-    private void OnSegmentUpdated(PreviewSegmentUpdate update)
+    private void OnSegmentUpdated(PreviewSegmentUpdate update) => OnSegmentUpdatedWithWindow(update, null);
+
+    private void OnSegmentUpdatedWithWindow(PreviewSegmentUpdate update, OwnedUncachedWindow? source)
     {
         var context = ContextFor(update.Request);
         if (_disposed || context?.Kind != RequestKind.After || context.Generation != Volatile.Read(ref _generation)) return;
         // 先読みの各フレームでUIキューに区間全体を積まず、未反映の最新状態だけを保持する。
-        Interlocked.Exchange(ref _pendingSegmentUpdate, update);
+        // 正IDはUI到着時にcacheを読み直す。待機中はmetadataだけ、ID0の有限窓だけ所有する。
+        var frames = update.Segment.SegmentId > 0 ? Array.Empty<Y4mFrame>() : update.Segment.Frames;
+        OwnedUiPost pending;
+        if (source == null) pending = CaptureRawPost(context, frames, () => ApplySegment(update));
+        else
+        {
+            // 通知側が確保した同じ窓をUIへ渡し、待機するたびに画素の参照を増やさない。
+            var shared = source.ShareIfSame(source.Frames)!;
+            pending = CaptureOwnershipPost(context, shared, () => ApplySegmentWithWindow(update, shared));
+        }
+        Interlocked.Exchange(ref _pendingSegmentUpdate, pending)?.Dispose();
         QueueSegmentPost();
     }
 
@@ -34,11 +46,13 @@ public sealed partial class MainWindowViewModel
     {
         var update = Interlocked.Exchange(ref _pendingSegmentUpdate, null);
         Interlocked.Exchange(ref _segmentPostQueued, 0);
-        if (update != null) ApplySegment(update);
+        update?.Execute();
         if (Volatile.Read(ref _pendingSegmentUpdate) != null) QueueSegmentPost();
     }
 
-    private void ApplySegment(PreviewSegmentUpdate update)
+    private void ApplySegment(PreviewSegmentUpdate update) => ApplySegmentWithWindow(update, null);
+
+    private void ApplySegmentWithWindow(PreviewSegmentUpdate update, OwnedUncachedWindow? source)
     {
         var context = ContextFor(update.Request);
         if (context == null || context.Kind != RequestKind.After || !IsCurrent(context)
@@ -51,11 +65,11 @@ public sealed partial class MainWindowViewModel
             // UIへ渡るまでにprefixが進むため、通知時点の古い配列ではなく現在のcacheを保持する。
             update = update with { Segment = latest };
         }
-        context.Segment = update.Segment;
+        context.SetSegmentSharing(update.Segment, source);
         _intervalSegment = update.Segment;
         _intervalRequest = update.Segment.PhysicalRequest;
         _intervalLogicalRequest = update.Request;
-        _intervalFrames = update.Segment.Frames;
+        SetIntervalFrames(update.Segment.Frames, context);
         foreach (var old in _afterRequests.Where(pair => pair.Key < context.Generation && pair.Value.Request.Continuous).ToArray())
             _afterRequests.TryRemove(old.Key, out _);
         bool satisfied = update.DemandSatisfied;
@@ -98,25 +112,22 @@ public sealed partial class MainWindowViewModel
     internal IReadOnlyList<PreviewFrameReference> NavigationFrames(PreviewRequest request, PreviewSegmentSnapshot? segment)
     {
         if (segment?.Clock.TrustedAbsolute != true) return Array.Empty<PreviewFrameReference>();
-        if (segment.SegmentId > 0)
-        {
-            var current = _cache.GetSegment(segment.SegmentId);
-            if (current == null) return Array.Empty<PreviewFrameReference>();
-            segment = current;
-        }
-        // 画素の検証待ち・不一致でも絶対時計は保ち、物理区間を跨ぐ参照だけを止める。
-        if (!segment.CanStitch)
-            return Enumerable.Range(0, segment.Frames.Count).Select(index => new PreviewFrameReference(segment, index))
+        // 候補選びではdescriptorだけを読む。画素は採用する1枚のTry取得が成功してから使う。
+        var current = segment.SegmentId > 0 ? _cache.GetSegment(segment.SegmentId) : segment;
+        if (current == null) return Array.Empty<PreviewFrameReference>();
+        if (!current.CanStitch)
+            return Enumerable.Range(0, current.Frames.Count).Select(index => new PreviewFrameReference(current, index))
                 .Where(frame => frame.IsSafe).ToArray();
         var navigation = _cache.GetNavigationFrames(request);
-        // lookup内の曖昧判定がoldをpurgeする場合も、別物理keeperへ時刻だけで乗り換えない。
-        if (segment.SegmentId > 0 && _cache.GetSegment(segment.SegmentId) == null)
+        if (current.SegmentId > 0 && !CacheHasSegment(current.SegmentId))
         {
             ValidateNavigationState();
             return Array.Empty<PreviewFrameReference>();
         }
         return navigation;
     }
+
+    private bool CacheHasSegment(long segmentId) => _cache.ContainsSegment(segmentId);
 
     private bool IsConnectedNavigationTarget(double target, double previous)
     {
@@ -125,7 +136,8 @@ public sealed partial class MainWindowViewModel
         var range = _cache.GetConnectedSafeRange(logical with { TargetSeconds = previous });
         if (range is { } connected && PreviewSafeRange.Contains(target, connected.Start, connected.End)) return true;
         // 照合禁止でも同じ物理区間内は再利用できる。別の離れたcacheへ時刻だけで接続しない。
-        var segment = _intervalSegment is { SegmentId: > 0 } current ? _cache.GetSegment(current.SegmentId) : _intervalSegment;
+        var segment = _intervalSegment is { SegmentId: > 0 } current
+            ? _cache.GetSegment(current.SegmentId) : _intervalSegment;
         return segment != null && PreviewSafeRange.Contains(previous, segment.SafeStartSeconds, segment.SafeEndSeconds)
             && PreviewSafeRange.Contains(target, segment.SafeStartSeconds, segment.SafeEndSeconds);
     }
@@ -133,11 +145,11 @@ public sealed partial class MainWindowViewModel
     private void ValidateNavigationState()
     {
         RefreshRetainedSnapshots();
-        if (_navigationAnchor is { SegmentId: > 0 } anchor && _cache.GetSegment(anchor.SegmentId) == null)
-            _navigationAnchor = null;
-        if (_intervalSegment is { SegmentId: > 0 } interval && _cache.GetSegment(interval.SegmentId) == null)
+        if (_navigationAnchor is { SegmentId: > 0 } anchor && !CacheHasSegment(anchor.SegmentId))
+            SetRawAnchor(ref _navigationAnchor, ref _anchorRaw, null);
+        if (_intervalSegment is { SegmentId: > 0 } interval && !CacheHasSegment(interval.SegmentId))
             ClearInterval();
-        if (_beforeIntervalSegment is { SegmentId: > 0 } before && _cache.GetSegment(before.SegmentId) == null)
+        if (_beforeIntervalSegment is { SegmentId: > 0 } before && !CacheHasSegment(before.SegmentId))
             ClearBeforeInterval();
     }
 
@@ -146,8 +158,9 @@ public sealed partial class MainWindowViewModel
         // 変換完了を待たずに確定した目標を基準にし、表示中の古い画像へ戻らない。
         if (_navigationAnchor is { } anchor && Math.Abs(target - _navigationAnchorTarget) <= 1e-8)
         {
-            var refreshed = RefreshNavigationAnchor(_cache, anchor);
-            _navigationAnchor = refreshed;
+            var current = anchor.SegmentId > 0 ? _cache.GetSegment(anchor.SegmentId) : anchor.Segment;
+            var refreshed = FindNavigationAnchor(current, anchor);
+            // index計算ではanchorをcommitしない。既存1枚の所有は、次の選択取得成功後まで保持する。
             if (refreshed != null)
             {
                 for (int i = 0; i < frames.Count; ++i)
@@ -173,6 +186,11 @@ public sealed partial class MainWindowViewModel
     internal static PreviewFrameReference? RefreshNavigationAnchor(FrameCache cache, PreviewFrameReference anchor)
     {
         var current = anchor.SegmentId > 0 ? cache.GetSegment(anchor.SegmentId) : anchor.Segment;
+        return FindNavigationAnchor(current, anchor);
+    }
+
+    private static PreviewFrameReference? FindNavigationAnchor(PreviewSegmentSnapshot? current, PreviewFrameReference anchor)
+    {
         if (current != null)
             for (int i = 0; i < current.Frames.Count; ++i)
                 if (ReferenceEquals(current.Frames[i], anchor.Frame)) return new PreviewFrameReference(current, i).RetainFrameOnly();
@@ -193,8 +211,8 @@ public sealed partial class MainWindowViewModel
     {
         _intervalSegment = frame.Segment;
         _intervalRequest = frame.Segment.PhysicalRequest;
-        _intervalFrames = frame.Segment.Frames;
-        _navigationAnchor = frame.RetainFrameOnly();
+        SetIntervalFrames(frame.Segment.Frames);
+        SetRawAnchor(ref _navigationAnchor, ref _anchorRaw, frame.RetainFrameOnly());
         _navigationAnchorTarget = frame.InputSeconds;
     }
 
@@ -204,7 +222,7 @@ public sealed partial class MainWindowViewModel
         for (int i = 0; i < segment.Frames.Count; ++i)
         {
             if (!ReferenceEquals(segment.Frames[i], frame)) continue;
-            _navigationAnchor = new PreviewFrameReference(segment, i).RetainFrameOnly();
+            SetRawAnchor(ref _navigationAnchor, ref _anchorRaw, new PreviewFrameReference(segment, i).RetainFrameOnly());
             _navigationAnchorTarget = context.ResolvedTargetSeconds ?? context.Request.TargetSeconds;
             return;
         }

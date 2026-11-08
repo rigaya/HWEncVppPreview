@@ -30,7 +30,7 @@ public sealed partial class MainWindowViewModel
             CancelBefore();
             Interlocked.Increment(ref _editEpoch);
             _afterRequests.Clear();
-            lock (_taskLock) _pendingAfterImage = null;
+            lock (_taskLock) DropImage(ref _pendingAfterImage);
         }
         return generation;
     }
@@ -235,11 +235,15 @@ public sealed partial class MainWindowViewModel
     private void EnqueueImage(ImageWork image)
     {
         // 計測時だけ識別子を付け、同じXtsのBefore/Afterや間引かれた仕事を区別する。
-        if (PerfTrace.Enabled) image = image with { TraceId = Interlocked.Increment(ref _nextImageTraceId) };
+        if (PerfTrace.Enabled) image.TraceId = Interlocked.Increment(ref _nextImageTraceId);
         TaskCompletionSource? completion = null;
         lock (_taskLock)
         {
-            if (_disposed) return;
+            if (_disposed)
+            {
+                image.Dispose();
+                return;
+            }
             ImageWork? pending = image.DisplayOnly ? (image.Before ? _pendingBeforeDisplayRefresh : _pendingAfterDisplayRefresh)
                 : image.Before ? _pendingBeforeImage : _pendingAfterImage;
             long? replacedTraceId = PerfTrace.Enabled ? pending?.TraceId : null;
@@ -255,6 +259,10 @@ public sealed partial class MainWindowViewModel
                 image.Before, image.Frame.Xts, replacedTraceId,
                 accepted = ReferenceEquals(image.DisplayOnly ? (image.Before ? _pendingBeforeDisplayRefresh : _pendingAfterDisplayRefresh)
                     : image.Before ? _pendingBeforeImage : _pendingAfterImage, image) });
+            bool accepted = ReferenceEquals(image.DisplayOnly ? (image.Before ? _pendingBeforeDisplayRefresh : _pendingAfterDisplayRefresh)
+                : image.Before ? _pendingBeforeImage : _pendingAfterImage, image);
+            if (accepted) pending?.Dispose();
+            else image.Dispose();
             if (!_conversionActive)
             {
                 _conversionActive = true;
@@ -321,6 +329,10 @@ public sealed partial class MainWindowViewModel
                         { _lastFailedAfter = image.Generation; ShowError(AppMessages.ImageDisplayFailed, exception.Message); }
                     }).ConfigureAwait(false);
                 }
+                finally
+                {
+                    image.Dispose();
+                }
             }
             completion.TrySetResult();
         }
@@ -347,7 +359,7 @@ public sealed partial class MainWindowViewModel
             if (image.Before && IsCurrent(image.Generation) && image.BeforeVersion == _beforeImageGeneration) IsBeforeBusy = false;
             return;
         }
-        if (image.TrustedAbsolute && image.SegmentId is > 0 && _cache.GetSegment(image.SegmentId.Value) == null)
+        if (image.TrustedAbsolute && image.SegmentId is > 0 && !CacheHasSegment(image.SegmentId.Value))
         {
             // 変換待ちの間に画素照合で破棄された区間を、UIから再び採用しない。
             ValidateNavigationState();
@@ -365,7 +377,7 @@ public sealed partial class MainWindowViewModel
         {
             if (!IsCurrent(image.Generation) || image.BeforeVersion != _beforeImageGeneration) return;
             var bitmap = CreateBitmap(image.Frame, data, image.TraceId);
-            _beforeDisplayedFrame = image.Frame;
+            SetRawFrame(ref _beforeDisplayedFrame, ref _beforeDisplayedRaw, image.Frame, "VmBeforeDisplayed");
             RecalculateDisplaySizes();
             BeforeImage = bitmap;
             if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.TraceId, image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
@@ -376,7 +388,7 @@ public sealed partial class MainWindowViewModel
         // replay前の変換は除外し、通常移動では実行中だった途中画像を表示する。
         if (image.Generation < _lastDisplayedAfter || image.Generation == _lastDisplayedAfter && image.DisplayRevision <= _lastDisplayedRevision) return;
         var afterBitmap = CreateBitmap(image.Frame, data, image.TraceId);
-        _displayedFrame = image.Frame;
+        SetRawFrame(ref _displayedFrame, ref _displayedRaw, image.Frame, "VmDisplayed");
         _lastDisplayedAfter = image.Generation;
         _lastDisplayedRevision = image.DisplayRevision;
         RecalculateDisplaySizes();
@@ -394,7 +406,6 @@ public sealed partial class MainWindowViewModel
     {
         var request = context.Request;
         if (context.NeighborResolved) return RetargetInterval(request, context.ResolvedTargetSeconds ?? request.TargetSeconds);
-        if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
         var navigation = NavigationFrames(request, context.Segment);
         if (navigation.Count > 0)
         {
@@ -404,14 +415,13 @@ public sealed partial class MainWindowViewModel
                 && NavigationNeighborsConnected(navigation[anchor], navigation[next]))
             {
                 var reference = navigation[next];
-                AdoptNavigationReference(reference);
-                context.Segment = reference.Segment;
-                return ResolveNeighbor(reference.Frame, reference.InputSeconds);
+                return ResolveNeighbor(reference.Frame, reference.InputSeconds, reference);
             }
         }
         else if (context.Segment?.Clock.TrustedAbsolute == true)
         {
             // 検証barrierやpurgeで候補が消えた場合、old配列を境界扱いせず新しい物理窓へ戻す。
+            if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
             if (IsCurrent(context.Generation))
                 _ = QueuePreview(navigation: true, neighborDirection: context.NeighborDirection, requirePhysicalRefetch: true);
             return null;
@@ -425,10 +435,16 @@ public sealed partial class MainWindowViewModel
             {
                 var frame = frames[next];
                 double seconds = clock.ToInputSeconds(frame, next, request.Fps);
-                if (context.Segment is { } segment && !PreviewSafeRange.Contains(seconds, segment.SafeStartSeconds, segment.SafeEndSeconds)) return null;
+                if (context.Segment is { } segment && !PreviewSafeRange.Contains(seconds, segment.SafeStartSeconds, segment.SafeEndSeconds))
+                {
+                    // 範囲外は画素選択をしない確定判断。取得失敗と分け、従来どおり保留だけ解除する。
+                    if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
+                    return null;
+                }
                 return ResolveNeighbor(frame, seconds);
             }
         }
+        if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
         context.NeighborResolved = true;
         if (IsCurrent(context.Generation))
         {
@@ -441,8 +457,24 @@ public sealed partial class MainWindowViewModel
         }
         return null;
 
-        PreviewRequest ResolveNeighbor(Y4mFrame frame, double seconds)
+        PreviewRequest? ResolveNeighbor(Y4mFrame frame, double seconds, PreviewFrameReference? reference = null)
         {
+            if (!TryRetainSelection(frame, "VmNeighborSelection", out var retained))
+            {
+                // この通知内では再帰せず、既存の正ID失効と同じcache miss処理へ一度だけ戻す。
+                if (IsCurrent(context.Generation))
+                    _ = QueuePreview(navigation: true, neighborDirection: context.NeighborDirection,
+                        requirePhysicalRefetch: context.Segment?.Clock.TrustedAbsolute == true);
+                return null;
+            }
+            using var selectedRaw = retained;
+            // 取得成功後だけ、区間/anchor/保留解除と目標をcommitする。
+            if (reference != null)
+            {
+                AdoptNavigationReference(reference);
+                context.Segment = reference.Segment;
+            }
+            if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
             context.NeighborResolved = true;
             context.ResolvedTargetSeconds = seconds;
             // 明示的なシークが後から来た場合も、最新の目標を過去へ戻さない。
@@ -474,8 +506,30 @@ public sealed partial class MainWindowViewModel
 
     private sealed record NeighborIntent(long Generation, int Direction);
 
-    private sealed record ImageWork(Y4mFrame Frame, long Generation, long EditEpoch,
+    private sealed class ImageWork(Y4mFrame Frame, long Generation, long EditEpoch,
         bool Before = false, long BeforeVersion = 0, bool FinishBeforeBusy = false,
         double? DisplaySeconds = null, long? SegmentId = null, bool TrustedAbsolute = false,
-        RequestContext? RevisionContext = null, long DisplayRevision = 0, long TraceId = 0, bool DisplayOnly = false);
+        RequestContext? RevisionContext = null, long DisplayRevision = 0, long TraceId = 0, bool DisplayOnly = false) : IDisposable
+    {
+        private IDisposable? _raw = RetainRawFrames(new[] { Frame }, "VmWork");
+        public Y4mFrame Frame { get; } = Frame;
+        public long Generation { get; } = Generation;
+        public long EditEpoch { get; } = EditEpoch;
+        public bool Before { get; } = Before;
+        public long BeforeVersion { get; } = BeforeVersion;
+        public bool FinishBeforeBusy { get; } = FinishBeforeBusy;
+        public double? DisplaySeconds { get; } = DisplaySeconds;
+        public long? SegmentId { get; } = SegmentId;
+        public bool TrustedAbsolute { get; } = TrustedAbsolute;
+        public RequestContext? RevisionContext { get; } = RevisionContext;
+        public long DisplayRevision { get; } = DisplayRevision;
+        public long TraceId { get; set; } = TraceId;
+        public bool DisplayOnly { get; } = DisplayOnly;
+        public ImageWork Retain() => new(Frame, Generation, EditEpoch, Before, BeforeVersion, FinishBeforeBusy,
+            DisplaySeconds, SegmentId, TrustedAbsolute, RevisionContext, DisplayRevision, TraceId, DisplayOnly);
+        public void Dispose() => Interlocked.Exchange(ref _raw, null)?.Dispose();
+    }
+
+    private static void DropImage(ref ImageWork? slot)
+        => Interlocked.Exchange(ref slot, null)?.Dispose();
 }
