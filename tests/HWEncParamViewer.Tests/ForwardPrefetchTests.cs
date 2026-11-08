@@ -256,7 +256,7 @@ public sealed class ForwardPrefetchTests
     public async Task 逆先読みで取消した順先読みは同じ境界で再起動する()
     {
         // byte窓のための未来tail削減とは分け、同じ境界の取消markerだけを検証する。
-        var cache = new FrameCache(); Seed(cache, Request()); var backend = new Backend(holdAtSeedEnd: true);
+        var cache = new FrameCache(); Seed(cache, Request()); var backend = new Backend(holdAtSeedEnd: true, holdFinite: true);
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
         controller.Submit(Request()); await controller.WaitForIdleAsync().WaitAsync(Safety);
         controller.NotifyNavigation(Request(11.5), 1);
@@ -269,6 +269,8 @@ public sealed class ForwardPrefetchTests
         controller.Submit(Request(10.4, 2), navigation: true); controller.NotifyNavigation(Request(10.4, 2), -1);
         controller.Submit(Request(10.3, 3), navigation: true); controller.NotifyNavigation(Request(10.3, 3), -1);
         var pending = controller.GetPendingReversePrefetch(Request(10.3, 3)); Assert.NotNull(pending);
+        // 完了した先読みはpending APIに現れないため、待機taskを得てから有限backendを進める。
+        backend.Release.TrySetResult();
         await pending!.WaitAsync(Safety); await controller.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Equal(1, backend.Cancelled); Assert.Equal(2, backend.Requests.Count);
         Assert.Equal(boundary, cache.GetConnectedSafeRange(Request(11.5))!.Value.End);
@@ -351,7 +353,7 @@ public sealed class ForwardPrefetchTests
         Assert.Equal(2, backend.Requests.Count); Assert.Equal(1, backend.Cancelled);
     }
 
-    private sealed class Backend(string result = "stream", bool history = false, bool holdCancellation = false, bool holdAtSeedEnd = false) : IPreviewBackend
+    private sealed class Backend(string result = "stream", bool history = false, bool holdCancellation = false, bool holdAtSeedEnd = false, bool holdFinite = false) : IPreviewBackend
     {
         public ConcurrentQueue<PreviewRequest> Requests { get; } = new();
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -369,7 +371,7 @@ public sealed class ForwardPrefetchTests
             double seek = CommandBuilder.Plan(request).SeekSeconds ?? 0, last = seek;
             try
             {
-                if (result == "hold") await Release.Task.WaitAsync(token);
+                if (result == "hold" || holdFinite && !request.Continuous) await Release.Task.WaitAsync(token);
                 if (result == "error") return new(1, "stub failure");
                 if (result == "empty_eof") return new(0, "");
                 for (int i = 0; request.Continuous || i < CommandBuilder.Plan(request).FrameCount; i++)
