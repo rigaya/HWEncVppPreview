@@ -44,7 +44,9 @@ public sealed partial class MainWindowViewModel
         set
         {
             var normalized = value is PreviewCompareMode.Split or PreviewCompareMode.SideBySide ? value : PreviewCompareMode.Single;
-            if (SetProperty(ref _compareMode, normalized) && normalized != PreviewCompareMode.Single) IsShowingBefore = false;
+            if (!SetProperty(ref _compareMode, normalized)) return;
+            if (normalized != PreviewCompareMode.Single) IsShowingBefore = false;
+            RefreshBeforeSegmentProtection();
         }
     }
     public bool IsShowingBefore
@@ -54,6 +56,7 @@ public sealed partial class MainWindowViewModel
         {
             if (!SetProperty(ref _isShowingBefore, value && CompareMode == PreviewCompareMode.Single)) return;
             RefreshColorInfo();
+            RefreshBeforeSegmentProtection();
             if (!_isShowingBefore) return;
             // Spaceは遅延だけを解除し、すでに実行中の元画像は取り消さない。
             if (BeforeImage == null)
@@ -69,6 +72,7 @@ public sealed partial class MainWindowViewModel
         get => _beforeImage;
         set
         {
+            if (value == null) SelectBeforePresentationSegment(null);
             var previous = _beforeImage;
             if (!SetProperty(ref _beforeImage, value)) return;
             previous?.Dispose();
@@ -122,6 +126,7 @@ public sealed partial class MainWindowViewModel
 
     private void ClearBeforeInterval()
     {
+        SelectBeforePresentationSegment(null);
         _beforeIntervalRequest = null;
         _beforeIntervalSegment = null;
         SetBeforeIntervalFrames(Array.Empty<Y4mFrame>());
@@ -515,6 +520,8 @@ public sealed partial class MainWindowViewModel
 
     private void DisplayBeforeFrame(Y4mFrame frame, long generation, bool finishBusy = false, RequestContext? revisionContext = null)
     {
+        // 変換中に選択済みの区間が回収されると再取得になるため、表示準備を始めた時点から守る。
+        SelectBeforePresentationSegment(_beforeIntervalSegment?.SegmentId);
         revisionContext ??= Volatile.Read(ref _context);
         long revision = revisionContext == null ? 0 : Volatile.Read(ref revisionContext.DisplayRevision);
         long imageGeneration = Interlocked.Increment(ref _beforeImageGeneration);

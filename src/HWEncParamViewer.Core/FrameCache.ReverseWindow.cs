@@ -69,7 +69,7 @@ public sealed partial class FrameCache
     }
 
     private long ReverseReclaimableBytes(HashSet<long> protectedSegments)
-        => EvictableSegments(protectedSegments: protectedSegments).Sum(entry => entry.Bytes)
+        => EvictableSegments(protectedSegments: protectedSegments, includeDisplayedBefore: true).Sum(entry => entry.Bytes)
             + _entries.Values.Sum(node => node.Value.Bytes);
 
     private (SegmentEntry Entry,int First,int Last,long Bytes)? ReverseRoomCore(PreviewRequest request,double boundary,double target,double overlap)
@@ -145,7 +145,7 @@ public sealed partial class FrameCache
         using var release = ReleaseRawOutsideGate();
         lock (_gate)
         {
-            // 先に古いclosed区間を通常のLRU順で回収し、それでも不足するときだけcurrentのbridgeを縮める。
+            // 保護されない完了区間、現在区間の接続部縮小、表示中の元画像区間の順で回収し、表示用の窓を長く残す。
             // 見積もりが不足する場合は、回収やtrimを始める前にそのまま失敗する。
             var range=GetConnectedSafeRange(request);
             if(range==null || !PreviewSafeRange.Contains(boundary,range.Value.Start,range.Value.End)
@@ -160,24 +160,28 @@ public sealed partial class FrameCache
             if (bytes > available) return false;
             while (bytes > _capacityBytes - _sizeBytes && EvictOne(protectedSegments: protectedSegments)) { }
             if (bytes <= _capacityBytes - _sizeBytes) return true;
-            if (plan == null) return false;
-            var (entry,first,last,_)=plan.Value;
-            int kept=last-first+1;
-            for(int i=0;i<first;i++)RemoveFirst(entry);
-            bool tailRemoved=entry.Frames.Count>kept;
-            while(entry.Frames.Count>kept)
+            if (plan != null)
             {
-                long removed = entry.Frames[^1].RawByteLength;
-                entry.Frames.RemoveAt(entry.Frames.Count-1);entry.Bytes-=removed;_sizeBytes-=removed;
+                var (entry,first,last,_)=plan.Value;
+                int kept=last-first+1;
+                for(int i=0;i<first;i++)RemoveFirst(entry);
+                bool tailRemoved=entry.Frames.Count>kept;
+                while(entry.Frames.Count>kept)
+                {
+                    long removed = entry.Frames[^1].RawByteLength;
+                    entry.Frames.RemoveAt(entry.Frames.Count-1);entry.Bytes-=removed;_sizeBytes-=removed;
+                }
+                if (tailRemoved)
+                {
+                    entry.SafeEnd=Math.Min(entry.SafeEnd,
+                        entry.Clock.ToInputSeconds(entry.Frames[^1],entry.Frames.Count-1,request.Fps)+FrameSelector.Duration(entry.Frames[^1],request.Fps));
+                    entry.ReachedInputEnd=false;
+                }
+                if(PerfTrace.Enabled)PerfTrace.Write("cache.reverse_trim",new{entry.Id,bytes,cacheBytes=_sizeBytes,kept,first,tailRemoved});
             }
-            if (tailRemoved)
-            {
-                entry.SafeEnd=Math.Min(entry.SafeEnd,
-                    entry.Clock.ToInputSeconds(entry.Frames[^1],entry.Frames.Count-1,request.Fps)+FrameSelector.Duration(entry.Frames[^1],request.Fps));
-                entry.ReachedInputEnd=false;
-            }
-            if(PerfTrace.Enabled)PerfTrace.Write("cache.reverse_trim",new{entry.Id,bytes,cacheBytes=_sizeBytes,kept,first,tailRemoved});
-            return true;
+            if (bytes <= _capacityBytes - _sizeBytes) return true;
+            return TryEvictDisplayedBefore(null, protectedSegments, "reverse_capacity_after_bridge_trim")
+                && bytes <= _capacityBytes - _sizeBytes;
         }
     }
 

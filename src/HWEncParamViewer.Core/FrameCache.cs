@@ -17,6 +17,7 @@ public sealed partial class FrameCache
     private long _nextSegmentId;
     private long _useSequence;
     private long? _currentSegmentId;
+    private long? _displayedBeforeSegmentId;
     private double _currentSeconds;
     private readonly HashSet<long> _activeSegments = new();
     private readonly List<PreviewRequest> _stitchDisabled = new();
@@ -91,7 +92,7 @@ public sealed partial class FrameCache
             if (_capacityBytes == 0 || bytes > _capacityBytes) return;
             // 引き算で比較し、巨大な上限での加算オーバーフローを避ける。
             while (_sizeBytes > _capacityBytes - bytes)
-                if (!EvictOne()) return;
+                if (!EvictOne() && !TryEvictDisplayedBefore(null, null, "legacy_capacity_after_other_entries")) return;
             var physical = physicalRequest ?? request;
             physical = physical with { InputArgs = physical.InputArgs.ToArray(), VppArgs = physical.VppArgs.ToArray() };
             var entry = new Entry(key, snapshot, bytes, physical) { LastUse = ++_useSequence, RawLease = snapshot.Any(f => f.RawOwner != null) ? RawFrameSetLease.Capture(snapshot, "Cache") : null };
@@ -118,6 +119,7 @@ public sealed partial class FrameCache
             _stitchDisabled.Clear();
             _pendingSources.Clear();
             _currentSegmentId = null;
+            _displayedBeforeSegmentId = null;
             _sizeBytes = 0;
         }
     }
@@ -262,6 +264,13 @@ public sealed partial class FrameCache
             _currentSegmentId = segmentId;
             _currentSeconds = currentSeconds;
         }
+    }
+
+    /// <summary>表示中の元画像区間を1件だけ通常回収から保護する。所属がない指定または未指定で保護を解除する。</summary>
+    public void ProtectDisplayedBeforeSegment(long? id)
+    {
+        lock (_gate)
+            _displayedBeforeSegmentId = id is long value && _segments.ContainsKey(value) ? value : null;
     }
 
     /// <summary>次のフレームを保持できるか確認する。未読の未来を捨てず、足りなければ早くpauseする。</summary>
@@ -525,39 +534,42 @@ public sealed partial class FrameCache
         foreach (var node in _entries.Where(pair => pair.Key.MatchesSource(entry.Request)).Select(pair => pair.Value).ToArray()) Remove(node);
     }
 
-    // 固定秒数では削らず、容量不足時だけ非保護区間、続いて表示位置より古いprefixを回収する。
+    // 元画像の取り直しを避けるため、保護されない区間と現在区間の古い先頭部分を先に回収し、元画像の区間は最後に回す。
     private bool MakeRoom(long bytes, long? appendingSegment, HashSet<long>? protectedSegments = null, bool trimCurrent = true)
     {
         if (bytes < 0 || bytes > _capacityBytes || _capacityBytes == 0) return false;
         while (_sizeBytes > _capacityBytes - bytes)
         {
             if (EvictOne(appendingSegment, protectedSegments)) continue;
-            if (!trimCurrent) return false;
             // pinはentryを保護する。メモリ不足時だけ、選択中の1枚を残して古いprefixをさらに縮める。
             // 既照合peerの過去prefixは表示移動に従い回収し、共通raw点数を永久固定しない。
             // 未来tailも切るreverse計画では、接続を維持する共通点を別途残す。
             bool removed = false;
-            foreach (var entry in _segments.Values)
+            if (trimCurrent)
             {
-                if (entry.Id == _currentSegmentId && entry.Frames.Count > 0)
+                foreach (var entry in _segments.Values)
                 {
-                    int selected = FrameSelector.Select(Snapshot(entry), _currentSeconds, entry.Request.Fps);
-                    double end = entry.Clock.ToInputSeconds(entry.Frames[^1], entry.Frames.Count - 1, entry.Request.Fps)
-                        + FrameSelector.Duration(entry.Frames[^1], entry.Request.Fps);
-                    if (selected > 0 || _currentSeconds >= end - 1e-8) { RemoveFirst(entry); removed = true; break; }
+                    if (entry.Id == _currentSegmentId && entry.Frames.Count > 0)
+                    {
+                        int selected = FrameSelector.Select(Snapshot(entry), _currentSeconds, entry.Request.Fps);
+                        double end = entry.Clock.ToInputSeconds(entry.Frames[^1], entry.Frames.Count - 1, entry.Request.Fps)
+                            + FrameSelector.Duration(entry.Frames[^1], entry.Request.Fps);
+                        if (selected > 0 || _currentSeconds >= end - 1e-8) { RemoveFirst(entry); removed = true; break; }
+                    }
                 }
             }
-            if (!removed) return false;
+            if (!removed && !TryEvictDisplayedBefore(appendingSegment, protectedSegments, "capacity_after_current_prefix")) return false;
         }
         return true;
     }
 
     // 見積もりと実際の回収で同じ候補を使い、回収できない区間を空きとして数えない。
-    private IEnumerable<SegmentEntry> EvictableSegments(long? protectedSegment = null, HashSet<long>? protectedSegments = null)
+    private IEnumerable<SegmentEntry> EvictableSegments(long? protectedSegment = null, HashSet<long>? protectedSegments = null,
+        bool includeDisplayedBefore = false)
     {
         var directPeers = CurrentDirectPeerIds();
         return _segments.Values.Where(x => x.Id != protectedSegment && x.Id != _currentSegmentId
-            && !_activeSegments.Contains(x.Id) && !directPeers.Contains(x.Id) && !(protectedSegments?.Contains(x.Id) ?? false));
+            && (includeDisplayedBefore || x.Id != _displayedBeforeSegmentId) && !_activeSegments.Contains(x.Id) && !directPeers.Contains(x.Id) && !(protectedSegments?.Contains(x.Id) ?? false));
     }
 
     private bool EvictOne(long? protectedSegment = null, HashSet<long>? protectedSegments = null)
@@ -585,6 +597,23 @@ public sealed partial class FrameCache
         return false;
     }
 
+    private bool TryEvictDisplayedBefore(long? protectedSegment, HashSet<long>? protectedSegments, string stage)
+    {
+        if (_displayedBeforeSegmentId is not long id) return false;
+        // 最後の手段でも、表示位置・処理中の区間・接続先などの既存保護は破らず、同じ条件で回収可能性を再確認する。
+        var entry = EvictableSegments(protectedSegment, protectedSegments, includeDisplayedBefore: true)
+            .FirstOrDefault(candidate => candidate.Id == id);
+        if (entry == null) return false;
+        if (PerfTrace.Enabled) PerfTrace.Write("cache.evict", new { entry.Id, entry.Request.CorrelationId,
+            entry.SafeStart, entry.SafeEnd, bytes = entry.Bytes, currentSegmentId = _currentSegmentId,
+            currentSeconds = _currentSeconds, protectedSegment, distanceStart = entry.SafeStart - _currentSeconds,
+            distanceEnd = entry.SafeEnd - _currentSeconds, sameContent = _currentSegmentId is long currentId
+                && _segments.TryGetValue(currentId, out var current) && SameContent(current.Request, entry.Request),
+            reason = "displayed_before_last_resort", stage });
+        RemoveSegmentCore(entry.Id);
+        return true;
+    }
+
     private void RemoveFirst(SegmentEntry entry)
     {
         long bytes = entry.Frames[0].RawByteLength;
@@ -605,6 +634,7 @@ public sealed partial class FrameCache
         }
         _activeSegments.Remove(id);
         if (_currentSegmentId == id) _currentSegmentId = null;
+        if (_displayedBeforeSegmentId == id) _displayedBeforeSegmentId = null;
     }
 
     private PreviewSegmentSnapshot Snapshot(SegmentEntry entry) => new(entry.Id, entry.Request, entry.Clock,

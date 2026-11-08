@@ -378,6 +378,7 @@ public sealed partial class MainWindowViewModel
             if (!IsCurrent(image.Generation) || image.BeforeVersion != _beforeImageGeneration) return;
             var bitmap = CreateBitmap(image.Frame, data, image.TraceId);
             SetRawFrame(ref _beforeDisplayedFrame, ref _beforeDisplayedRaw, image.Frame, "VmBeforeDisplayed");
+            SelectBeforePresentationSegment(image.SegmentId);
             RecalculateDisplaySizes();
             BeforeImage = bitmap;
             if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.TraceId, image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
