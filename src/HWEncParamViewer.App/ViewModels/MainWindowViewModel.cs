@@ -259,7 +259,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     /// <summary>時刻欄 (双方向)。Enter で CommitTimeTextCommand。</summary>
     public string CurrentTimeText { get => _currentTimeText; set => SetProperty(ref _currentTimeText, value ?? ""); }
     /// <summary>シークバーの目標位置(秒)。ドラッグ中も移動要求を送り、待ちは最新位置へ置き換える。</summary>
-    public double CurrentSeconds { get => _currentSeconds; set { RecordNavigationIntent(); if (SetProperty(ref _currentSeconds, ClampTime(value))) { CurrentTimeText = FormatTime(_currentSeconds); _ = QueuePreview(navigation: true); } } }
+    public double CurrentSeconds { get => _currentSeconds; set { RecordNavigationIntent(); if (SetProperty(ref _currentSeconds, ClampTime(value))) { SetBeforeProtectionDirection(0); CurrentTimeText = FormatTime(_currentSeconds); _ = QueuePreview(navigation: true); } } }
     /// <summary>入力の長さ (秒)。HasDuration が false のときは意味を持たない。</summary>
     public double DurationSeconds { get => _durationSeconds; set => SetProperty(ref _durationSeconds, value); }
     /// <summary>入力の長さが分かっているか。false ならシークバーを隠す (設計書 17.1)。</summary>
@@ -305,6 +305,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     public void EndSeekDrag(double seconds)
     {
         if (!_seekDragging) return;
+        SetBeforeProtectionDirection(0);
         _seekDragging = false;
         if (seconds == CurrentSeconds)
         {
@@ -786,6 +787,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         context.SetSegmentSharing(_intervalSegment, _intervalRaw);
         _lastIntentTarget = seconds;
         RegisterContext(context);
+        SetBeforeProtectionDirection(direction);
         IsBusy = true;
         ErrorText = null;
         _completedAfterStatus = AppMessages.DoneCache;
@@ -801,6 +803,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         RecordNavigationIntent();
         seconds = ClampTime(seconds);
         if (!force && seconds == CurrentSeconds) return;
+        SetBeforeProtectionDirection(0);
         SetTimeOnly(seconds);
         _ = QueuePreview(navigation: true, allowConcurrentBefore: allowConcurrentBefore, operation: operation);
     }

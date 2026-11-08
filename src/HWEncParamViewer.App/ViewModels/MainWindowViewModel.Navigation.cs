@@ -19,6 +19,7 @@ public sealed partial class MainWindowViewModel
 
     private long BeginIntent(bool navigation)
     {
+        if (!navigation) SetBeforeProtectionDirection(0);
         long generation = Interlocked.Increment(ref _generation);
         ReleaseObsoleteRequestSnapshots(generation);
         _latestIntentNavigation = navigation;
@@ -378,7 +379,7 @@ public sealed partial class MainWindowViewModel
             if (!IsCurrent(image.Generation) || image.BeforeVersion != _beforeImageGeneration) return;
             var bitmap = CreateBitmap(image.Frame, data, image.TraceId);
             SetRawFrame(ref _beforeDisplayedFrame, ref _beforeDisplayedRaw, image.Frame, "VmBeforeDisplayed");
-            SelectBeforePresentationSegment(image.SegmentId);
+            SelectBeforePresentationSegment(image.SegmentId, image.Frame.FrameId);
             RecalculateDisplaySizes();
             BeforeImage = bitmap;
             if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.TraceId, image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
@@ -480,7 +481,12 @@ public sealed partial class MainWindowViewModel
             context.ResolvedTargetSeconds = seconds;
             // 明示的なシークが後から来た場合も、最新の目標を過去へ戻さない。
             bool current = IsCurrent(context.Generation);
-            if (current) { SetTimeOnly(seconds); _lastIntentTarget = seconds; }
+            if (current)
+            {
+                SetTimeOnly(seconds);
+                _lastIntentTarget = seconds;
+                SetBeforeProtectionDirection(context.NeighborDirection);
+            }
             DisplayFrame(frame, context);
             if (current) NotifyAcceptedFrameStep(request, context.NeighborDirection, seconds);
             return RetargetInterval(request, seconds);

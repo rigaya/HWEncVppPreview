@@ -69,8 +69,9 @@ public sealed partial class FrameCache
     }
 
     private long ReverseReclaimableBytes(HashSet<long> protectedSegments)
-        => EvictableSegments(protectedSegments: protectedSegments, includeDisplayedBefore: true).Sum(entry => entry.Bytes)
-            + _entries.Values.Sum(node => node.Value.Bytes);
+        => EvictableSegments(protectedSegments: protectedSegments).Sum(entry => entry.Bytes)
+            + _entries.Values.Sum(node => node.Value.Bytes)
+            + (PlanDisplayedBeforeReclaim(0, null, protectedSegments, minimumWindow: true)?.ReleasedBytes ?? 0);
 
     private (SegmentEntry Entry,int First,int Last,long Bytes)? ReverseRoomCore(PreviewRequest request,double boundary,double target,double overlap)
     {
@@ -180,7 +181,7 @@ public sealed partial class FrameCache
                 if(PerfTrace.Enabled)PerfTrace.Write("cache.reverse_trim",new{entry.Id,bytes,cacheBytes=_sizeBytes,kept,first,tailRemoved});
             }
             if (bytes <= _capacityBytes - _sizeBytes) return true;
-            return TryEvictDisplayedBefore(null, protectedSegments, "reverse_capacity_after_bridge_trim")
+            return TryReclaimDisplayedBefore(bytes, null, protectedSegments, "reverse_capacity_after_bridge_trim")
                 && bytes <= _capacityBytes - _sizeBytes;
         }
     }

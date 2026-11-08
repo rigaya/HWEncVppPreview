@@ -56,7 +56,7 @@ public sealed partial class MainWindowViewModel
         // 既表示の一枚なら変換だけ省き、ENDで保存した正区間への保護を必ず引き継ぐ。
         if (!same || targetChanged) return false;
         Interlocked.Increment(ref _beforeImageGeneration);
-        SelectBeforePresentationSegment(_beforeIntervalSegment?.SegmentId);
+        SelectBeforePresentationSegment(_beforeIntervalSegment?.SegmentId, frame.FrameId);
         IsBeforeBusy = false;
         return true;
     }

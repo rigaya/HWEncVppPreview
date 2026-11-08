@@ -523,7 +523,7 @@ public sealed partial class MainWindowViewModel
         PreviewSegmentSnapshot? sourceSegment = null, bool earlyDisplay = false)
     {
         // 変換中に選択済みの区間が回収されると再取得になるため、表示準備を始めた時点から守る。
-        SelectBeforePresentationSegment((sourceSegment ?? _beforeIntervalSegment)?.SegmentId);
+        SelectBeforePresentationSegment((sourceSegment ?? _beforeIntervalSegment)?.SegmentId, frame.FrameId);
         revisionContext ??= Volatile.Read(ref _context);
         long revision = revisionContext == null ? 0 : Volatile.Read(ref revisionContext.DisplayRevision);
         long imageGeneration = Interlocked.Increment(ref _beforeImageGeneration);
