@@ -2,6 +2,7 @@
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using HWEncParamViewer.App.Services;
 using HWEncParamViewer.App.ViewModels;
 using HWEncParamViewer.App.Views;
 
@@ -19,7 +20,12 @@ public partial class App : Application
             var window = new MainWindow { DataContext = vm };
             bool closing = false;
             bool mayClose = false;
-            window.Opened += (_, _) => _ = InitializeWindowAsync();
+            window.Opened += (_, _) =>
+            {
+                _ = InitializeWindowAsync();
+                // 描画より低い優先度へ送り、画面表示を掃除の待ちにしない。
+                Dispatcher.UIThread.Post(NativeExtractionCleanupService.Start, DispatcherPriority.Background);
+            };
             window.Closing += (_, e) =>
             {
                 if (mayClose) return;

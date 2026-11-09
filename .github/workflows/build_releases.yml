@@ -1,0 +1,194 @@
+name: Build Releases / Prepare Release
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'prepare-release' || format('build-releases-{0}', github.ref) }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      version_name: ${{ steps.version.outputs.version_name }}
+      release_sha: ${{ steps.version.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: 版と対象コミットの確定
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          release_sha="$(git rev-parse HEAD)"
+          test "$release_sha" = "$EXPECTED_SHA"
+          version="$(bash scripts/get-version.sh)"
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            version_name="$version"
+          else
+            version_name="r$(git rev-list --count HEAD)"
+          fi
+          {
+            echo "version=$version"
+            echo "version_name=$version_name"
+            echo "release_sha=$release_sha"
+          } >> "$GITHUB_OUTPUT"
+      - name: 手動実行の権限と既存リリースの確認
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          TAG: ${{ steps.version.outputs.version }}
+          RELEASE_SHA: ${{ steps.version.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo 'ERROR: Actions secret RELEASE_PATが未設定です。' >&2
+            exit 1
+          fi
+          if [ "$(gh api "/repos/$GITHUB_REPOSITORY" --jq '.permissions.push')" != true ]; then
+            echo 'ERROR: RELEASE_PATに対象リポジトリの書込権限がありません。' >&2
+            exit 1
+          fi
+          bash scripts/prepare-release.sh check
+
+  test:
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.release_sha }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: 全件試験
+        shell: bash
+        run: >-
+          dotnet test HWEncParamViewer.sln -c Debug
+          --logger trx --results-directory test-results
+          --blame-hang-timeout 5m
+      - name: 試験結果の保存
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: test-results/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    # 両方の環境の試験が成功するまで、配布物は作らない。
+    needs: [version, test]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            executable: HWEncParamViewer.exe
+            extension: zip
+          - os: ubuntu-latest
+            rid: linux-x64
+            executable: HWEncParamViewer
+            extension: tar.xz
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.release_sha }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: 配布用の発行
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+        run: >-
+          dotnet publish src/HWEncParamViewer.App/HWEncParamViewer.App.csproj
+          -c Release -p:PublishProfile=Distribution -r "$RID"
+          -o "$RUNNER_TEMP/publish/$RID"
+      - name: 実行ファイルの版の照合
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE: ${{ matrix.executable }}
+          EXPECTED_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:RUNNER_TEMP "publish/$env:RID/$env:EXECUTABLE"
+          # 標準出力をパイプにして、WindowsのWinExeでも版の出力を待つ。
+          $actual = (& $exe --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne "HWEncParamViewer $env:EXPECTED_VERSION") {
+            throw "実行ファイルの版が不一致です: '$actual'"
+          }
+      - name: Windowsの圧縮ファイルを作成
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        env:
+          VERSION_NAME: ${{ needs.version.outputs.version_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/archives" | Out-Null
+          Compress-Archive -LiteralPath "$env:RUNNER_TEMP/publish/win-x64/HWEncParamViewer.exe" -DestinationPath "$env:RUNNER_TEMP/archives/HWEncParamViewer_$($env:VERSION_NAME)_win-x64.zip"
+      - name: Linuxの圧縮ファイルを作成
+        if: matrix.rid == 'linux-x64'
+        shell: bash
+        env:
+          VERSION_NAME: ${{ needs.version.outputs.version_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/archives"
+          chmod 755 "$RUNNER_TEMP/publish/linux-x64/HWEncParamViewer"
+          tar -cJf "$RUNNER_TEMP/archives/HWEncParamViewer_${VERSION_NAME}_linux-x64.tar.xz" -C "$RUNNER_TEMP/publish/linux-x64" HWEncParamViewer
+      - name: 配布物の保存
+        uses: actions/upload-artifact@v4
+        with:
+          name: HWEncParamViewer_${{ needs.version.outputs.version_name }}_${{ matrix.rid }}
+          path: ${{ runner.temp }}/archives/HWEncParamViewer_${{ needs.version.outputs.version_name }}_${{ matrix.rid }}.${{ matrix.extension }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.release_sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: HWEncParamViewer_*
+          path: release-assets
+      - name: 成果物の検査と下書きの作成
+        id: draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          TAG: ${{ needs.version.outputs.version }}
+          RELEASE_SHA: ${{ needs.version.outputs.release_sha }}
+          ASSET_DIR: release-assets
+        run: bash scripts/prepare-release.sh create
+      - name: 下書きの確認先
+        shell: bash
+        env:
+          RELEASE_URL: ${{ steps.draft.outputs.release_url }}
+        run: |
+          printf '## 下書きを準備しました\n\n%s\n\n成果物と説明を確認してから手動で公開してください。\n' "$RELEASE_URL" >> "$GITHUB_STEP_SUMMARY"
