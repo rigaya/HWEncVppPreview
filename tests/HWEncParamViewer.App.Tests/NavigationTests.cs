@@ -117,14 +117,8 @@ public sealed class NavigationTests(ITestOutputHelper output)
         vm.EndSeekDrag(1);
     }
 
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        async Task WaitAsync()
-        {
-            while (!condition()) await UiBarrierAsync();
-        }
-        await WaitAsync().WaitAsync(Safety);
-    }
+    private static Task WaitUntilAsync(Func<bool> condition) =>
+        UiTestWait.UntilAsync(condition, Safety);
 
     [AvaloniaFact]
     public async Task CachedFrameNavigationKeepsRenderingWhileConversionsAreSlowerThanKeyRepeat()
@@ -341,18 +335,24 @@ public sealed class NavigationTests(ITestOutputHelper output)
 
     private static async Task DrainNavigationAsync(MainWindowViewModel vm, FakeTimeProvider clock)
     {
+        using var deadline = new CancellationTokenSource(Safety);
         Task idle = vm.WaitForIdleAsync();
-        async Task DrainAsync()
+        try
         {
             while (!idle.IsCompleted)
             {
+                // 偽時計の進め方を保ち、実時間の期限では元の反復そのものを止める。
+                deadline.Token.ThrowIfCancellationRequested();
                 clock.Advance(TimeSpan.FromMilliseconds(400));
-                await UiBarrierAsync();
-                await UiBarrierAsync();
+                await UiBarrierAsync().WaitAsync(deadline.Token);
+                await UiBarrierAsync().WaitAsync(deadline.Token);
             }
-            await idle;
+            await idle.WaitAsync(deadline.Token);
         }
-        await DrainAsync().WaitAsync(Safety);
+        catch (OperationCanceledException exception) when (deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException("UIを進める待機が期限を超えました。", exception);
+        }
     }
 
     private static async Task DrainToImageAsync(MainWindowViewModel vm, FakeTimeProvider clock, TimedBackend backend, string expected)

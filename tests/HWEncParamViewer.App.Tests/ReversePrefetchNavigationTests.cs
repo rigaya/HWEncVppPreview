@@ -97,7 +97,22 @@ public sealed class ReversePrefetchNavigationTests
         else fixture.Vm.CurrentSeconds = 30;
         await fixture.Vm.WaitForPreparationAsync().WaitAsync(Safety);
         if (edit) fixture.Clock.Advance(TimeSpan.FromMilliseconds(150));
-        await PumpUntilAsync(() => fixture.Backend.Cancelled.Any(IsPrefetch)).WaitAsync(Safety);
+        try
+        {
+            await PumpUntilAsync(() => fixture.Backend.Cancelled.Any(IsPrefetch)).WaitAsync(Safety);
+        }
+        catch (Exception exception)
+        {
+            string requests = string.Join(" | ", fixture.Backend.Requests.Select(request =>
+                $"id={request.CorrelationId}, target={request.TargetSeconds:R}, input={request.InputFile}"));
+            string cancelled = string.Join(" | ", fixture.Backend.Cancelled.Select(request =>
+                $"id={request.CorrelationId}, target={request.TargetSeconds:R}"));
+            throw new InvalidOperationException(
+                $"古い逆先読みの取消を観測できません: edit={edit}, current={fixture.Vm.CurrentSeconds:R}, "
+                + $"busy={fixture.Vm.IsBusy}, duration={fixture.Vm.DurationSeconds:R}, error={fixture.Vm.ErrorText}, "
+                + $"started={fixture.Backend.Started.Task.Status}, release={fixture.Backend.Release.Task.Status}, "
+                + $"requests=[{requests}], cancelled=[{cancelled}]", exception);
+        }
         await fixture.Vm.WaitForIdleAsync().WaitAsync(Safety);
         Assert.Null(fixture.Vm.ErrorText);
         if (!edit) Assert.Equal(30, fixture.Vm.CurrentSeconds, 6);
@@ -137,10 +152,7 @@ public sealed class ReversePrefetchNavigationTests
     }
 
     private static bool IsPrefetch(PreviewRequest request) => request.CorrelationId < long.MinValue / 2;
-    private static async Task PumpUntilAsync(Func<bool> condition)
-    {
-        while (!condition()) await Dispatcher.UIThread.InvokeAsync(() => { });
-    }
+    private static Task PumpUntilAsync(Func<bool> condition) => UiTestWait.UntilAsync(condition, Safety);
 
     private sealed class Fixture : IAsyncDisposable
     {

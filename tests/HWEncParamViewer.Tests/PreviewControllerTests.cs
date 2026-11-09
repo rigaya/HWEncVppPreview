@@ -196,14 +196,50 @@ public sealed class PreviewControllerTests
     [Fact]
     public async Task DisposeAbortsActiveRequestAndRejectsSubmit()
     {
+        var clock = new DisposeGraceClock();
         var backend = new ControlledBackend();
-        var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
-        controller.Submit(Request());
-        await backend.NextAsync();
-        await controller.DisposeAsync();
-        Assert.True(backend.Disposed);
-        Assert.Throws<ObjectDisposedException>(() => controller.Submit(Request()));
-        await controller.DisposeAsync();
+        var controller = new PreviewController(backend, debounce: TimeSpan.Zero, timeProvider: clock);
+        Task? dispose = null;
+        try
+        {
+            controller.Submit(Request());
+            await backend.NextAsync();
+            dispose = controller.DisposeAsync().AsTask();
+            // 猶予タイマーが登録される前に時計を進めると、後から登録された期限を待ち続けてしまう。
+            await clock.GraceArmed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(0, backend.Aborts);
+            clock.Advance(TimeSpan.FromSeconds(2));
+            await dispose.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(1, backend.Aborts);
+            Assert.True(backend.Disposed);
+            Assert.Throws<ObjectDisposedException>(() => controller.Submit(Request()));
+            await controller.DisposeAsync();
+        }
+        finally
+        {
+            if (dispose?.IsCompleted != true)
+            {
+                await backend.AbortAsync();
+                clock.Advance(TimeSpan.FromSeconds(5));
+            }
+            await controller.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    private sealed class DisposeGraceClock : TimeProvider
+    {
+        private readonly FakeTimeProvider _clock = new();
+        public TaskCompletionSource GraceArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override long TimestampFrequency => _clock.TimestampFrequency;
+        public override long GetTimestamp() => _clock.GetTimestamp();
+        public override DateTimeOffset GetUtcNow() => _clock.GetUtcNow();
+        public void Advance(TimeSpan delta) => _clock.Advance(delta);
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = _clock.CreateTimer(callback, state, dueTime, period);
+            if (dueTime == TimeSpan.FromSeconds(2)) GraceArmed.TrySetResult();
+            return timer;
+        }
     }
 
     [Fact]

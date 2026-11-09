@@ -74,10 +74,9 @@ public sealed class StreamingNavigationTests
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         async Task WaitForBeforeAsync()
         {
-            while (vm.BeforeImage == null)
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+            await UiTestWait.UntilAsync(() => vm.BeforeImage != null, Safety);
         }
-        await WaitForBeforeAsync().WaitAsync(Safety);
+        await WaitForBeforeAsync();
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         var after = Assert.Single(foreground);
         Assert.Equal(warmup, after.WarmupSeconds);
@@ -228,10 +227,9 @@ public sealed class StreamingNavigationTests
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         async Task WaitForBeforeAsync()
         {
-            while (vm.BeforeImage == null)
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+            await UiTestWait.UntilAsync(() => vm.BeforeImage != null, Safety);
         }
-        await WaitForBeforeAsync().WaitAsync(Safety);
+        await WaitForBeforeAsync();
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         Assert.NotNull(vm.PreviewImage);
         Assert.Null(vm.ErrorText);
@@ -334,8 +332,7 @@ public sealed class StreamingNavigationTests
         async Task DrainAsync()
         {
             await vm.WaitForIdleAsync().WaitAsync(Safety);
-            while (vm.BeforeImage == null || vm.IsBeforeBusy)
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+            await UiTestWait.UntilAsync(() => vm.BeforeImage != null && !vm.IsBeforeBusy, Safety);
             await vm.WaitForIdleAsync().WaitAsync(Safety);
         }
         await DrainAsync().WaitAsync(Safety);
@@ -369,8 +366,7 @@ public sealed class StreamingNavigationTests
         async Task DrainAsync()
         {
             await vm.WaitForIdleAsync().WaitAsync(Safety);
-            while (vm.BeforeImage == null || vm.IsBeforeBusy)
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+            await UiTestWait.UntilAsync(() => vm.BeforeImage != null && !vm.IsBeforeBusy, Safety);
             await vm.WaitForIdleAsync().WaitAsync(Safety);
         }
         await DrainAsync().WaitAsync(Safety);
@@ -421,10 +417,9 @@ public sealed class StreamingNavigationTests
             }
             async Task WaitForFinalPauseAsync()
             {
-                while (!foreground.IsReadPaused || background.ActiveRuns != 0 || vm.IsBeforeBusy)
-                    await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+                await UiTestWait.UntilAsync(() => foreground.IsReadPaused && background.ActiveRuns == 0 && !vm.IsBeforeBusy, Safety);
             }
-            await WaitForFinalPauseAsync().WaitAsync(Safety);
+            await WaitForFinalPauseAsync();
             await vm.WaitForIdleAsync().WaitAsync(Safety);
             Assert.True(Avalonia.Threading.Dispatcher.UIThread.CheckAccess());
             Assert.True(foreground.IsReadPaused);
@@ -502,16 +497,18 @@ public sealed class StreamingNavigationTests
             (frame, token) => { pending = frame; converting.TrySetResult(); return converted.Task; })
         { EncoderPath = FakeEncoderPath(), InputPath = "dispose-converter.ts" };
         Task? dispose = null;
+        string? firstFailedStage = null;
         try
         {
-            await vm.InitializeAsync(false).WaitAsync(Safety);
+            await WaitStageAsync(vm.InitializeAsync(false), "初期化");
             clock.Advance(TimeSpan.FromMilliseconds(150));
-            await converting.Task.WaitAsync(Safety);
+            await WaitStageAsync(converting.Task, "変換開始");
             dispose = vm.DisposeAsync().AsTask();
-            await backend.Disposed.Task.WaitAsync(Safety);
-            await clock.FullDeadlineArmed.Task.WaitAsync(Safety);
+            await WaitStageAsync(backend.Disposed.Task, "backend.Disposed");
+            // この通知は他の5秒タイマーでも成立するため、VMの総期限だけを識別した証拠にはしない。
+            await WaitStageAsync(clock.FullDeadlineArmed.Task, "clock.FullDeadlineArmed");
             clock.Advance(TimeSpan.FromSeconds(5));
-            await dispose.WaitAsync(Safety);
+            await WaitStageAsync(dispose, "Dispose完了");
             Assert.False(converted.Task.IsCompleted);
             Assert.Null(vm.PreviewImage);
         }
@@ -519,11 +516,27 @@ public sealed class StreamingNavigationTests
         {
             if (pending != null) converted.TrySetResult(YuvToBgra.Convert(pending));
             else converted.TrySetCanceled();
-            if (dispose != null) await dispose.WaitAsync(Safety);
-            else await vm.DisposeAsync();
+            if (dispose != null) await WaitStageAsync(dispose, "finallyのDispose完了");
+            else await WaitStageAsync(vm.DisposeAsync().AsTask(), "finallyのDispose開始・完了");
         }
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await WaitStageAsync(vm.WaitForIdleAsync(), "WaitForIdle完了");
         Assert.Null(vm.PreviewImage);
+
+        async Task WaitStageAsync(Task task, string stage)
+        {
+            try { await task.WaitAsync(Safety); }
+            catch (Exception exception)
+            {
+                firstFailedStage ??= stage;
+                // 同じSafetyで止まっても、どの待ちと未完了処理かを失敗ログだけで区別できるようにする。
+                throw new InvalidOperationException(
+                    $"取消を無視する変換の終了検査: 最初の失敗段階={firstFailedStage}、今回の待機段階={stage}。"
+                    + $"backend.Disposed={backend.Disposed.Task.Status}, "
+                    + $"FullDeadlineArmed={clock.FullDeadlineArmed.Task.Status}, "
+                    + $"Dispose={dispose?.Status.ToString() ?? "未開始"}, "
+                    + $"converter={converted.Task.Status}, fakeTimestamp={clock.GetTimestamp()}", exception);
+            }
+        }
     }
 
     [AvaloniaFact]
@@ -608,10 +621,9 @@ public sealed class StreamingNavigationTests
         clock.Advance(TimeSpan.FromMilliseconds(150));
         async Task WaitForBeforeAsync()
         {
-            while (vm.BeforeImage == null)
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+            await UiTestWait.UntilAsync(() => vm.BeforeImage != null, Safety);
         }
-        await WaitForBeforeAsync().WaitAsync(Safety);
+        await WaitForBeforeAsync();
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         Assert.False(vm.IsBusy);
         Assert.False(vm.IsBeforeBusy);
@@ -933,10 +945,9 @@ public sealed class StreamingNavigationTests
         await backend.ReplayFailed.Task.WaitAsync(Safety);
         async Task WaitForFailureAsync()
         {
-            while (vm.ErrorText == null)
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+            await UiTestWait.UntilAsync(() => vm.ErrorText != null, Safety);
         }
-        await WaitForFailureAsync().WaitAsync(Safety);
+        await WaitForFailureAsync();
         string? failure = vm.ErrorText;
         releaseFirst.TrySetResult();
         await vm.WaitForIdleAsync().WaitAsync(Safety);
@@ -1012,10 +1023,10 @@ public sealed class StreamingNavigationTests
         background.Allow.TrySetResult();
         async Task WaitForBeforeAsync()
         {
-            while (protocolFailure ? background.Requests.Count < 2 || vm.IsBeforeBusy : vm.BeforeImage == null)
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+            await UiTestWait.UntilAsync(() => protocolFailure
+                ? background.Requests.Count >= 2 && !vm.IsBeforeBusy : vm.BeforeImage != null, Safety);
         }
-        await WaitForBeforeAsync().WaitAsync(Safety);
+        await WaitForBeforeAsync();
         await vm.WaitForIdleAsync().WaitAsync(Safety);
         if (protocolFailure) Assert.Null(vm.BeforeImage);
         else Assert.NotNull(vm.BeforeImage);

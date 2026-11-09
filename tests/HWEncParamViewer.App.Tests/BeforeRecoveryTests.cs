@@ -50,6 +50,9 @@ public sealed class BeforeRecoveryTests
                 }
                 // 目標更新は変換より先なので、最後のAfter表示を待ってからBeforeを解放し、描画との順序を競わせない。
                 await shown.Task.WaitAsync(Safety);
+                // PropertyChangedはsetter内で同期通知され、ApplyImage後半のQueueBeforeはまだ終わっていない。
+                // UIを一巡させて同じApplyImageの残りを完了してから、保留中のBeforeを解放する。
+                await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
             }
             finally
             {
