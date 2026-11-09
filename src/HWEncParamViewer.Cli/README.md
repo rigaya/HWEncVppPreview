@@ -33,3 +33,23 @@ stdoutには結果JSONを1行だけ出す。`rc`はエンコーダの終了コ�
 
 テストなどのホストからは`Program.RunAsync(string[], TextWriter, TimeProvider?, CancellationToken)`を使い、
 時間依存処理へ偽時計を注入できる。GUI向けAPIはCoreの`PreviewController`と`InputProbe`を使う。
+
+## helpスキーマの検査
+
+```text
+HWEncParamViewer.Cli --check-help --enc <エンコーダ> [--watchdog-seconds <秒数>]
+HWEncParamViewer.Cli --check-help --help-file <保存済みhelp> [--watchdog-seconds <秒数>]
+```
+
+入力は`--enc`と`--help-file`のどちらか一つだけを指定する。画像用の引数は併用できない。
+`--enc`では`--help`だけを実行し、画像の取得や変換は行わない。
+子の終了コードが0であることを確認し、stdoutが空白だけのときに限りstderrをhelp本文に使う。
+既定の期限は5秒で、子の終了と両方の標準出力の読取を含む。
+
+本文に現れる全`--vpp-*`名を独立に列挙し、`HelpIndex`の存在と本文、`HelpSchema`のカテゴリと各パラメータの型情報を検査する。
+構造文字列、無引数スイッチ、依存する既定値は正規の情報として扱う。
+旧書式が「名前だけ」に縮退した場合は検査失敗とし、GUIの旧書式への互換動作とは区別する。
+
+stdoutは成功・失敗ともJSON1行で、欠落名や縮退したoption・param名を省略せずに返す。
+終了コードは全件合格0、スキーマの検査失敗1、用法エラー2、読取・起動・子の異常終了・期限超過3。
+`encoderExitCode`、`timedOut`、`stderrTail`、`cleanupError`で実行失敗と検査失敗を区別できる。

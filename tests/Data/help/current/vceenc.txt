@@ -1,0 +1,1527 @@
+﻿VCEEncC (x64) 9.22 (r2742) by rigaya, Nov  1 2026 11:49:05 (gcc 13.3.0/Linux)
+AMF Version 1.5.0
+reader: raw, avs, vpy, avsw, avhw
+Usage: VCEEncC [Options] -i <filename> -o <filename>
+
+When video codec could be decoded by VCE, any format or protocol supported
+by ffmpeg library could be used as a input.
+Also,  input can be avs, vpy, raw YUV or YUV4MPEG2(y4m) format.
+when raw, fps, input-res are also necessary.
+
+output format will be automatically set by the output extension.
+when output filename is set to "-", ES output is thrown to stdout.
+
+Example:
+  VCEEncC -i "<infilename>" -o "<outfilename>"
+  avs2pipemod -y4mp "<avsfile>" | VCEEncC --y4m -i - -o "<outfilename>"
+
+Information Options: 
+-h,-? --help                    show help
+-v,--version                    show version info
+
+   --check-hw [<int>]           check for vce support for default device.
+                                 as an option, you can specify device id to check.
+   --check-device [<int>]       show list of devices which will support vce.
+   --check-features [<int>]     check features of vce support for default device.
+                                 as an option, you can specify device id to check.
+   --check-clinfo               check OpenCL info
+   --check-avversion            show dll version
+   --check-codecs               show codecs available
+   --check-encoders             show audio encoders available
+   --check-decoders             show audio decoders available
+   --check-profiles <string>    show profile names available for specified codec
+   --check-formats              show in/out formats available
+   --check-protocols            show in/out protocols available
+   --check-avdevices            show in/out avdvices available
+   --check-filters              show filters available
+   --option-list                show option list
+
+
+Basic Encoding Options: 
+-d,--device <int>               set device id to use, default = 0
+   --backend <auto|amf|vaapi>   select encoding backend (default: auto) [Linux]
+
+-i,--input <filename>           set input filename
+-o,--output <filename>          set output filename
+
+ Input formats (auto detected from extension of not set)
+   --raw                        set input as raw format
+   --y4m                        set input as y4m format
+   --avs                        set input as avs format
+   --vpy                        set input as vpy format
+   --vpy-mt                     set input as vpy(mt) format
+   --avhw                       use libavformat + hw decode for input
+   --avsw [<string>]            set input to use avcodec + sw decoder
+   --input-res <int>x<int>        set input resolution
+   --crop <int>,<int>,<int>,<int> crop pixels from left,top,right,bottom
+                                    left crop is unavailable with avhw reader
+   --output-res <int>x<int>[,<string>=<string>]...
+                                set output resolution
+    params
+      preserve_aspect_ratio=<string>   preserve input aspect ratio.
+        decrease ... preserve aspect ratio by decreasing resolution specified.
+        increase ... preserve aspect ratio by increasing resolution specified.
+      ignore_sar=<bool>                ignore sar when using negative value.
+
+   --frames <int>               frames to encode (based on input frames)
+   --fps <int>/<int> or <float> set framerate when --raw is used.
+                                  not recommended for other readers.
+   --input-csp <string>           set input colorspace for raw reader 
+                                Invalid, nv12, yv12, yuv420p, yuv422p
+                                yuv444p, yuv420p9le, yuv420p10le
+                                yuv420p12le, yuv420p14le, yuv420p16le, p010
+                                yuv422p9le, yuv422p10le, yuv422p12le
+                                yuv422p14le, yuv422p16le, yuv444p9le
+                                yuv444p10le, yuv444p12le, yuv444p14le
+                                yuv444p16le
+                                 default: yv12
+
+-c,--codec <string>             set encode codec
+                                 - h264(default), hevc, av1
+                                 - av_xxx to use avcodec encoder
+-u,--preset <string>            set quality preset
+                                 balanced(default), fast, slow, slower
+   --cqp <int> or               encode in Constant QP, default 22:24:27
+         <int>:<int>:<int>      set qp value for i:p:b frame
+   --cbr <int>                  set bitrate in CBR mode (kbps)
+   --vbr <int>                  set bitrate in VBR mode (kbps)
+   --cbrhq <int>                set bitrate in High Quality CBR mode (kbps)
+   --vbrhq <int>                set bitrate in High Quality VBR mode (kbps)
+   --qvbr <int>                 encode in QVBR mode, set QVBR level (0 - 51)
+   --output-depth <int>         set output bit depth
+   --qp-max <int>               set max qp
+   --qp-min <int>               set min qp
+   --qvbr-quality <int>         set QVBR level (0 - 51)
+-b,--bframes <int>              set consecutive b frames (default: 0)
+   --(no-)b-pyramid             enable b-pyramid feature (default: auto)
+   --b-deltaqp <int>            set qp offset for non-ref b frames (default: auto)
+   --bref-deltaqp <int>         set qp offset for ref b frames (default: auto)
+   --adapt-minigop              enable adaptive mini-gop [H.264/AV1]
+   --ref <int>                  set num of reference frames (default: auto)
+   --ltr <int>                  set num of long term reference frames (default: auto)
+   --max-bitrate <int>          set max bitrate (kbps) (default: 20000)
+   --vbv-bufsize <int>          set vbv buffer size (kbps) (default: auto)
+   --gop-len <int>              set length of gop (default: auto)
+   --(no-)skip-frame            [H.264/HEVC] enable skip frame feature
+   --slices <int>               [H.264/HEVC] num of slices per frame (default: 1)
+   --no-deblock <int>           [H.264/HEVC] disable deblock filter
+   --motion-est                 [H.264/HEVC] motion estimation precision
+                                 - full-pel (fast)
+                                 - half-pel
+                                 - q-pel (best) = default
+   --vbaq                       [H.264/HEVC] enable VBAQ (default: auto)
+   --tiles <int>                [AV1] set num of tiles per frame
+   --temporal-layers <int>      [HEVC/AV1] set num of temporal layers
+   --aq-mode <string>           [AV1] set AQ mode
+                                 - none
+                                 - caq
+   --cdef-mode <string>         [AV1] set CDEF mode (default: auto)
+                                 - off
+                                 - on
+   --screen-content-tools  [<param1>=<value>][,<param2>=<value>][...] [AV1]
+     set screen content tools. (default: auto)
+    params
+      palette-mode=<bool>       enable palette mode
+      force-integer-mv=<bool>   enable force integer MV
+   --cdf-update                 [AV1] enable CDF update (default: auto)
+   --cdf-frame-end-update       [AV1] enable CDF frame end update (default: auto)
+   --pe                         enable Pre Encode
+   --pa [<param1>=<value>][,<param2>=<value>][...]
+     enable Pre Analysis
+    params
+      sc=<string>               sensitivity of scenechange detection
+                                 - none, low, medium(default), high
+      ss=<string>               sensitivity of static scene detection
+                                 - none, low, medium(default), high
+      activity-type=<string>    block activity calcualtion mode
+                                 - y (default), yuv
+      caq-strength=<string>     Content Adaptive Quantization (CAQ) strength
+                                 - low, medium(default), high
+      initqpsc=<int>            initial qp after scene change
+      fskip-maxqp=<int>         threshold to insert skip frame on static scene
+      lookahead=<int>           lookahead buffer size
+      ltr=<bool>                enable automatic LTR frame management
+      paq=<string>              perceptual AQ mode
+                                 - none, caq
+      taq=<string>              temporal AQ mode
+                                 - 0, 1, 2
+      motion-quality=<string>   high motion quality boost mode
+                                 - none, auto
+   --level <string>             set codec level
+                                - H.264: auto(default), 1, 1b, 1.1, 1.2, 1.3
+                                         2, 2.1, 2.2, 3, 3.1, 3.2, 4, 4.1, 4.2
+                                         5, 5.1, 5.2
+                                - HEVC:  auto(default), 1, 2, 2.1, 3, 3.1, 4
+                                         4.1, 5, 5.1, 5.2, 6, 6.1, 6.2
+                                - AV1:   auto(default), 2, 2.1, 2.2, 2.3, 3
+                                         3.1, 3.2, 3.3, 4, 4.1, 4.2, 4.3, 5
+                                         5.1, 5.2, 5.3, 6, 6.1, 6.2, 6.3, 7
+                                         7.1, 7.2, 7.3
+   --profile <string>           set codec profile
+                                - H.264: Baseline(default), Main, High
+                                - HEVC:  main(default), main10
+                                - AV1:   main(default)
+   --tier <string>              set codec tier
+                                - HEVC: main(default), high
+
+   --sar <int>:<int>            set Sample Aspect Ratio
+   --dar <int>:<int>            set Display Aspect Ratio
+
+   --crop <int>,<int>,<int>,<int>
+                                set crop pixels of left, up, right, bottom.
+
+   --enforce-hrd                enforce hrd compatibility of bitstream
+   --filler                     use filler data
+
+   --smart-access-video         enables smart access video feature.
+   --multi-instance             [HEVC/AV1] enables multi instance encode.
+
+   --chromaloc <int>            set chroma location flag [ 0 ... 5 ]
+                                  default: 0 = unspecified
+   --videoformat <string>       undef, ntsc, component, pal, secam, mac
+                                 default: undef
+   --colormatrix <string>       undef, auto, auto_res, bt709, smpte170m
+                                bt470bg, smpte240m, YCgCo, fcc, GBR
+                                bt2020nc, bt2020c, derived-ncl, derived-cl
+                                ictco, 2100-lms
+                                 default: undef
+   --colorprim <string>         undef, unknown, auto, auto_res, bt709
+                                smpte170m, bt470m, bt470bg, smpte240m, film
+                                bt2020, st428, st431-2, st432-1, ebu3213-e
+                                 default: undef
+   --transfer <string>          undef, unknown, auto, auto_res, bt709
+                                smpte170m, bt470m, bt470bg, smpte240m
+                                linear, log100, log316, iec61966-2-4
+                                bt1361e, iec61966-2-1, bt2020-10, bt2020-12
+                                smpte2084, smpte428, arib-std-b67
+                                 default: undef
+   --colorrange <string>        undef, limited, tv, full, pc, auto
+                                 default: undef
+   --max-cll <int>,<int>        set MaxCLL/MaxFall in nits. e.g. "1000,300"
+   --master-display <string>    set Mastering display data.
+   e.g. "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
+   --atc-sei <string> or <int>  undef, unknown, auto, auto_res, bt709
+                                smpte170m, bt470m, bt470bg, smpte240m
+                                linear, log100, log316, iec61966-2-4
+                                bt1361e, iec61966-2-1, bt2020-10, bt2020-12
+                                smpte2084, smpte428, arib-std-b67
+                                 default: unknown
+   --dhdr10-info <string>       apply dynamic HDR10+ metadata from json file.
+   --dhdr10-info copy           Copy dynamic HDR10+ metadata from input file.
+   --dolby-vision-profile <int> unset, copy, 5.0, 8.1, 8.2, 8.4, 10.0, 10.1
+                                10.2, 10.4
+                                 default: unset
+   --dolby-vision-rpu <string>  Copy dolby vision metadata from input rpu file.
+   --dolby-vision-rpu copy      Copy dolby vision metadata from input file.
+   --dolby-vision-rpu-prm <param1>=<value>[,<param2>=<value>][...]
+     parameters for --dolby-vision-rpu.
+    params
+      crop=<bool>               Set active area offsets to 0 (no letterbox bars).
+   --input-analyze <int>        set time (sec) which reader analyze input file.
+                                 default: 5 (seconds).
+                                 could be only used with avhw/avsw reader.
+                                 use if reader fails to detect audio stream.
+   --input-probesize <int>      set size in bytes which reader analyze input file.
+   --video-track <int>          set video track to encode in track id
+                                 1 (default)  highest resolution video track
+                                 2            next high resolution video track
+                                   ... 
+                                 -1           lowest resolution video track
+                                 -2           next low resolution video track
+                                   ... 
+   --video-streamid <int>       set video track to encode in stream id
+   --video-tag <string>         specify video tag
+   --video-metadata <string>    set metadata for video track.
+                                 - copy ... copy metadata from input
+                                 - clear ... do not set metadata (default)
+   --avcodec-prms <string>      set parameters for avcodec video encoder.
+                                 available when avcodec encoder is enabled by -c av_xxx.
+   --audio-source <string>      input extra audio file.
+   --audio-file [<int>?][<string>:]<string>
+                                extract audio into file.
+                                 could be only used with avhw/avsw reader.
+                                 below are optional,
+                                  in [<int>?], specify track number to extract.
+                                  in [<string>?], specify output format.
+   --trim <int>:<int>[,<int>:<int>]...
+                                trim video for the frame range specified.
+                                 frame range should not overlap each other.
+   --seek [<int>:][<int>:]<int>[.<int>] (hh:mm:ss.ms)
+                                skip video for the time specified,
+                                 seek will be inaccurate but fast.
+   --seekto [<int>:][<int>:]<int>[.<int>] (hh:mm:ss.ms)
+                                time to end encoding.
+   --input-format <string>      set input format of input file.
+                                 this requires use of avhw/avsw reader.
+-f,--output-format <string>     set output format of output file.
+                                 if format is not specified, output format will
+                                 be guessed from output file extension.
+                                 set "raw" for H.264/ES output.
+   --y4m-timestamp             add XTIMEBASE to y4m header and timestamps to FRAME lines.
+   --audio-copy [<int/string>[,...]]
+                                mux audio with video during output.
+                                 could be only used with
+                                 avhw/avsw reader and avcodec muxer.
+                                 by default copies all audio tracks.
+                                 prefix track number with ! to exclude it.
+                                 prefix language with ! to exclude it.
+                                 "--audio-copy 1,2" will extract
+                                 audio track #1 and #2.
+   --audio-codec [<int>?]<string>
+                                encode audio to specified format.
+                                  in [<int>?], specify track number to encode.
+   --audio-encode-other-codec-only
+                                with --audio-codec, copy if input audio codec
+                                 equals the specified codec, and encode only
+                                 when different.
+   --audio-profile [<int>?]<string>
+                                specify audio profile.
+                                  in [<int>?], specify track number to apply.
+   --audio-bitrate [<int>?]<int> or [<int>?]<string>:<int>[,<string>:<int>][...]
+                                set encode bitrate for audio (kbps).
+                                  in [<int>?], specify track number of audio.
+                                  in [<string>?], specify channel symbols of audio.
+   --audio-quality [<int>?]<int>
+                                set encode quality for audio.
+                                  in [<int>?], specify track number of audio.
+   --audio-ignore-decode-error <int>  (default: 10)
+                                set numbers of continuous packets of audio decode
+                                 error to ignore, replaced by silence.
+   --audio-samplerate [<int>?]<int>
+                                set sampling rate for audio (Hz).
+                                  in [<int>?], specify track number of audio.
+   --audio-resampler [<int>?]<string>
+                                set audio resampler or resampler params.
+                                  swr (swresampler: default), soxr (libsoxr)
+   --audio-delay [<int>?]<float>  set audio delay (ms).
+   --audio-stream [<int>?][<string1>][:<string2>][,[<string1>][:<string2>]][..
+       set audio streams in channels.
+         in [<int>?], specify track number to split.
+         in <string1>, set input channels to use from source stream.
+           if unset, all input channels will be used.
+         in <string2>, set output channels to mix.
+           if unset, all input channels will be copied without mixing.
+       example1: --audio-stream FL,FR
+         splitting dual mono audio to each stream.
+       example2: --audio-stream :stereo
+         mixing input channels to stereo.
+       example3: --audio-stream 5.1,5.1:stereo
+         keeping 5.1ch audio and also adding downmixed stereo stream.
+       usable symbols
+         mono       = FC
+         stereo     = FL + FR
+         2.1        = FL + FR + LFE
+         3.0        = FL + FR + FC
+         3.0(back)  = FL + FR + BC
+         3.1        = FL + FR + FC + LFE
+         4.0        = FL + FR + FC + BC
+         quad       = FL + FR + BL + BR
+         quad(side) = FL + FR + SL + SR
+         5.0        = FL + FR + FC + SL + SR
+         5.1        = FL + FR + FC + LFE + SL + SR
+         6.0        = FL + FR + FC + BC + SL + SR
+         6.0(front) = FL + FR + FLC + FRC + SL + SR
+         hexagonal  = FL + FR + FC + BL + BR + BC
+         6.1        = FL + FR + FC + LFE + BC + SL + SR
+         6.1(front) = FL + FR + LFE + FLC + FRC + SL + SR
+         7.0        = FL + FR + FC + BL + BR + SL + SR
+         7.0(front) = FL + FR + FC + FLC + FRC + SL + SR
+         7.1        = FL + FR + FC + LFE + BL + BR + SL + SR
+         7.1(wide)  = FL + FR + FC + LFE + FLC + FRC + SL + SR
+   --audio-filter [<int>?]<string>
+                                set audio filter.
+                                  in [<int>?], specify track number of audio.
+   --audio-disposition [<int>?]<string>
+                                set disposition for the specified audio track.
+                                disposition for the unspecified tracks will be reset.
+   --audio-metadata [<int>?]<string>
+                                set metadata for the specified audio track.
+                                 - copy ... copy metadata from input (default)
+                                 - clear ... do not set metadata
+   --audio-bsf [<int>?]<string> set bitstream filter to audio track.
+   --chapter-copy               copy chapter to output file.
+   --chapter <string>           set chapter from file specified.
+   --chapter-no-trim            do not apply --trim to --chapter.
+   --sub-source <string>        input extra subtitle file.
+   --sub-copy [<int/string>[,...]]
+                                copy subtitle to output file.
+                                 prefix track number with ! to exclude it.
+                                 prefix language with ! to exclude it.
+                                 these could be only used with
+                                 avhw/avsw reader and avcodec muxer.
+                                 below are optional,
+                                  in [<int>?], specify track number to copy.
+   --sub-codec [<int/string>?]<string>
+                                convert subtitle to specified format.
+   --sub-disposition [<int>?]<string>
+                                set disposition for the specified subtitle track.
+                                disposition for the unspecified tracks will be reset.
+   --sub-metadata [<int>?]<string>
+                                set metadata for the specified audio track.
+                                 - copy ... copy metadata from input (default)
+                                 - clear ... do not set metadata
+   --sub-bsf [<int>?]<string>   set bitstream filter to subtitle track.
+   --data-copy [<int/string>[,...]]
+                                copy data stream to output file.
+                                 prefix track number or language with ! to exclude it.
+   --attachment-copy [<int>[,...]] copy attachment stream to output file.
+   --attachment-source <string> add file as attachment stream.
+
+   --avsync <string>            method for AV sync (default: cfr)
+                                 cfr      ... assume cfr
+                                 forcecfr ... check timestamp and force cfr
+                                 vfr      ... honor source timestamp and enable vfr output.
+                                              only available for avsw/avhw reader,
+                                              and could not be used with --trim.
+  --timestamp-passthrough       passthrough original timestamp
+  --muxer-add-cmd               add input command line to muxer metadata (encoding_tool)
+  --input-option <string1>:<string2>
+                                set input option name and value.
+                                 these could be only used with avhw/avsw reader.
+-m,--mux-option <string1>:<string2>
+                                set muxer option name and value.
+                                 these could be only used with
+                                 avhw/avsw reader and avcodec muxer.
+   --metadata <string>          set metadata for output file.
+                                 - copy ... copy metadata from input (default)
+                                 - clear ... do not set metadata
+
+   --timecode [<string>]        output timecode file.
+
+   --tcfile-in <string>         input timecode file, will not work with --avhw.
+   --timebase <int>/<int>       timebase of input timecode.
+
+   --input-hevc-bsf <string>    switch hevc bitstream filter used for hw decoder input
+                                 - internal   ... use internal implementation (default)
+                                 - libavcodec ... use hevc_mp4toannexb bsf
+
+   --adapt-resolution <int>x<int>
+                                入力途中の解像度変更で許容する最大解像度を指定する。
+                                avhwではデコーダ、avswでは入力サーフェスを指定値で確保する。
+
+   --input-pixel-format <string>  set input pixel format for avdevice
+   --offset-video-dts-advance  offset timestamp to cancel bframe delay
+   --allow-other-negative-pts  for debug
+
+
+   --ssim                       calc ssim
+   --psnr                       calc psnr
+
+   --vmaf [<param1>=<value>][,<param2>=<value>][...]
+     Calc vmaf. Please note that this is very CPU intensive and likely to 
+     become bottleneck, strongly affecting encoding perfromance.
+    params
+      model=<string>            set model version/filepath [default:vmaf_v0.6.1].
+      threads=<int>             cpu thread(s) to calculate vmaf score.
+      subsample=<int>           interval for frame subsampling calculating vmaf score.
+      phone_model=<bool>        use phone model which generate higher vmaf score.
+      enable_transform=<bool>   enable transform when calculating vmaf score.
+   --vship-ssimulacra2          calc SSIMULACRA2 score using libvship.
+   --no-vship-ssimulacra2       disable SSIMULACRA2 score calculation.
+
+   --vship-butteraugli [<param1>=<value>][,<param2>=<value>][...]
+     Calc Butteraugli score using libvship.
+    params
+      Qnorm=<int>               norm for Butteraugli score aggregation [default:2].
+      intensity_multiplier=<float>
+                                intensity multiplier for Butteraugli [default:80.0].
+
+   --vship-cvvdp [<param1>=<value>][,<param2>=<value>][...]
+     Calc ColorVideoVDP score using libvship.
+    params
+      model=<string>            set cvvdp model name [default:standard_4k].
+      model_config_json=<string> set path to cvvdp model config json.
+      resize=<bool>             resize frames before cvvdp calculation [default:false].
+
+
+
+VPP Options:
+
+  [deinterlace] Deinterlace
+   --vpp-afs [<param1>=<value>][,<param2>=<value>][...]
+     Automatic field-shift deinterlacing.
+    main: preset, 24fps, drop, smooth, shift, level, method_switch, coeff_shift, thre_shift, thre_deint, thre_motion_y, thre_motion_c, tune
+    params
+      preset=<string>       Load an AFS preset before applying parameters below. (default: default)
+                            values: default, triple, double, anime/cinema, anime, cinema, min_afterimg, 24fps, 24fps_sd, 30fps
+      ini=<path>            Load settings exported by afs.auf; explicit parameters override loaded settings.
+      top=<int>             Top scan clipping. (default: 16)
+      bottom=<int>          Bottom scan clipping. (default: 16)
+      left=<int>            Left scan clipping; use a multiple of 4. (default: 32)
+      right=<int>           Right scan clipping; use a multiple of 4. (default: 32)
+      method_switch=<int>   Field-shift method switching threshold. (default: 0, range: 0..256)
+      coeff_shift=<int>     Field-shift decision coefficient. (default: 192, range: 0..256)
+      thre_shift=<int>      Stripe threshold for field shifting. (default: 128, range: 0..1024)
+      thre_deint=<int>      Stripe threshold for deinterlacing. (default: 48, range: 0..1024)
+      thre_motion_y=<int>   Luma motion threshold. (default: 112, range: 0..1024)
+      thre_motion_c=<int>   Chroma motion threshold. (default: 224, range: 0..1024)
+      level=<int>           Deinterlacing analysis level. (default: 3, range: 0..4)
+      shift=<bool>          Enable field shifting. (default: true)
+      drop=<bool>           Enable frame dropping. (default: false)
+      smooth=<bool>         Smooth dropped-frame timing. (default: false)
+      24fps=<bool>          Force 30fps-to-24fps conversion. (default: false)
+      tune=<string>         Visualize AFS analysis. (default: none)
+                            values: none, final, analyze_shift_all, analyze_shift_y, analyze_shift_u, analyze_shift_v, analyze_nonshift_all, analyze_nonshift_y, analyze_nonshift_u, analyze_nonshift_v
+      rff=<bool>            Honor repeat-first-field flags. (default: true)
+      timecode=<bool>       Write timecodes. (default: false)
+      log=<bool>            Write an AFS log. (default: false)
+
+   --vpp-nnedi [<param1>=<value>][,<param2>=<value>][...]
+     NNEDI deinterlacing.
+    main: field, nns, nsize, quality, prescreen
+    params
+      planes=<string>       Target planes; colon-separated combinations are also accepted. (default: all)
+                            values: all, y, u, v, y:u:v
+      field=<string>        Target output field. (default: auto)
+                            values: bob, auto, top, bottom, bob_tff, bob_bff
+      nsize=<string>        NNEDI neighborhood size. (default: 32x4)
+                            values: 8x6, 16x6, 32x6, 48x6, 8x4, 16x4, 32x4
+      nns=<int>             Number of neurons. (default: 32)
+                            values: 16, 32, 64, 128, 256
+      quality=<string>      Calculation quality. (default: fast)
+                            values: fast, slow
+      prescreen=<int>       Prescreening mode; modes 0 and 1 are unsupported. (default: 2, range: 2..4)
+      errortype=<string>    Network error metric. (default: abs)
+                            values: abs, square
+      prec=<string>         Accepted for compatibility and ignored.
+      clamp=<int>           Output clamping mode. (default: 1, range: 0..4)
+      double_height=<bool>  Double height; supported with field=auto, top or bottom. (default: false)
+      weightfile=<path>     Weights file; Windows searches nnedi3_weights.bin, Linux uses embedded weights.
+
+   --vpp-yadif [<param1>=<value>][,<param2>=<value>][...]
+     YADIF deinterlacing.
+    params
+      mode=<string>         Frame output or one output frame per field (bob). (default: auto)
+                            values: auto, tff, bff, bob, bob_tff, bob_bff
+
+   --vpp-decomb [<param1>=<value>][,<param2>=<value>][...]
+     Decomb deinterlacing.
+    params
+      full=<bool>           Deinterlace every frame. (default: true)
+      threshold=<int>       Combing threshold. (default: 20, range: 0..255)
+      dthreshold=<int>      Deinterlacing threshold. (default: 7, range: 0..255)
+      blend=<bool>          Blend rather than interpolate. (default: false)
+
+   --vpp-bwdif [<param1>=<value>][,<param2>=<value>][...]
+     Motion-adaptive deinterlacing with w3fdif and cubic interpolation.
+    params
+      mode=<string>         Same-rate frames or double-rate bob output. (default: frame)
+                            values: frame, bob
+      order=<string>        Input field order. (default: auto)
+                            values: auto, tff, bff
+      thr=<float>           Motion threshold. (default: 0.0, range: 0..100)
+
+   --vpp-rtgmc [<param1>=<value>][,<param2>=<value>][...]
+     High-quality motion-compensated deinterlacing.
+    main: preset, tuning, sharpness, source_match, lossless
+    params
+      preset=<string>       Speed and quality preset. (default: faster)
+                            values: slower, slow, medium, fast, faster, veryfast, superfast, ultrafast, draft
+      tuning=<string>       Preset block-size tuning. (default: none)
+                            values: none, dv-sd, dv-hd
+      border=<bool>         Clamp four border rows before filtering, then crop them. (default: false)
+      lossless=<int>        Restore source fields after TR2 (1) or before retouch (2). (default: 0, range: 0..2)
+      input_type=<int>      Input frame type; progressive SAD masking applies to 2 or 3. (default: 0, range: 0..3)
+      prog_sad_mask=<float> Progressive SAD mask strength chosen by preset. (default: derived)
+      prog_sad_mask_gamma=<float> Progressive SAD mask gamma; must be positive. (default: 1.0)
+      source_match=<int>    Number of source-refinement stages. (default: 0, range: 0..3)
+      match_tr1=<int>       Temporal radius for the first refinement stage. (default: 1, range: 0..2)
+      match_tr2=<int>       Temporal radius for later refinement stages. (default: 1, range: 0..2)
+      match_edi=<string>    Refinement interpolation inherited from the selected EDI preset. (default: derived)
+                            values: passthrough, bob, yadif, cyadif, repyadif, repcyadif, nnedi3
+      match_enhance=<float> Refinement detail boost strength. (default: 0.5, range: 0.0..1.0)
+      order=<string>        Input field order. (default: auto)
+                            values: auto, tff, bff
+      tr0=<int>             Search-prefilter temporal radius chosen by preset; -1 uses an external EDI reference. (default: derived, range: -1..2)
+      rep0-thin=<int>       Search-prefilter thin repair chosen by preset. (default: derived, range: 0..7)
+      rep0-pad=<int>        Search-prefilter padding repair. (default: 0, range: 0..3)
+      search_refine=<int>   Search-prefilter mode chosen by preset. (default: derived, range: 0..3)
+      mv_spatial_refine=<int|auto> Spatial refinement passes; auto limits refinement to the inner level. (default: auto, range: -1..)
+                            values: auto
+      tv_range=<bool>       Expand the search reference from TV to PC range. (default: true)
+      chroma_motion=<bool>  Chroma motion analysis chosen by preset. (default: derived)
+      noise_process=<int>   Noise processing mode (0=off, 1=denoise, 2=grain restoration), chosen by preset. (default: derived, range: 0..2)
+      ezdenoise=<float>     Omission preserves preset noise settings; an explicit value selects noise_process and sigma. (default: derived, range: 0.0..)
+      ezkeepgrain=<float>   Omission preserves preset noise settings; an explicit value selects noise_process. (default: derived, range: 0.0..)
+      denoiser=<string>     Noise filter chosen by preset. (default: derived)
+                            values: nlmeans, fft3d
+      noise_deint=<string>  Noise interpolation chosen by preset; generate requires backend support. (default: derived)
+                            values: none, bob, generate
+      sigma=<float>         Noise-filter sigma; an explicit ezdenoise value overrides the initial sigma. (default: derived, range: 0.0..)
+      chroma_noise=<bool>   Denoise chroma planes. (default: true)
+      denoise_mc=<bool>     Motion-compensated noise processing, chosen by preset. (default: derived)
+      noise_tr=<int>        Noise temporal radius chosen by preset. (default: derived, range: 0..)
+      grain_restore=<float> Grain restoration before TR2, chosen by preset. (default: derived, range: 0.0..1.0)
+      noise_restore=<float> Noise restoration after lossless processing, chosen by preset. (default: derived, range: 0.0..1.0)
+      edi=<string>          EDI interpolation chosen by preset. (default: derived)
+                            values: passthrough, bob, yadif, cyadif, repyadif, repcyadif, nnedi3
+      nnsize=<int>          NNEDI window-size index chosen by preset. (default: derived, range: 0..6)
+      nneurons=<int>        NNEDI neuron-count index chosen by preset. (default: derived, range: 0..4)
+      ediqual=<int>         NNEDI quality chosen by preset. (default: derived, range: 1..2)
+      chroma_edi=<string>   Chroma interpolation. (default: none)
+                            values: none, nnedi3
+      rep1-thin=<int>       First shimmer thin repair chosen by preset. (default: derived, range: 0..7)
+      rep1-pad=<int>        First shimmer padding repair. (default: 0, range: 0..3)
+      rep2-thin=<int>       Second shimmer thin repair chosen by preset. (default: derived, range: 0..7)
+      rep2-pad=<int>        Second shimmer padding repair. (default: 0, range: 0..3)
+      delta_analyze=<int>   Analysis temporal delta chosen by preset. (default: derived)
+      delta_tr1=<int>       TR1 temporal delta chosen by preset. (default: derived)
+      delta_tr2=<int>       TR2 temporal delta chosen by preset. (default: derived)
+      thsad1=<int>          TR1 degrain SAD threshold. (default: 640)
+      thsad2=<int>          TR2 degrain SAD threshold. (default: 256)
+      useflag=<int>         Reference directions (0=both, 1=backward, 2=forward). (default: 0, range: 0..2)
+      pel=<int>             Motion subpixel precision chosen by preset. (default: derived)
+                            values: 1, 2, 4
+      levels=<int>          Motion analysis levels. (default: 2, range: 1..2)
+      lambda=<int>          Motion penalty derived from preset block size and true-motion mode. (default: derived)
+      lsad=<int>            Large SAD threshold. (default: 400)
+      pnew=<int>            New-vector penalty. (default: 25)
+      plevel=<int>          Predictor level. (default: 0)
+      globalmotion=<bool>   Global-motion tuning. (default: true)
+      searchparam=<int>     Motion search parameter chosen by preset. (default: derived, range: 1..2)
+      pelsearch=<int>       Subpixel motion search parameter chosen by preset. (default: derived, range: 1..2)
+      search_early_sad=<int|off> Level-0 early SAD threshold in 8x8-block, 8-bit units, chosen by preset. (default: derived, range: -1..65535)
+                            values: off
+      spatial_early_sad=<int|off> Level-1 spatial-refinement SAD threshold in 8x8-block, 8-bit units. (default: off, range: -1..65535)
+                            values: off
+      sharpness=<float>     Retouch sharpness; source_match selects the initial strength. (default: derived, range: 0.0..1.0)
+      limit=<float>         Legacy retouch limit. (default: 0.00, range: 0.0..1.0)
+      smode=<int>           Resharpen mode chosen by preset. (default: derived, range: 0..2)
+      slmode=<int>          Sharpness-limit mode chosen by preset; 1 or 2 runs before TR2. (default: derived, range: 0..4)
+      slrad=<int>           Sharpness-limit radius chosen by preset. (default: derived, range: 0..3)
+      sovs=<int>            Sharpness-limit overshoot. (default: 0)
+      svthin=<float>        Vertical thin strength. (default: 0.00, range: 0.0..1.0)
+      sbb=<int>             Back-blend mode chosen by preset. (default: derived, range: 0..3)
+      precise=<bool>        Precise retouch mode chosen by preset. (default: derived)
+
+   --vpp-kfm [<param1>=<value>][,<param2>=<value>][...]
+     Adaptive inverse telecine.
+    main: mode, preset, thswitch, nr, ucf
+    params
+      mode=<string>         Output cadence. (default: vfr)
+                            values: vfr, 60, 24
+      preset=<string>       Motion-search speed preset. (default: faster)
+                            values: slower, slow, medium, fast, faster, veryfast, superfast, ultrafast, draft
+      search_early_sad=<int|auto|off> Level-0 early SAD threshold in 8x8-block, 8-bit units. (default: auto, range: -1..65535)
+                            values: auto, off
+      spatial_early_sad=<int|auto|off> Level-1 spatial-refinement SAD threshold in 8x8-block, 8-bit units. (default: auto, range: -1..65535)
+                            values: auto, off
+      timing=<string>       Cadence decision timing. (default: realtime+)
+                            values: realtime, realtime+, strict
+      past_cycles=<int>     Commit delay in cycles for realtime+. (default: 30, range: 0..)
+      thswitch=<float>      Threshold for switching to 60p output. (default: 0.5, range: 0.0..1.0)
+      ucf=<bool>            Use the placeholder UCF copy stage. (default: false)
+      nr=<bool>             Noise reduction on 24p and 30p branches after UCF, before patching. (default: false)
+                            Disabled for mode=60; uses block size 32 at height 720 or above, otherwise 16.
+                            Inherits early-SAD settings; preserved RFF frames skip UCF/patch but receive 24p NR.
+      is120=<bool>          Reserve the 120fps duration-correction flag. (default: true)
+      rff=<bool>            Preserve progressive RFF frames. (default: true)
+      debug=<bool>          Reserve the stage-dump flag. (default: false)
+      debug_stage=<string>  24p debug-output stage. (default: none)
+                            values: none, switch-flag, switch-flag-min, contains-combe, combe-mask, combe-mask-min
+      timecode=<path>       Timecode-v2 output path.
+
+   --vpp-rtgmc-bob [<param1>=<value>][,<param2>=<value>][...]
+     RTGMC bob deinterlacing with double-rate output.
+    params
+      order=<string>        Input field order. (default: auto)
+                            values: auto, tff, bff
+
+   --vpp-ivtc [<param1>=<value>][,<param2>=<value>][...]
+     Inverse telecine with field matching and decimation.
+    params
+      guide=<int>           Matching mode (0=min-combing, 1=clean-frame preference, 2=PAL 2:2). (default: 1, range: 0..2)
+      post=<int>            Residual-combing postprocessing (0=off, 2=adaptive bob). (default: 2)
+                            values: 0, 2
+      cycle=<int|auto>      Decimation cycle: 0 disables, auto uses 5 for approximately 30fps input. (default: auto, range: 2..16)
+                            values: auto
+      drop=<int>            Frames dropped per cycle; only 1 is supported. (default: 1)
+                            values: 1
+      combthresh=<float>    Per-pixel combing threshold. (default: 0.12, range: 0.0..1.0)
+      cleanfrac=<float>     Allowed fraction of combed pixels in a block for guide=1/post=2. (default: 0.20, range: 0.0..1.0)
+      dthresh=<int>         Per-pixel deinterlace gate (8-bit scale). (default: 7, range: 0..255)
+      chroma=<bool>         Include chroma in match-quality scoring. (default: false)
+      back=<int>            When to test the previous-frame match. (default: 0, range: 0..1)
+      y0=<int>              First row of the ignored band; y0=y1=0 disables the band. (default: 0)
+      y1=<int>              Last row of the ignored band. (default: 0)
+      nt=<int>              Match-metric noise tolerance (8-bit scale). (default: 10)
+      cthresh=<int>         Per-pixel comb threshold for scoring. (default: 4)
+      combpel=<int>         Combed pixels per block needed to mark it combed. (default: 8)
+      scthresh=<float>      Scene-change threshold as a fraction of max SAD; 0 selects adaptive mode. (default: 0.00)
+      cadlock=<string>      Cadence pattern lock and match override. (default: auto)
+                            values: auto, on, off
+      gthresh=<int>         Cadence-override tolerance in percent. (default: 10, range: 0..100)
+      vthresh=<int>         Post-assembly combing-veto threshold. (default: 50, range: 0..256)
+      expand=<string>       RFF expansion; auto uses detected pulldown. (default: auto)
+                            values: auto, on, off
+      mixed=<bool>          Allow mixed RFF/progressive and interlaced input. (default: false)
+      hysteresis=<float>    Match hysteresis. (default: 0.00, range: 0.0..1.0)
+      tff=<string>          Field order; auto reads input picture structure. (default: auto)
+                            values: auto, on, off
+      log=<path|bool>       Write per-frame match logs; true derives the log path from output filename. (default: false)
+
+   --vpp-vinverse [<param1>=<value>][,<param2>=<value>][...]
+     remove residual interlaced combing after deinterlace.
+    params
+      mode=<string>         filter mode (default: vinverse)
+                            values: vinverse, vinverse2
+      sstr=<float>          contra reference strength (default: 2.70, range: 0.0..8.0)
+      amnt=<float>          max delta per pixel in 8-bit scale (default: 255.0, range: 0.0..255.0)
+      scl=<float>           soft clip scale (default: 0.25, range: 0.0..4.0)
+      thr=<float>           untouched residual threshold in 8-bit scale (default: 0.0, range: 0.0..255.0)
+      chroma=<bool>         process chroma planes (default: true)
+
+  [denoise] Denoise
+   --vpp-convolution3d [<param1>=<value>][,<param2>=<value>][...]
+     Spatial and temporal convolution denoising.
+    params
+      matrix=<string>       Convolution matrix (default: standard)
+                            values: standard, simple
+      fast=<bool>           Use the faster implementation (default: false)
+      ythresh=<int>         Spatial luma threshold (default: 3, range: 0..255)
+      cthresh=<int>         Spatial chroma threshold (default: 4, range: 0..255)
+      t_ythresh=<int>       Temporal luma threshold (default: 3, range: 0..255)
+      t_cthresh=<int>       Temporal chroma threshold (default: 4, range: 0..255)
+
+   --vpp-knn [<param1>=<value>][,<param2>=<value>][...]
+     K-nearest-neighbor denoising.
+    params
+      radius=<int>          Spatial radius (default: 3)
+      d=<int>               Previous/next frames in the weighting window (default: 0, range: 0..2)
+      strength=<float>      Denoising strength (default: 0.08, range: 0.0..1.0)
+      lerp=<float>          Original/blended balance; lower is stronger (default: 0.20)
+      th_lerp=<float>       Edge preservation threshold (default: 0.80, range: 0.0..1.0)
+
+   --vpp-nlmeans [<param1>=<value>][,<param2>=<value>][...]
+     Non-local-means denoising.
+    params
+      sigma=<float>         Noise standard deviation (default: 0.005, range: 0.0..)
+      h=<float>             Positive filtering strength (default: 0.050)
+      patch=<int>           Odd patch size (default: 5, range: 3..)
+      search=<int>          Odd search size (default: 11, range: 3..)
+      fp16=<string>         Half-precision usage (default: blockdiff)
+                            values: none, blockdiff, all
+      d=<int>               Temporal radius (default: 0)
+      search_t=<int>        Odd temporal search size (default: 11, range: 3..)
+
+   --vpp-pmd [<param1>=<value>][,<param2>=<value>][...]
+     Perona-Malik diffusion denoising.
+    params
+      apply_count=<int>     Iteration count (default: 2)
+      strength=<float>      Denoising strength (default: 100.00, range: 0.0..100.0)
+      threshold=<float>     Edge preservation threshold (default: 100.00, range: 0.0..255.0)
+      useexp=<bool>         Use the exponential diffusion function (default: true)
+
+   --vpp-bm3d [<param1>=<value>][,<param2>=<value>][...]
+     Block matching and 3D collaborative denoising; a basic estimate followed by Wiener filtering.
+    params
+      profile=<string>      Preset for block_step/group_size/bm_range; later parameters override it (default: fast)
+                            values: fast, lc, np, high
+      sigma=<float>         Noise standard deviation; 0 disables noise removal (default: 3.00)
+      block_step=<int>      Reference-patch stride (default: 8, range: 1..8)
+      group_size=<int>      Maximum blocks per group (default: 8, range: 1..32)
+      bm_range=<int>        Block-match window half-side (default: 9, range: 1..32)
+      radius=<int>          Temporal radius; 0 is spatial-only (default: 0, range: 0..4)
+      chroma=<bool>         Also denoise chroma (default: false)
+
+   --vpp-hqdn3d [<param1>=<value>][,<param2>=<value>][...]
+     Spatial and temporal denoising.
+    params
+      luma_spatial=<float>  Luma spatial strength (default: 4.00, range: 0.0..255.0)
+      chroma_spatial=<float> Chroma spatial strength (default: 3.00, range: 0.0..255.0)
+      luma_temporal=<float> Luma temporal strength (default: 6.00, range: 0.0..255.0)
+      chroma_temporal=<float> Chroma temporal strength (default: 4.50, range: 0.0..255.0)
+
+   --vpp-smooth [<param1>=<value>][,<param2>=<value>][...]
+     Smooth denoising.
+    params
+      quality=<int>         Quality; larger values are slower (default: 3, range: 1..6)
+      qp=<float>            Filter strength (default: 12.00, range: 0.0..63.0)
+      prec=<string>         Calculation precision (default: auto)
+                            values: auto, fp16, fp32
+
+   --vpp-denoise-dct [<param1>=<value>][,<param2>=<value>][...]
+     DCT-domain denoising.
+    main: sigma, step, block_size
+    params
+      step=<int>            Calculation step; smaller is higher quality (default: 2)
+                            values: 1, 2, 4, 8
+      sigma=<float>         Noise level for the highest-frequency bins (default: 4.00)
+      sigma2=<float>        Noise level follows sigma when omitted (default: derived)
+      sigma3=<float>        Noise level follows sigma when omitted (default: derived)
+      sigma4=<float>        Noise level follows sigma when omitted (default: derived)
+      block_size=<int>      Calculation block size (default: 8)
+                            values: 8, 16
+
+   --vpp-fft3d [<param1>=<value>][,<param2>=<value>][...]
+     FFT-domain spatial and temporal denoising.
+    main: sigma, amount, block_size, overlap, method, sharpen, scutoff
+    params
+      sigma=<float>         Noise level for the highest frequencies (default: 1.00, range: 0..100)
+      sigma2=<float>        Noise level follows sigma when omitted (default: derived)
+      sigma3=<float>        Noise level follows sigma when omitted (default: derived)
+      sigma4=<float>        Noise level follows sigma when omitted (default: derived)
+      amount=<float>        Denoising amount (default: 1.00, range: 0..1)
+      block_size=<int>      Calculation block size (default: 32)
+                            values: 8, 16, 32, 64
+      overlap=<float>       Block overlap (default: 0.50, range: 0.2..0.8)
+      method=<int>          Denoising method (default: 0)
+                            values: 0, 1
+      temporal=<int>        Enable temporal filtering (default: 1)
+      bt=<int>              Temporal radius follows temporal; 1 is spatial, -1 is sharpen-only (default: derived)
+                            values: -1, 1, 2, 3, 4
+      sharpen=<float>       Frequency-domain luma sharpening; 0 disables it (default: 0.0)
+      scutoff=<float>       Relative sharpening cutoff (default: 0.30)
+      svr=<float>           Vertical sharpening ratio; 0 disables it (default: 1.00)
+      smin=<float>          Noise-margin limit (default: 10.00)
+      smax=<float>          Halo-margin limit (default: 100.00)
+      degrid=<float>        Grid compensation; 0 disables it, 1 is full compensation (default: 0.0)
+      signorm=<bool>        Normalize sigma and limits to noise-power units (default: false)
+      prec=<string>         Calculation precision (default: auto)
+                            values: auto, fp16, fp32
+
+   --vpp-degrain [<param1>=<value>][,<param2>=<value>][...]
+     Motion-compensated degraining and motion-analysis output.
+    params
+      preset=<string>       Surface preset (default: custom)
+                            values: custom, auto
+      mode=<string>         Output mode (default: degrain)
+                            values: source, analyze, compb, compf, compb2, compf2, degrain, mv, sad
+      stage=<string>        Processing stage (default: auto)
+                            values: auto, tr1, tr2
+      tr=<int>              Auto-preset radius follows stage and delta when omitted (default: derived)
+                            values: 1, 2
+      blksize=<int>         Motion block size (default: 16)
+      search=<int>          Search radius (default: 4)
+      thsad=<int>           Luma SAD threshold (default: 640)
+      thsadc=<int>          Chroma SAD threshold (default: 640)
+      thscd1=<int>          Scene-change SAD threshold (default: 180)
+      thscd2=<int>          Scene-change ratio in AviSynth units (default: 98, range: 0..255)
+      pel=<int>             Subpixel precision (default: 1)
+                            values: 1, 2, 4
+      subpelinterp=<int>    Subpixel interpolation mode (default: 0)
+      levels=<int>          Analysis levels (default: 2)
+      overlap=<int>         Overlap in pixels (default: 0)
+      delta=<int>           Temporal radius (default: 1, range: 1..5)
+      tr0=<int>             Reference temporal prefilter radius (default: 0)
+                            values: 0, 1, 2
+      rep0=<int>            Reference repair mode (default: 0, range: 0..7)
+      search_refine=<int>   Reference pre/postprocessing mode (default: 0, range: 0..3)
+      mv_spatial_refine=<int|auto> Spatial motion-vector refinement count (default: auto)
+                            values: auto
+      searchparam=<int>     Motion search parameter (default: 2)
+      pelsearch=<int>       Motion search parameter (default: 2)
+      search_early_sad=<int|off> Level-0 early SAD threshold in 8x8/8-bit units (default: off)
+                            values: off
+      spatial_early_sad=<int|off> Level-1 refinement skip threshold in 8x8/8-bit units (default: off)
+                            values: off
+      truemotion=<bool>     Use true-motion tuning (default: false)
+      lambda=<int>          Motion penalty strength (default: 400)
+      lsad=<int>            Large-SAD threshold (default: 400)
+      pnew=<int>            New-vector penalty (default: 25)
+      plevel=<int>          Predictor level (default: 0)
+      globalmotion=<bool>   Enable global motion tuning (default: true)
+      dct=<int>             DCT search mode (default: 0)
+      useflag=<int>         Reference direction: 0 both, 1 backward, 2 forward (default: 0)
+      chroma=<bool>         Include chroma in motion/SAD analysis (default: false)
+      binomial=<bool|auto>  Binomial prefilter path (default: auto)
+                            values: auto, false, true
+      tv_range=<bool>       Expand motion analysis from TV to PC range (default: false)
+
+   --vpp-msmooth [<param1>=<value>][,<param2>=<value>][...]
+     Detail-preserving smoothing.
+    params
+      strength=<int>        Smoothing iterations (default: 3, range: 0..20)
+      threshold=<float>     Luma edge threshold (default: 15.0, range: 0.0..255.0)
+      threshold_c=<float>   Chroma edge threshold; follows threshold when omitted (default: derived)
+      highq=<bool>          High-quality edge detection (default: true)
+      mask=<bool>           Output only the edge mask (default: false)
+
+   --vpp-deblock [<param1>=<value>][,<param2>=<value>][...]
+     H.264 style spatial deblocking filter.
+    params
+      qp=<int>              filter strength QP (default: 24, range: 0..51)
+      alpha=<int>           alpha offset (default: 0, range: -6..6)
+      beta=<int>            beta offset (default: 0, range: -6..6)
+      chroma=<bool>         process planar chroma planes (default: false)
+      grid=<int>            block boundary spacing (default: 4)
+                            4: H.264/AVC, 8: MPEG-2/MPEG-4 Part 2
+                            aliases: h264, avc, mpeg2, mpeg4
+
+   --vpp-guidedfilter [<param1>=<value>][,<param2>=<value>][...]
+     edge-preserving smoothing by self-guided image filtering.
+    params
+      radius=<int>          box-filter radius (default: 4, range: 1..32)
+      eps=<float>           smoothing strength (default: 0.0100, range: 0.0001..1.0)
+      chroma=<bool>         filter chroma planes (default: false)
+
+   --vpp-preprocess [<param1>=<value>][,<param2>=<value>][...]
+     JND-based edge-adaptive denoising.
+    params
+      enable=<bool>         Enable preprocessing (default: true)
+      strength=<int>        Denoising strength (default: 4, range: 0..10)
+      sensitivity=<int>     Edge sensitivity (default: 4, range: 0..10)
+      adapt-filter=<bool>   Adapt the filter to local detail (default: false)
+
+  [edge] Edge enhancement
+   --vpp-maa [<param1>=<value>][,<param2>=<value>][...]
+     Masked anti-aliasing for animated and cel-shaded content.
+    params
+      ss=<float>            Supersampling factor. (default: 2.0, range: 1..4)
+      aa=<int>              Luma anti-aliasing strength. (default: 48, range: 0..255)
+      aac=<int>             Chroma strength; follows max(0, aa-8) when aa is explicitly set. (default: derived, range: 0..255)
+      mask=<bool>           Enable edge masking. (default: true)
+      mthresh=<int>         Edge threshold; higher values detect fewer edges. (default: 7, range: 1..255)
+      chroma=<bool>         Process chroma planes; increases processing cost. (default: false)
+      show=<int>            Debug display: 0=normal, 1=mask, 2=mask with anti-aliasing. (default: 0, range: 0..2)
+      edge=<string>         Edge operator. (default: sobel)
+                            values: sobel, prewitt, sobel_full, scharr, kirsch, laplacian
+
+   --vpp-unsharp [<param1>=<value>][,<param2>=<value>][...]
+     enable unsharp filter.
+    params
+      radius=<int>          filter range for edge detection (default: 3, range: 1..9)
+      weight=<float>        strength of filter (default: 0.50, range: 0..10)
+      threshold=<float>     min brightness change to be sharpened (default: 10.00, range: 0..255)
+
+   --vpp-edgelevel [<param1>=<value>][,<param2>=<value>][...]
+     edgelevel filter to enhance edge.
+    params
+      strength=<float>      strength (default: 5.0, range: -31..31)
+      threshold=<float>     threshold to ignore noise (default: 20.0, range: 0..255)
+      black=<float>         allow edge to be darker on edge enhancement (default: 0.0, range: 0..31)
+
+      white=<float>         allow edge to be brighter on edge enhancement (default: 0.0, range: 0..31)
+
+
+   --vpp-dehalo [<param1>=<value>][,<param2>=<value>][...]
+     halo removal filter. Applies correction to luma and copies chroma unchanged.
+    main: mode, rx, ry, darkstr, brightstr, lowsens, highsens, ss
+    params
+      mode=<string>         filter mode (default: legacy)
+                            values: legacy, alpha
+      rx=<float>            horizontal halo radius (default: 2.00, range: 0.5..10.0)
+      ry=<float>            vertical halo radius (default: 2.00, range: 0.5..10.0)
+      darkstr=<float>       bright-halo darkening strength (default: 1.00, range: 0.0..1.0)
+      brightstr=<float>     dark-halo brightening strength (default: 0.00, range: 0.0..1.0)
+      lowsens=<int>         sensitivity ramp lower anchor (default: 50, range: 0..100)
+      highsens=<int>        sensitivity ramp upper anchor (default: 50, range: 0..100)
+      ss=<float>            supersampling ratio (default: 1.50, range: 1.0..4.0)
+      search_rade=<int|auto> alpha mode range expand radius (default: auto, range: 1..10)
+                            values: auto
+      search_radi=<int>     alpha mode range inpand radius; follows search_rade (default: derived)
+
+   --vpp-finedehalo [<param1>=<value>][,<param2>=<value>][...]
+     fine halo removal filter. Applies correction to luma and copies chroma unchanged.
+    main: mode, rx, ry, darkstr, brightstr, showmask
+    params
+      mode=<string>         internal dehalo mode (default: alpha)
+                            values: legacy, alpha
+      rx=<float>            horizontal halo radius (default: 2.00, range: 0.5..10.0)
+      ry=<float>            vertical halo radius (default: 2.00, range: 0.5..10.0)
+      darkstr=<float>       bright-halo darkening strength (default: 1.00, range: 0.0..1.0)
+      brightstr=<float>     dark-halo brightening strength (default: 1.00, range: 0.0..1.0)
+      lowsens=<int>         dehalo sensitivity lower anchor (default: 50, range: 0..100)
+      highsens=<int>        dehalo sensitivity upper anchor (default: 50, range: 0..100)
+      ss=<float>            supersampling ratio (default: 1.50, range: 1.0..4.0)
+      search_rade=<int>     alpha mode range expand radius (default: 1, range: 1..10)
+      search_radi=<int>     alpha mode range inpand radius; follows search_rade (default: derived)
+      thmi=<int>            edge mask lower threshold (default: 80, range: 0..255)
+      thma=<int>            edge mask upper threshold (default: 128, range: 0..255)
+      thlimi=<int>          light edge mask lower threshold (default: 50, range: 0..255)
+      thlima=<int>          light edge mask upper threshold (default: 100, range: 0..255)
+      showmask=<int>        debug mask output (default: 0, range: 0..4)
+                            1=outside, 2=shrink, 3=edges, 4=strong
+      excl=<bool>           enable exclusion zone (default: true)
+      edgeproc=<float>      add strong edge mask to outside mask (default: 0.00, range: 0.0..1.0)
+      edge=<string>         edge operator (default: prewitt)
+                            values: prewitt, sobel, scharr, kirsch, laplacian
+
+   --vpp-hqdering [<param1>=<value>][,<param2>=<value>][...]
+     DCT ringing reduction filter. Applies correction to luma and copies chroma unchanged.
+    main: mrad, mthr, sigma, sharp, showmask
+    params
+      mrad=<int>            ring mask expansion radius (default: 1, range: 1..3)
+      mthr=<int>            edge mask threshold (default: 10, range: 0..255)
+      sigma=<float>         Gaussian blur sigma (default: 1.50, range: 0.5..5.0)
+      showmask=<bool>       output effective mask only (default: false)
+      protect=<bool>        protect original edge pixels (default: true)
+      edge=<string>         edge operator (default: log)
+                            values: log, sobel, prewitt, scharr, kirsch, laplacian
+      thr=<int>             limit for the change per pixel, 8-bit scale (default: 0)
+
+      elast=<float>         elastic falloff of thr (default: 2.0, range: 1.0..3.0)
+      darkthr=<int>         separate limit for darkening follows thr (default: derived)
+      minp=<int>            edge-core inpand iterations excluded from the (default: 0, range: 0..3)
+                            ring mask
+      msmooth=<int>         ring mask smoothing iterations (default: 0, range: 0..3)
+      drrep=<int>           repair blurred clip: 0=off, 1=clamp to 3x3 min/max (default: 0)
+                            of the source
+      sharp=<int>           contra-sharpening level (default: 0, range: 0..3)
+                            restores line strength lost to the blur, limited
+                            so it cannot re-introduce ringing.
+      planes=<string>       target planes (default: y)
+                            values: y, u, v, y:u, y:v, u:v, y:u:v, all
+                            all, or ":"-separated list of y, u, v.
+
+   --vpp-msharpen [<param1>=<value>][,<param2>=<value>][...]
+     edge-selective sharpening filter.
+    params
+      strength=<float>      sharpening strength (default: 1.00, range: 0.0..1.0)
+      threshold=<float>     edge detection threshold (default: 15.0, range: 0.0..255.0)
+      slope=<float>         sigmoid soft mask slope (default: 0.0, range: 0.0..)
+      luma_limit=<float>    attenuate sharpening in dark luma areas (default: 0.0, range: 0.0..255.0)
+      block_protect=<float> attenuate near DCT block boundaries (default: 0.0, range: 0.0..1.0)
+      highq=<bool>          high quality edge detection (default: true)
+      mask=<bool>           output edge mask only (default: false)
+
+   --vpp-cas [<param1>=<value>][,<param2>=<value>][...]
+     luma-only Contrast Adaptive Sharpening filter.
+    params
+      sharpness=<float>     sharpening strength (default: 0.40, range: 0.0..1.0)
+      hdr=<bool>            skip SDR gamma 2.0 luma approximation (default: false)
+      chroma=<bool>         also sharpen chroma planes (default: false)
+
+   --vpp-warpsharp [<param1>=<value>][,<param2>=<value>][...]
+     warpsharp filter to enhance edge.
+    params
+      threshold=<float>     edge mask threshold (default: 128.0, range: 0..255)
+      blur=<int>            number of times to blur the edge mask. (default: 2, range: 0..)
+
+      type=<int>            blur type, 0...13x13, 1...5x5 (default: 0)
+      depth=<float>         how far to warp (default: 16.0, range: -128..128)
+      chroma=<int>          0...use luma mask, 1...create chroma mask (default: 0)
+
+      depth_min=<float>     Weak-edge depth follows depth (default: derived)
+
+      depth_max=<float>     Strong-edge depth follows depth (default: derived)
+
+      edge_thr=<float>      mask level reaching depth_max (default: 192.0, range: 1..255)
+
+      gamma=<float>         adaptive depth response curve (default: 1.00, range: 0.01..8.0)
+
+
+   --vpp-detailsharpen [<param1>=<value>][,<param2>=<value>][...]
+     detail sharpening filter to enhance fine texture.
+    params
+      z=<float>             zero point (default: 4.000, range: 0.001..64.0)
+      sstr=<float>          sharpening strength (default: 1.500, range: 0.0..16.0)
+      power=<float>         nonlinear power (default: 4.000, range: 1.0..16.0)
+      ldmp=<float>          low-amplitude damping (default: 1.000, range: 0.0..1000.0)
+      mode=<int>            blur mode, 0...gauss, 1...box (default: 1)
+      med=<bool>            apply 3x3 median to blur (default: false)
+
+   --vpp-enhance [<param1>=<value>][,<param2>=<value>][...]
+    params
+      enable=<bool>         Enable enhancement (default: true)
+      attenuation=<float>   False-contour reduction strength (default: 0.10, range: 0.02..0.4)
+      fcr-radius=<int>      False-contour reduction radius (default: 3, range: 1..4)
+
+  [deband] Deband
+   --vpp-deband [<param1>=<value>][,<param2>=<value>][...]
+     enable deband filter.
+    main: range, thre, dither, sample, blurfirst
+    params
+      range=<int>           range (default: 15, range: 0..127)
+      sample=<int>          sample (default: 1, range: 0..2)
+      thre=<int>            Set thresholds for all planes (default: derived)
+      thre_y=<int>          threshold for y (default: 15, range: 0..31)
+      thre_cb=<int>         threshold for cb (default: 15, range: 0..31)
+      thre_cr=<int>         threshold for cr (default: 15, range: 0..31)
+      dither=<int>          Set dither strength for all planes (default: derived)
+      dither_y=<int>        strength of dither for y (default: 15, range: 0..31)
+      dither_c=<int>        strength of dither for cb/cr (default: 15, range: 0..31)
+      seed=<int>            Random seed (default: 1234)
+      blurfirst=<bool>      Blur before debanding (default: off)
+      rand_each_frame=<bool> Generate a new seed per frame (default: off)
+
+  [color] Color adjustment
+   --vpp-colorspace [<param1>=<value>][,<param2>=<value>][...]
+     Convert colorspace, transfer characteristics, or HDR tone mapping.
+    params
+      matrix=<from>:<to>    Matrix conversion; retain the input matrix when unspecified. (default: derived)
+                            values: undef, auto, auto_res, bt709, smpte170m, bt470bg, smpte240m, YCgCo, fcc, GBR, bt2020nc, bt2020c, derived-ncl, derived-cl, ictco, 2100-lms
+      colorprim=<from>:<to> Primaries conversion; retain the input primaries when unspecified. (default: derived)
+                            values: undef, unknown, auto, auto_res, bt709, smpte170m, bt470m, bt470bg, smpte240m, film, bt2020, st428, st431-2, st432-1, ebu3213-e
+      transfer=<from>:<to>  Transfer conversion; retain the input transfer when unspecified. (default: derived)
+                            values: undef, unknown, auto, auto_res, bt709, smpte170m, bt470m, bt470bg, smpte240m, linear, log100, log316, iec61966-2-4, bt1361e, iec61966-2-1, bt2020-10, bt2020-12, smpte2084, smpte428, arib-std-b67
+      range=<from>:<to>     Signal-range conversion (limited or full); retain the input range when unspecified. (default: derived)
+                            values: limited, full
+      lut3d=<path>          3D LUT file.
+      lut3d_interp=<string> 3D LUT interpolation. (default: tetrahedral)
+                            values: nearest, trilinear, tetrahedral, pyramid, prism
+                            when: lut3d
+      hdr2sdr=<string>      HDR10-to-SDR tone-mapping operator. (default: none)
+                            values: none, hable, mobius, reinhard, bt2390
+      source_peak=<float>   HDR source peak luminance in nits. (default: 1000.0)
+                            when: hdr2sdr!=none
+      ldr_nits=<float>      Target SDR peak luminance in nits. (default: 100.0)
+                            when: hdr2sdr!=none
+      desat_base=<float>    Base luminance for highlight desaturation. (default: 0.18)
+                            when: hdr2sdr!=none
+      desat_strength=<float> Highlight desaturation strength. (default: 0.75)
+                            when: hdr2sdr!=none
+      desat_exp=<float>     Highlight desaturation exponent. (default: 1.50)
+                            when: hdr2sdr!=none
+
+   --vpp-chromashift [<param1>=<value>][,<param2>=<value>][...]
+     shift chroma planes for chroma/luma alignment correction.
+    params
+      x=<float>             horizontal shift in luma pixels (default: 0.00, range: -4.0..4.0)
+      y=<float>             vertical shift in luma pixels (default: 0.00, range: -4.0..4.0)
+      show=<string>         diagnostic output (default: normal)
+                            values: normal, laplacian
+      auto=<bool>           auto detect shift from early frames (default: false)
+      auto_frames=<int>     accepted analysis frames (default: 30, range: 1..100)
+      auto_min_pairs=<int>  minimum zero-crossing pairs per frame (default: 200, range: 10..10000)
+
+   --vpp-deflicker [<param1>=<value>][,<param2>=<value>][...]
+     temporal brightness stabilization filter.
+    params
+      strength=<float>      correction blend strength (default: 1.00, range: 0.0..1.0)
+      damping=<float>       temporal damping of correction (default: 0.80, range: 0.0..1.0)
+      scene_threshold=<float> scene change threshold (default: 2.00, range: 0.5..5.0)
+      frames=<int>          rolling analysis window (default: 30, range: 5..300)
+      predictor=<bool>      use predictor-corrector pass (default: true)
+      chroma=<bool>         process chroma planes (default: false)
+
+   --vpp-colorfix [<param1>=<value>][,<param2>=<value>][...]
+     Correct color balance manually or from frame statistics.
+    params
+      mode=<string>         Correction mode (default: manual)
+                            values: manual, auto, gray
+      space=<string>        Working color space (default: auto)
+                            values: auto, rgb, yuv
+      matrix=<string>       YUV/RGB conversion matrix (default: auto)
+                            values: auto, bt601, bt709, bt2020
+      white=<rrggbb>        Manual white point (default: ffffff)
+      black=<rrggbb>        Manual black point (default: 000000)
+      frames=<int>          Analysis frames for auto/gray (default: 30, range: 10..5000)
+      strength=<float>      Correction strength for auto/gray (default: 1.00, range: 0.0..1.0)
+      variance_threshold=<float> Positive flash/fade rejection threshold (default: 2.00)
+      temperature=<int>     Correct source light to 6500 K in manual RGB mode; 0 disables correction (default: 0, range: 2500..15000)
+
+   --vpp-clahe [<param1>=<value>][,<param2>=<value>][...]
+     contrast limited adaptive histogram equalization.
+    params
+      tiles_x=<int>         horizontal tile count (default: 8, range: 2..32)
+      tiles_y=<int>         vertical tile count (default: 8, range: 2..32)
+      slope=<float>         contrast clip ratio (default: 3.0, range: 1.0..40.0)
+
+   --vpp-dehaze [<param1>=<value>][,<param2>=<value>][...]
+     luminance dehazing based on the dark channel prior.
+    params
+      patch_radius=<int>    local minimum radius (default: 7, range: 1..15)
+      omega=<float>         haze removal strength (default: 0.95, range: 0.5..1.0)
+      t_floor=<float>       transmission lower bound (default: 0.10, range: 0.01..0.5)
+      atm_light=<float>     atmospheric light (default: 0.95, range: 0.1..1.0)
+
+   --vpp-curves [<param1>=<value>][,<param2>=<value>][...]
+     Adjust colors using control-point curves.
+    params
+      preset=<string>       Color preset (default: none)
+                            values: none, color_negative, process, darker, lighter, increase_contrast, linear_contrast, medium_contrast, strong_contrast, negative, vintage
+      interp=<string>       Interpolation between points (default: spline)
+                            values: spline, pchip
+      all=<points>          Fallback points for channels without an explicit curve.
+      m=<points>            Master luminance curve applied after the channel curves.
+      r=<points>            Red curve; overrides the preset.
+      g=<points>            Green curve; overrides the preset.
+      b=<points>            Blue curve; overrides the preset.
+
+   --vpp-softlight [<param1>=<value>][,<param2>=<value>][...]
+     Correct color cast or boost contrast and saturation.
+    params
+      mode=<string>         Correction mode (default: neutralize)
+                            values: neutralize, lightness, neutralize_boost_sat, neutralize_full, neutralize_boost, boost, saturation
+      formula=<string>      Blend formula (default: pegtop)
+                            values: pegtop, illusionshu, w3c
+      skipblack=<bool>      Exclude pure black pixels from averages (default: false)
+
+   --vpp-tweak [<param1>=<value>][,<param2>=<value>][...]
+     Adjust brightness, contrast, gamma, saturation and hue.
+    main: brightness, contrast, gamma, saturation, hue, vibrance
+    params
+      brightness=<float>    Brightness offset (default: 0.0, range: -1.0..1.0)
+      contrast=<float>      Contrast multiplier (default: 1.0, range: -2.0..2.0)
+      gamma=<float>         Gamma correction (default: 1.0, range: 0.1..10.0)
+      saturation=<float>    Saturation multiplier (default: 1.0, range: 0.0..3.0)
+      vibrance=<float>      Selective saturation adjustment (default: 0.0, range: -1.0..2.0)
+      hue=<float>           Hue rotation in degrees (default: 0.0, range: -180..180)
+      coring=<bool>         Clamp output to TV range (default: false)
+      start_hue=<float>     Start of the adjusted hue range in degrees (default: 0.0)
+      end_hue=<float>       End of the adjusted hue range in degrees (default: 360.0)
+      y_offset=<float>      Y offset (default: 0.0, range: -1.0..1.0)
+      y_gain=<float>        Y gain (default: 1.0, range: -2.0..2.0)
+      cb_offset=<float>     CB offset (default: 0.0, range: -1.0..1.0)
+      cb_gain=<float>       CB gain (default: 1.0, range: -2.0..2.0)
+      cr_offset=<float>     CR offset (default: 0.0, range: -1.0..1.0)
+      cr_gain=<float>       CR gain (default: 1.0, range: -2.0..2.0)
+      r_offset=<float>      R offset (default: 0.0, range: -1.0..1.0)
+      r_gain=<float>        R gain (default: 1.0, range: -2.0..2.0)
+      r_gamma=<float>       R gamma (default: 1.0, range: 0.1..10.0)
+      g_offset=<float>      G offset (default: 0.0, range: -1.0..1.0)
+      g_gain=<float>        G gain (default: 1.0, range: -2.0..2.0)
+      g_gamma=<float>       G gamma (default: 1.0, range: 0.1..10.0)
+      b_offset=<float>      B offset (default: 0.0, range: -1.0..1.0)
+      b_gain=<float>        B gain (default: 1.0, range: -2.0..2.0)
+      b_gamma=<float>       B gamma (default: 1.0, range: 0.1..10.0)
+
+  [resize] Resize and geometry
+   --vpp-nnedi-upscale [<param1>=<value>][,<param2>=<value>][...]
+     Edge-directed 2x upscale with the NNEDI network.
+    main: nns, nsize, quality, prescreen
+    params
+     Output is exactly 2x the input. Even-sized progressive 4:2:0, 4:4:4 or monochrome input is required.
+      nsize=<string>        NNEDI neighborhood size. (default: 32x4)
+                            values: 8x6, 16x6, 32x6, 48x6, 8x4, 16x4, 32x4
+      nns=<int>             Number of neurons. (default: 32)
+                            values: 16, 32, 64, 128, 256
+      quality=<string>      Calculation quality. (default: fast)
+                            values: fast, slow
+      prescreen=<int>       Prescreening mode; modes 0 and 1 are unsupported. (default: 2, range: 2..4)
+      errortype=<string>    Network error metric. (default: abs)
+                            values: abs, square
+      clamp=<int>           Output clamping mode. (default: 1, range: 0..4)
+      shift=<string>        Half-pixel correction interpolation. (default: linear)
+                            values: linear, cubic
+      weightfile=<path>     Weights file; Windows searches nnedi3_weights.bin, Linux uses embedded weights.
+
+   --vpp-resize [<param1>=<value>][,<param2>=<value>][...]
+     Select a resizing algorithm and its parameters.
+    params
+      algo=<string>         Resizing algorithm. (default: auto)
+                            values: auto, bilinear, bicubic, spline16, spline36, spline64, lanczos2, lanczos3, lanczos4, lanczos5, lanczos6, lanczos7, lanczos8, mitchell, catmull-rom, hermite, gauss, fsr1, nis, jinc36, jinc64, jinc144, jinc256, area, dpid, amf_bilinear, amf_bicubic, amf_fsr, amf_fsr_11, amf_point, amf_max
+                            The short form is --vpp-resize <algorithm>[,<param>=<value>].
+                            Gaussian resizing uses p=2.0.
+      sharpness=<float>     RCAS strength for fsr1 or USM strength for nis. (default: 0.50, range: 0.0..1.0)
+                            The fsr1 and nis parameters have the same initial strength.
+                            when: algo=fsr1, nis
+      dpid_lambda=<float>   Detail-preservation strength for dpid; 0 is area-equivalent. (default: 1.00, range: 0.0..4.0)
+                            when: algo=dpid
+      cascade=<string>      Cascade mode for nis. (default: auto)
+                            values: auto, on, off
+                            when: algo=nis
+      hdr=<string>          HDR mode for nis. (default: auto)
+                            values: auto, sdr, pq
+                            when: algo=nis
+      opt=<string>          Implementation for nis. (default: default)
+                            values: default, fast
+                            when: algo=nis
+      b=<float>             Mitchell-Netravali B parameter for bicubic. (default: 0.00)
+                            when: algo=bicubic
+      c=<float>             Mitchell-Netravali C parameter for bicubic. (default: 0.60)
+                            Bicubic aliases: mitchell, catmull-rom, hermite.
+                            when: algo=bicubic
+
+   --vpp-descale [<param1>=<value>][,<param2>=<value>][...]
+     Undo upscaling by solving the inverse system for the original scaler kernel.
+    params
+      kernel=<string>       Original upscaler kernel (default: bicubic)
+                            values: bilinear, bicubic, spline16, spline36, spline64, lanczos2, lanczos3, lanczos4, auto
+      width=<int>           Native width; 0 leaves it unspecified (default: 0)
+      height=<int>          Native height; 0 leaves it unspecified (default: 0)
+      b=<float>             Bicubic B parameter (default: 0.00)
+      c=<float>             Bicubic C parameter (default: 0.50)
+      src_left=<float>      Horizontal sub-pixel offset (default: 0.00)
+      src_top=<float>       Vertical sub-pixel offset (default: 0.00)
+      src_width=<float>     Fractional active source width; 0 disables it (default: 0.0)
+      src_height=<float>    Fractional active source height; 0 disables it (default: 0.0)
+      border_handling=<string> Border extension method (default: mirror)
+                            values: mirror, zero, repeat
+      auto=<bool>           Enable kernel and native-resolution search (default: false)
+      search_min=<int>      Minimum candidate height is half the input height (default: derived)
+      search_max=<int>      Maximum candidate height is input height minus one (default: derived)
+      search_step=<int>     Fine-pass step in pixels (default: 1)
+      detect_frames=<int>   Frames averaged before locking (default: 10)
+      show_scores=<bool>    Log candidate error scores (default: false)
+
+   --vpp-anime4k-shader [<param1>=<value>][,<param2>=<value>][...]
+     Anime4K GLSL luma refinement and upscaling.
+    main: mode, scale, strength, denoise, darken, antiring
+    params
+      mode=<string>         Processing variant (default: ani4k_original)
+                            values: ani4k_original, ani4k_deblur, ani4k_darken_hq, ani4k_thin_hq, ani4k_dog_sharpen, ani4k_dog, ani4k_dtd
+      scale=<int>           1 refines, 2 upscales; some modes select their own scale (default: 2)
+                            values: 1, 2
+      strength=<float>      Refinement strength; deblur promotes an omitted value to 1.0 (default: 0.50)
+      prefilter_denoise=<string> Denoise luma before refinement (default: off)
+                            values: off, mean, median, mode, false
+      darken=<string>       Line darkening pass (default: off)
+                            values: off, hq, fast, veryfast, false, true
+      thin=<string>         Line thinning pass (default: off)
+                            values: off, hq, fast, veryfast, false, true
+      denoise=<string>      Denoise pass after refinement (default: off)
+                            values: off, mean, median, mode, false
+      denoise_intensity=<float> Advanced denoising adjustment (default: 0.1)
+      denoise_spatial=<float> Advanced denoising adjustment (default: 1.0)
+      denoise_curve=<float> Advanced denoising adjustment (default: 1.0)
+      denoise_hist_reg=<float> Advanced denoising adjustment (default: -1.0)
+      clamp_highlights=<bool> Clamp highlights to the local source maximum (default: false)
+      antiring=<float>      Clamp upscaled luma to the source min/max envelope (default: 0.0, range: 0.0..1.0)
+      chroma_resize=<string> Chroma scaler; joint is luma-guided (default: spline36)
+                            values: spline36, bilinear, bicubic, lanczos3, joint
+      chroma=<bool>         Resize chroma at scale=2; scale=1 passes it through (default: true)
+      out_res=<WxH>         Final resolution defaults to the scaled source; one negative axis preserves aspect (default: derived)
+      resize=<string>       Final-resolution resampler (default: auto)
+                            values: auto, bilinear, bicubic, spline16, spline36, spline64, lanczos2, lanczos3, lanczos4, lanczos5, lanczos6, lanczos7, lanczos8, mitchell, catmull-rom, hermite, gauss, fsr1, nis, jinc36, jinc64, jinc144, jinc256, area, dpid, amf_bilinear, amf_bicubic, amf_fsr, amf_fsr_11, amf_point, amf_max
+
+   --vpp-stab [<param1>=<value>][,<param2>=<value>][...]
+     camera-shake stabilisation via phase correlation.
+    params
+      strength=<float>      correction strength (default: 1.00, range: 0.0..1.0)
+      damping=<float>       temporal smoothing of detected shift (default: 0.90, range: 0.0..1.0)
+      trust=<float>         minimum normalized correlation peak (default: 0.30, range: 0.0..1.0)
+      max_shift=<float>     maximum shift in luma pixels (default: 32.0, range: 1.0..256.0)
+      border=<string>       Border mode for warped pixels (default: black)
+                            values: black, clamp, mirror
+
+
+   --vpp-rotate <int>       Rotation is derived from transform flags when omitted (default: derived)
+                            values: 90, 180, 270
+
+   --vpp-transform [<param1>=<value>][,<param2>=<value>][...]
+     Flip or transpose the image.
+    params
+      flip_x=<bool>         Flip horizontally (default: false)
+      flip_y=<bool>         Flip vertically (default: false)
+      transpose=<bool>      Transpose rows and columns (default: false)
+
+   --vpp-pad <int>,<int>,<int>,<int>
+     add padding to left,top,right,bottom (in pixels)
+
+   --vpp-scaler-sharpness <float> AMF HQ-scaler sharpness (default: 0.5, range: 0.0..2.0)
+
+  [framerate] Frame rate and interpolation
+   --vpp-rff                Apply RFF flags; available with the avsw reader.
+
+   --vpp-decimate [<param1>=<value>][,<param2>=<value>][...]
+     Drop duplicate frames from each cycle.
+    params
+      cycle=<int>           Frames per decimation cycle. (default: 5)
+      drop=<int>            Frames to drop per cycle. (default: 1)
+      thredup=<float>       Duplicate threshold in percent. (default: 1.1, range: 0..100)
+      thresc=<float>        Scene-change threshold in percent. (default: 15.0, range: 0..100)
+      blockx=<int>          Horizontal block size. (default: 32)
+                            values: 4, 8, 16, 32, 64
+      blocky=<int>          Vertical block size. (default: 32)
+                            values: 4, 8, 16, 32, 64
+      chroma=<bool>         Consider chroma when detecting duplicates. (default: true)
+      log=<bool>            Write a frame-decision log. (default: false)
+
+   --vpp-mpdecimate [<param1>=<value>][,<param2>=<value>][...]
+     Drop near-duplicate frames using block differences.
+    params
+      hi=<int>              A frame may be dropped if every 8x8 block difference is below this threshold. (default: 768)
+      lo=<int>              Low 8x8-block difference threshold used with frac. (default: 320)
+      frac=<float>          Required fraction of blocks with difference below lo. (default: 0.330)
+      max=<int>             Maximum consecutive drops; negative values set the minimum drop interval. (default: 0)
+      keep=<int>            Consecutive similar frames kept before dropping begins. (default: 0)
+      log=<bool>            Write a frame-decision log. (default: false)
+
+   --vpp-frc [<param1>=<value>][,<param2>=<value>][...]
+    params
+      enable=<bool>         Enable frame-rate conversion (default: true)
+      profile=<string>      Conversion quality profile (default: high)
+                            values: low, high, super
+      search=<string>       Motion-vector search mode (default: native)
+                            values: native, performance
+
+  [overlay] Overlay
+   --vpp-delogo <path>[,<param1>=<value>][,<param2>=<value>][...] Remove a translucent logo using a logo file created by logoscan.auf.
+    params
+      select=<string>       Logo name, automatic-selection file, or one-based logo index.
+      pos=<int>:<int>       Horizontal and vertical logo offset. (default: 0:0)
+      depth=<int>           Logo depth. (default: 128)
+      y=<int>               Luma offset. (default: 0)
+      cb=<int>              Cb offset. (default: 0)
+      cr=<int>              Cr offset. (default: 0)
+
+   --vpp-subburn [<param1>=<value>][,<param2>=<value>][...]
+     Burn subtitles into the video.
+    params
+      track=<int>           Input subtitle track ID (default: 0)
+      filename=<path>       Subtitle file path
+      charcode=<string>     Character encoding
+      shaping=<string>      Text shaping quality (default: complex)
+                            values: simple, complex
+      scale=<float>         Bitmap subtitle scale is chosen automatically when omitted (default: derived)
+      transparency=<float>  Additional transparency (default: 0.0, range: 0.0..1.0)
+      brightness=<float>    Subtitle brightness (default: 0.0, range: -1.0..1.0)
+      contrast=<float>      Subtitle contrast (default: 1.0, range: -2.0..2.0)
+      vid_ts_offset=<bool>  Apply the first-video-timestamp offset; always on with track (default: true)
+      ts_offset=<float>     Additional subtitle timestamp offset in seconds (default: 0.0)
+      fontsdir=<path>       Directory containing subtitle fonts
+      forced_subs_only=<bool> Render only forced subtitles (default: false)
+
+   --vpp-overlay [<param1>=<value>][,<param2>=<value>][...]
+     Composite an image or video over the input.
+    params
+      file=<path>           Source image or video file.
+      pos=<int>x<int>       Image position (default: 0x0)
+      size=<int>x<int>      Image size; 0x0 disables resizing (default: 0x0)
+      alpha=<float>         Overlay alpha (default: 0.0, range: 0.0..1.0)
+      alpha_mode=<string>   How to combine source alpha (default: override)
+                            values: override, mul, lumakey
+      lumakey_threshold=<float> Luma key center (default: 0.0, range: 0.0..1.0)
+      lumakey_tolerance=<float> Luma key range (default: 0.1, range: 0.0..1.0)
+      lumakey_softness=<float> Luma key edge softness (default: 0.0, range: 0.0..1.0)
+      loop=<bool>           Loop the source (default: false)
+
+  [other] Other settings
+   --vpp-deint-csp <string> Select the colorspace used for deinterlacing. (default: input)
+                            values: input, output
+
+   --vpp-rtgmc-search-prefilter [<param1>=<value>][,<param2>=<value>][...]
+     Search-reference prefilter scaffold.
+    params
+      tr0=<int>             Temporal radius; -1 uses an external EDI reference. (default: 0, range: -1..2)
+      rep0-thin=<int>       Thin repair level. (default: 0, range: 0..7)
+      rep0-pad=<int>        Padding repair level. (default: 0, range: 0..3)
+      search_refine=<int>   Search-prefilter mode. (default: 0, range: 0..3)
+      tv_range=<bool>       Expand the search reference from TV to PC range. (default: true)
+      chroma_motion=<bool>  Prefilter chroma planes. (default: false)
+
+   --vpp-rtgmc-edi [<param1>=<value>][,<param2>=<value>][...]
+     Standalone EDI scaffold.
+    params
+      mode=<string>         Interpolation mode. (default: bob)
+                            values: passthrough, bob, yadif, cyadif, repyadif, repcyadif, nnedi3
+      nnsize=<int>          NNEDI window-size index. (default: 1, range: 0..6)
+      nneurons=<int>        NNEDI neuron-count index. (default: 1, range: 0..4)
+      ediqual=<int>         NNEDI quality. (default: 1, range: 1..2)
+      chroma_edi=<string>   Chroma interpolation. (default: none)
+                            values: none, nnedi3
+
+   --vpp-rtgmc-retouch [<param1>=<value>][,<param2>=<value>][...]
+     Standalone retouch resharpening.
+    params
+      sharpness=<float>     Vertical resharpen strength. (default: 1.00, range: 0.0..1.0)
+      limit=<float>         Legacy sharpness limit. (default: 0.00, range: 0.0..1.0)
+      smode=<int>           Resharpen mode. (default: 2, range: 0..2)
+      slmode=<int>          Sharpness-limit mode; 1 or 2 runs before TR2. (default: 2, range: 0..4)
+      slrad=<int>           Sharpness-limit radius. (default: 1, range: 0..3)
+      sovs=<int>            Sharpness-limit overshoot. (default: 0)
+      svthin=<float>        Vertical thin strength. (default: 0.00, range: 0.0..1.0)
+      sbb=<int>             Back-blend mode. (default: 0, range: 0..3)
+      precise=<bool>        Use the precise retouch path. (default: false)
+      tr1=<int>             Effective detail-gain TR1 value. (default: 1)
+      tr2=<int>             Effective detail-gain TR2 value. (default: 1)
+
+   --vpp-rtgmc-shimmer-repair [<param1>=<value>][,<param2>=<value>][...]
+     Standalone shimmer repair scaffold.
+    params
+      stage=<string>        Bare invocation is standalone; parameterized invocation defaults to rep1. (default: derived)
+                            values: rep1, rep2
+      mode=<string>         Processing mode; currently passthrough only. (default: passthrough)
+                            values: passthrough
+      rep-thin=<int>        Thin repair level. (default: 0, range: 0..7)
+      rep-pad=<int>         Padding repair level. (default: 0, range: 0..3)
+      rep_chroma=<bool>     Process chroma planes. (default: true)
+
+   --vpp-rtgmc-primitive [<param1>=<value>][,<param2>=<value>][...]
+     Standalone primitive and debug operations.
+    params
+      op=<string>           Primitive operation. (default: copy)
+                            values: copy, makediff, adddiff, addweighteddiff, removegrain, repair, merge, gaussresize, verticalmin5, verticalmax5, logicmin, logicmax
+      ref=<string>          Second-input reference for primitive tests. (default: none)
+                            values: none, removegrain20
+      mode=<int>            Operation-specific mode; Gaussian p for gaussresize. (default: 0)
+      weight=<float>        Merge or weighted-difference blend weight; limits depend on op. (default: 0.500)
+      chroma=<bool>         Process chroma planes. (default: true)
+
+   --vpp-perf-monitor       check vpp performance (for debug)
+
+
+   --parallel <int> or auto     Enable parallel encoding by file splitting.
+   --parallel-force-large-memory-filters
+                                Disable large memory filter parallel count limit.
+   --log <string>               set log file name
+   --log-level <string>         set log level
+                                  debug, info(default), warn, error, quiet
+   --log-opt [<param1>][,<param2>][]...
+     additional options for log output.
+    params
+      addtime                   add time to log lines.
+   --log-framelist [<string>]   output debug info for avsw/avhw reader.
+   --log-packets [<string>]     output debug info for avsw/avhw reader.
+   --log-mux-ts [<string>]      output debug info for avsw/avhw reader.
+
+   --option-file <string>       read commanline options written in file.
+   --max-procfps <int>          limit encoding speed for lower utilization.
+                                 default:0 (no limit)
+   --avoid-idle-clock <string>[=<float>]
+                                add dummy load to avoid idle GPU clock.
+                                - off
+                                - auto [default]
+                                - on
+                                 the optional value is target dummy load percentage,
+                                 when number omitted: 0.01 percent load
+   --task-perf-monitor          enable task performance monitoring.
+   --lowlatency                 minimize latency (might have lower throughput).
+   --fallback-bitdepth          fallback to 8-bit when 10-bit encode unsupported by all GPUs.
+   --output-buf <int>           buffer size for output in MByte
+                                 default 8 MB (0-128)
+   --output-thread <int>        set output thread num
+                                 -1: auto (= default)
+                                  0: disable (slow, but less memory usage)
+                                  1: use one thread
+   --thread-affinity [<string1>=](<string2>[#<int>[:<int>][]...] or 0x<hex>)
+     target (string1)  (default: all)
+                                all, process, main, decoder, encoder, csp
+                                input, filter, output, audio, perfmonitor
+                                videoquality, cltask
+     thread type (string2)  (default: all)
+                                all, pcore, ecore, logical, physical
+                                cachel2, cachel3, custom
+
+   --avsdll <string>            specifies AviSynth DLL location to use.
+
+   --vpy-assume-script-dir     resolves relative paths in .vpy from the script directory.
+
+   --disable-opencl             disable opencl features.
+
+   --cl-perf-dump <dir>         dump OpenCL kernel performance data to <dir>.
+                                 enables CL_QUEUE_PROFILING_ENABLE automatically.
+                                 output: programs.jsonl, launches.jsonl, meta.json,
+                                         binaries/<name>__<hash>.bin,
+                                         build_logs/<name>__<hash>.log
+   --rga-path <path>            set Radeon GPU Analyzer path for AMD GPU disasm.
+   --cl-perf-timeline [=<sec>]  enable per-event timeline capture for <sec> seconds (default 10).
+                                requires --cl-perf-dump. output: timeline.jsonl
+
+   --python <string>            set python path for --perf-monitor-plot
+                                 and --cl-perf-dump report generation.
+
+   --disable-vulkan             disable vulkan features.
+
+   --perf-monitor [<string>][,<string>]...
+       check performance info of encoder and output to log file
+       select counter from below, default = all
+                                 
+     counters for perf-monitor
+                                 all          ... monitor all info
+                                 cpu_total    ... cpu total usage (%)
+                                 cpu_kernel   ... cpu kernel usage (%)
+                                 cpu          ... monitor all cpu info
+                                 gpu_load    ... gpu usage (%)
+                                 gpu_clock   ... gpu avg clock
+                                 vee_load    ... gpu video encoder usage (%)
+                                 ved_load    ... gpu video decoder usage (%)
+                                 gpu         ... monitor all gpu info
+                                 queue       ... queue usage
+                                 mem_private ... private memory (MB)
+                                 mem_virtual ... virtual memory (MB)
+                                 mem         ... monitor all memory info
+                                 io_read     ... io read  (MB/s)
+                                 io_write    ... io write (MB/s)
+                                 io          ... monitor all io info
+                                 fps         ... encode speed (fps)
+                                 fps_avg     ... encode avg. speed (fps)
+                                 bitrate     ... encode bitrate (kbps)
+                                 bitrate_avg ... encode avg. bitrate (kbps)
+                                 frame_out   ... written_frames
+                                 
+   --perf-monitor-interval <int> set perf monitor check interval (millisec)
+                                 default 500, must be 50 or more
+

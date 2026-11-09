@@ -25,6 +25,8 @@ public static class Program
     public static async Task<int> RunAsync(string[] args, TextWriter output, TimeProvider? timeProvider = null,
         CancellationToken cancellationToken = default)
     {
+        if (CheckHelpCommand.IsRequested(args))
+            return await CheckHelpCommand.RunAsync(args, output, timeProvider ?? TimeProvider.System, cancellationToken).ConfigureAwait(false);
         var watch = Stopwatch.StartNew();
         var result = new CliResult();
         try
@@ -165,23 +167,10 @@ public static class Program
     {
         try
         {
-            using var process = new Process { StartInfo = new ProcessStartInfo(encoder)
-                { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true } };
-            process.StartInfo.ArgumentList.Add("--help");
-            process.Start();
-            using var registration = token.Register(() => { try { if (!process.HasExited) process.Kill(true); } catch (InvalidOperationException) { } });
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5), clock, token).ConfigureAwait(false); }
-            finally
-            {
-                if (!process.HasExited) process.Kill(true);
-                await process.WaitForExitAsync().ConfigureAwait(false);
-                await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
-            }
-            if (process.ExitCode != 0) return new();
-            string help = await stdout.ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(help)) help = await stderr.ConfigureAwait(false);
+            var captured = await HelpProcessCapture.CaptureAsync(HelpProcessCapture.StartInfo(encoder), clock,
+                TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+            if (captured.ExitCode != 0) return new();
+            string help = string.IsNullOrWhiteSpace(captured.StandardOutput) ? captured.StandardError : captured.StandardOutput;
             return CommandBuilder.CapabilitiesFromHelp(new HelpIndex(help));
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
