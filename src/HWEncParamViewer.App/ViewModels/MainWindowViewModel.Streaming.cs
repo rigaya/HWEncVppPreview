@@ -182,13 +182,6 @@ public sealed partial class MainWindowViewModel
             FrameSelector.Duration(frame.Frame, frame.Segment.PhysicalRequest.Fps))).ToArray(), target, fps);
     }
 
-    /// <summary>rollingで番号が変わっても画像の参照で辿り、最新の接続可否だけを引き継ぐ。</summary>
-    internal static PreviewFrameReference? RefreshNavigationAnchor(FrameCache cache, PreviewFrameReference anchor)
-    {
-        var current = anchor.SegmentId > 0 ? cache.GetSegment(anchor.SegmentId) : anchor.Segment;
-        return FindNavigationAnchor(current, anchor);
-    }
-
     private static PreviewFrameReference? FindNavigationAnchor(PreviewSegmentSnapshot? current, PreviewFrameReference anchor)
     {
         if (current != null)

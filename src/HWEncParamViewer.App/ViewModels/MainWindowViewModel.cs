@@ -1228,41 +1228,4 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
-    /// <summary>デザイン確認用のダミー値を入れた ViewModel (スクリーンショット・デザイナー用)。</summary>
-    public static MainWindowViewModel CreateDesignSample()
-    {
-        var vm = new MainWindowViewModel
-        {
-            EncoderPath = @"C:\Encoders\QSVEncC64.exe",
-            EncoderDescription = "QSVEnc 8.35",
-            InputPath = @"X:\Encoders\narnia.ts",
-            CurrentTimeText = "1:29:58.000",
-            CurrentSeconds = 5398,
-            DurationSeconds = 6750,
-            HasDuration = true,
-            DurationText = "1:52:30",
-            BackendModeText = AppMessages.Server,
-            ElapsedText = AppMessages.Elapsed(0.48),
-            InputInfoText = "1440x1080 (SAR 4:3)  29.97fps",
-            StatusText = AppMessages.Done,
-            DisplayWidth = 1920,
-            DisplayHeight = 1080,
-            HelpText =
-                "   --vpp-nlmeans [<param1>=<value>][,<param2>=<value>][...]\n" +
-                "     enable denoise filter by non-local means.\n" +
-                "    params\n" +
-                "      sigma=<float>  sigma (default=0.005, 0.0 -)\n" +
-                "      h=<float>      h (default=0.050, 0.0 <)\n" +
-                "      patch=<int>    patch size (default=5, 3-)\n" +
-                "      search=<int>   search size (default=11, 3-)\n" +
-                "      fp16=<string>  select fp16 usage.\n" +
-                "                       none, blockdiff (default), all\n" +
-                "      d=<int>        temporal radius (default=0, 0-2)\n",
-        };
-        vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.005,h=0.05" });
-        vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-edgelevel strength=10", IsEnabled = false });
-        vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-deband" });
-        vm.SelectedFilterLine = vm.FilterLines[0];
-        return vm;
-    }
 }

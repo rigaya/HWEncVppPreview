@@ -1,6 +1,7 @@
 ﻿using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
+using HWEncParamViewer.App;
 using HWEncParamViewer.App.Services;
 using HWEncParamViewer.App.Localization;
 using HWEncParamViewer.Core;
@@ -25,10 +26,48 @@ AppBuilder.Configure<HWEncParamViewer.App.App>()
     .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })
     .SetupWithoutStarting();
 
+// デザイン確認用のダミー値を入れたViewModel（スクリーンショット・デザイナー用）。
+static MainWindowViewModel CreateDesignSample()
+{
+    var vm = new MainWindowViewModel
+    {
+        EncoderPath = @"C:\Encoders\QSVEncC64.exe",
+        EncoderDescription = "QSVEnc 8.35",
+        InputPath = @"X:\Encoders\narnia.ts",
+        CurrentTimeText = "1:29:58.000",
+        CurrentSeconds = 5398,
+        DurationSeconds = 6750,
+        HasDuration = true,
+        DurationText = "1:52:30",
+        BackendModeText = AppMessages.Server,
+        ElapsedText = AppMessages.Elapsed(0.48),
+        InputInfoText = "1440x1080 (SAR 4:3)  29.97fps",
+        StatusText = AppMessages.Done,
+        DisplayWidth = 1920,
+        DisplayHeight = 1080,
+        HelpText =
+            "   --vpp-nlmeans [<param1>=<value>][,<param2>=<value>][...]\n" +
+            "     enable denoise filter by non-local means.\n" +
+            "    params\n" +
+            "      sigma=<float>  sigma (default=0.005, 0.0 -)\n" +
+            "      h=<float>      h (default=0.050, 0.0 <)\n" +
+            "      patch=<int>    patch size (default=5, 3-)\n" +
+            "      search=<int>   search size (default=11, 3-)\n" +
+            "      fp16=<string>  select fp16 usage.\n" +
+            "                       none, blockdiff (default), all\n" +
+            "      d=<int>        temporal radius (default=0, 0-2)\n",
+    };
+    vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.005,h=0.05" });
+    vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-edgelevel strength=10", IsEnabled = false });
+    vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-deband" });
+    vm.SelectedFilterLine = vm.FilterLines[0];
+    return vm;
+}
+
 void Capture(string name, ThemeVariant theme, Action<MainWindowViewModel> setup, Action<MainWindow>? afterShow = null)
 {
     Application.Current!.RequestedThemeVariant = theme;
-    var vm = MainWindowViewModel.CreateDesignSample();
+    var vm = CreateDesignSample();
     vm.PreviewImage = CreateTestImage(1440, 1080);
     vm.DisplayWidth = 1920;   // SAR 4:3 の 1440x1080 を 16:9 で表示
     vm.DisplayHeight = 1080;
@@ -112,7 +151,7 @@ CaptureForm("dark_form_number_or_choice", ThemeVariant.Dark, ["--vpp-mctf"], 0);
 void CaptureForm(string name, ThemeVariant theme, string[] lines, int selected, bool openAdd = false, bool textMode = false)
 {
     Application.Current!.RequestedThemeVariant = theme;
-    var vm = MainWindowViewModel.CreateDesignSample();
+    var vm = CreateDesignSample();
     vm.PreviewImage = CreateTestImage(1440, 1080);
     vm.FilterLines.Clear();
     typeof(MainWindowViewModel).GetProperty(nameof(MainWindowViewModel.HelpSchema))!
@@ -142,7 +181,7 @@ void CaptureForm(string name, ThemeVariant theme, string[] lines, int selected, 
 void CaptureCompletion(string name, ThemeVariant theme, string text, bool category = false)
 {
     Application.Current!.RequestedThemeVariant = theme;
-    var vm = MainWindowViewModel.CreateDesignSample();
+    var vm = CreateDesignSample();
     vm.PreviewImage = CreateTestImage(1440, 1080);
     // デザイン用の ViewModel はエンコーダを実行しないので、H1 の書式の実 help を直接与える (開発用ツールなのでリフレクションで足りる)
     typeof(MainWindowViewModel).GetProperty(nameof(MainWindowViewModel.HelpSchema))!

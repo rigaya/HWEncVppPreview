@@ -165,7 +165,7 @@ public sealed partial class MainWindowViewModel
     private PreviewRequest BeforeRequest(PreviewRequest afterRequest, long generation) => afterRequest with
     {
         VppArgs = Array.Empty<string>(), CorrelationId = -generation, Continuous = false,
-        SeekSecondsOverride = null, PreMarginSeconds = 2, PostMarginSeconds = BenchmarkPostMargin(),
+        SeekSecondsOverride = null, PreMarginSeconds = 2, PostMarginSeconds = 0.5,
     };
 
     private void QueueConcurrentBefore(PreviewRequest afterRequest, long generation)
@@ -180,7 +180,7 @@ public sealed partial class MainWindowViewModel
     private void QueueBefore(PreviewRequest afterRequest, long generation, double? cachedTarget = null, PreviewRequest? recoveryRequest = null)
     {
         if (!IsCurrent(generation)) return;
-        if (!_beforeEnabled || PerfTrace.Enabled && Environment.GetEnvironmentVariable("HWENC_VIEWER_BENCH_DISABLE_BEFORE") == "1")
+        if (!_beforeEnabled)
         {
             if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.before.disabled", new { generation });
             BeforeUnavailableForDuration();

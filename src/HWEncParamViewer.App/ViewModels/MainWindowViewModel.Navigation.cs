@@ -135,9 +135,8 @@ public sealed partial class MainWindowViewModel
                         InputFormatHint = new Y4mHeader { Width = info.Width, Height = info.Height,
                             FpsNum = info.FpsNum, FpsDen = info.FpsDen, Chroma = info.Chroma,
                             BitDepth = info.BitDepth, ColorSpaceTag = info.ColorSpaceTag },
-                        // 計測時だけ後マージンを切り替え、通常の要求値は維持する。
                         PostMarginSeconds = capabilities.TimestampPassthrough && info.TimestampOriginSeconds.HasValue
-                            ? actualReverse ? 0.5 : BenchmarkPostMargin() + 0.5 : BenchmarkPostMargin(),
+                            ? actualReverse ? 0.5 : 1.0 : 0.5,
                         // 絶対時計の逆方向は、暖機2秒を除いても手前3秒を表示できる物理窓にする。
                         // 順方向の論理2秒はCoreで物理3秒へ広げ、legacyの逆方向3秒は維持する。
                         PreMarginSeconds = actualReverse
@@ -504,12 +503,6 @@ public sealed partial class MainWindowViewModel
 
     private double FrameSeconds(PreviewRequest request, Y4mFrame frame, int index) =>
         IntervalClock(request, _intervalFrames).ToInputSeconds(frame, index, request.Fps);
-
-    // 比較計測を明示した場合だけ既定マージンを上書きする。
-    private static double BenchmarkPostMargin() => PerfTrace.Enabled &&
-        double.TryParse(Environment.GetEnvironmentVariable("HWENC_VIEWER_BENCH_POST_MARGIN"),
-            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double seconds)
-        && double.IsFinite(seconds) && seconds >= 0 ? seconds : 0.5;
 
     private sealed record NeighborIntent(long Generation, int Direction);
 

@@ -36,8 +36,7 @@ public sealed class NavigationBenchmarkTests
         try
         {
             PerfTrace.Write("bench.prepare", new { scenario, filter, encoder, input,
-                before = Environment.GetEnvironmentVariable("HWENC_VIEWER_BENCH_DISABLE_BEFORE") != "1",
-                postMargin = Environment.GetEnvironmentVariable("HWENC_VIEWER_BENCH_POST_MARGIN") ?? "0.5" });
+                before = true, postMargin = "0.5" });
             await vm.InitializeAsync(false).WaitAsync(TimeSpan.FromSeconds(90));
             await vm.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(90));
             Assert.Null(vm.ErrorText);

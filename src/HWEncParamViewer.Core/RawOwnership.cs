@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace HWEncParamViewer.Core;
 
-// frame単位経路の規則。既存の全列取得は後続の入口patchでこの形へ移す。
+// frame単位経路の規則。
 // cache/有限sink/例外窓──所属参照──→frameowner←──長期参照──表示/作業/UI待機/anchor
 // snapshot/候補/通知──metadataだけで選択──→画素を読む1枚だけ取得して処理へ渡す
 // 生存するcacheのgate内、producerのcallback、長期所有中は通常Retainを使う。
