@@ -10,6 +10,10 @@
 
 アプリを開いたら、確認したい入力ファイルをドラッグドロップで開きます。
 
+エンコーダが未指定なら、本体と同じフォルダを探します。候補の順はWindowsでQSVEncC64.exe、NVEncC64.exe、VCEEncC64.exe、Linuxでqsvencc、nvencc、vceencc、rkmppencです。同じフォルダに見つからない場合、LinuxだけはPATHの絶対パス要素を同じ候補順で探します。空要素と相対フォルダは探しません。Linuxでは実行権限のあるファイルだけを選びます。Windowsの32bit版は候補にしません。
+
+自動で選んだ経路には「自動選択」と表示し、設定へは保存せず次回の起動で探し直します。利用者が指定した経路がある場合はそれを優先し、ファイルがなくても別のエンコーダへ切り替えません。見つかった候補がGPUに対応しない場合は、利用者がエンコーダを選び直してください。起動時の探索ではGPUの検査は行いません。
+
 <img src="./data/HWEncParamViewer_20261107_01.jpg" width="480">
 
 右側で有効にしたいフィルタを追加して、パラメータ調整して効き具合を確認してください。
@@ -39,5 +43,8 @@ dotnet run --project src/HWEncParamViewer.App/HWEncParamViewer.App.csproj -c Rel
 ```
 
 
-## ソースコードについて
-- MITライセンスです。
+## 版とライセンス
+
+版はウィンドウのタイトルと`--version`で確認できます。開発時の定義は`Directory.Build.props`にあり、`scripts/get-version.sh`でも同じ文字列を取得できます。
+
+ソースコードは[MITライセンス](LICENSE)です。依存ライブラリの著作権とライセンス本文は、リポジトリの[THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)に記載しています。

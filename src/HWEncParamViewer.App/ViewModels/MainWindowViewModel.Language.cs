@@ -18,6 +18,7 @@ public sealed partial class MainWindowViewModel
         {
             if (_disposed) return;
             OnPropertyChanged(nameof(Language));
+            OnPropertyChanged(nameof(EncoderDescription));
             foreach (var line in FilterLines) line.RefreshLanguage();
             RefreshFilterCatalog();
             RefreshColorInfo();

@@ -9,6 +9,8 @@
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <AssemblyName>HWEncParamViewer</AssemblyName>
     <RootNamespace>HWEncParamViewer.App</RootNamespace>
+    <Copyright>Copyright (c) 2026 rigaya</Copyright>
+    <Product>HWEncParamViewer</Product>
   </PropertyGroup>
 
   <ItemGroup>

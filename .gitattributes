@@ -9,3 +9,4 @@
 *.y4m binary
 *.axaml text eol=crlf
 *.txt text eol=crlf
+*.sh text eol=lf

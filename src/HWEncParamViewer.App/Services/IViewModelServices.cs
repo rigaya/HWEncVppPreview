@@ -11,6 +11,8 @@ namespace HWEncParamViewer.App.Services;
 public interface IViewModelServices
 {
     string SettingsPath { get; }
+    /// <summary>探索を実装しないサービスでは見つからない扱いにし、試験が実機のエンコーダへ依存しないようにする。</summary>
+    string? FindEncoder() => null;
     Task<string?> BrowseEncoderAsync();
     Task<string?> BrowseInputAsync();
     Task<string?> ChooseSaveFiltersAsync();
@@ -22,6 +24,7 @@ public interface IViewModelServices
 public sealed class AvaloniaViewModelServices : IViewModelServices
 {
     public string SettingsPath => AppSettings.DefaultPath;
+    public string? FindEncoder() => EncoderDiscoveryEnvironment.Find();
     private static Window? Window => (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
     public Task<string?> BrowseEncoderAsync() => OpenAsync(AppMessages.SelectEncoder);
     public Task<string?> BrowseInputAsync() => OpenAsync(AppMessages.SelectInput);

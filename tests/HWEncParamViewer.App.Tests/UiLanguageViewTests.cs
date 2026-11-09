@@ -42,7 +42,7 @@ VPP Options:
             window = new MainWindow { DataContext = vm, Width = 1440, Height = 900 };
             window.Show();
             await Flush();
-            Assert.Equal("HWEnc パラメータビューワー", window.Title);
+            Assert.Equal("HWEnc パラメータビューワー " + ApplicationVersion.Value, window.Title);
             Assert.Equal("＋ フィルタを追加", window.FindControl<Button>("AddFilterButton")!.Content);
             var selector = window.FindControl<ComboBox>("LanguageSelector")!;
             Assert.Equal(1, selector.SelectedIndex);
@@ -52,7 +52,7 @@ VPP Options:
             await Flush();
             Assert.Equal("en", vm.Language);
             Assert.NotSame(oldText, Localizer.Instance.Text);
-            Assert.Equal("HWEnc Parameter Viewer", window.Title);
+            Assert.Equal("HWEnc Parameter Viewer " + ApplicationVersion.Value, window.Title);
             Assert.Equal("+ Add filter", window.FindControl<Button>("AddFilterButton")!.Content);
             Assert.Equal("Denoise", line.CategoryName);
             Assert.Equal("Denoise", vm.FilterCatalog[0].CategoryName);
@@ -65,7 +65,7 @@ VPP Options:
             vm.Language = "ja";
             await Flush();
             Assert.Equal(1, selector.SelectedIndex);
-            Assert.Equal("HWEnc パラメータビューワー", window.Title);
+            Assert.Equal("HWEnc パラメータビューワー " + ApplicationVersion.Value, window.Title);
             Assert.Equal("ノイズ除去", line.CategoryName);
             Assert.Equal("--vpp-alpha sigma=0.25", line.Text);
         }

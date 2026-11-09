@@ -21,6 +21,7 @@ namespace HWEncParamViewer.App.ViewModels;
 public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 {
     private string _encoderPath = "", _inputPath = "", _encoderDescription = "", _inputArgsText = "--avhw";
+    private bool _isEncoderPathAutomatic;
     private FilterLineViewModel? _selectedFilterLine;
     private string _helpText = "";
     private Bitmap? _previewImage;
@@ -163,6 +164,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             _suspendChanges = false;
             OnPropertyChanged(nameof(CurrentSeconds));
         }
+        if (EncoderPath.Length == 0 && _services.FindEncoder() is { Length: > 0 } automaticPath)
+            SetEncoderPath(automaticPath, automatic: true);
         _initialized = true;
         await QueuePreview(bypassDebounce: true);
     }
@@ -190,7 +193,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         WindowHeight = height;
         var settings = new AppSettings
         {
-            EncoderPath = EncoderPath, InputPath = InputPath, InputArgsText = InputArgsText,
+            // 自動取得した経路は持ち運べる設定ではないため、次回起動時に探し直す。
+            EncoderPath = _isEncoderPathAutomatic ? "" : EncoderPath, InputPath = InputPath, InputArgsText = InputArgsText,
             FilterLines = FilterLines.Select(line => new FilterSetting(line.Text, line.IsEnabled)).ToArray(),
             WindowWidth = width, WindowHeight = height, CurrentSeconds = CurrentSeconds, IsTextListMode = IsTextListMode, Language = Language, HdrReferenceWhiteNits = HdrReferenceWhiteNits,
         };
@@ -198,10 +202,40 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         catch (Exception exception) { await PostAsync(() => ShowError(AppMessages.SaveSettingsFailed, exception.Message)).ConfigureAwait(false); }
     }
 
-    public string EncoderPath { get => _encoderPath; set { if (SetProperty(ref _encoderPath, value ?? "")) { CancelEncoderInitialization(); EncoderDescription = ""; _metadataEncoder = ""; _helpIndex = new HelpIndex(""); _capabilities = new(); HelpSchema = null; HelpText = ""; InputChanged(); } } }
+    public string EncoderPath { get => _encoderPath; set => SetEncoderPath(value ?? "", automatic: false); }
+    /// <summary>自動で選んだ経路か。表示は使える経路を保ち、保存は利用者の明示指定だけにする。</summary>
+    public bool IsEncoderPathAutomatic => _isEncoderPathAutomatic;
+
+    private void SetEncoderPath(string value, bool automatic)
+    {
+        // 同じ経路を利用者が選び直した場合も、明示指定として保存できるようにする。
+        if (_isEncoderPathAutomatic != automatic)
+        {
+            _isEncoderPathAutomatic = automatic;
+            OnPropertyChanged(nameof(IsEncoderPathAutomatic));
+            OnPropertyChanged(nameof(EncoderDescription));
+        }
+        if (SetProperty(ref _encoderPath, value, nameof(EncoderPath)))
+        {
+            CancelEncoderInitialization();
+            EncoderDescription = "";
+            _metadataEncoder = "";
+            _helpIndex = new HelpIndex("");
+            _capabilities = new();
+            HelpSchema = null;
+            HelpText = "";
+            InputChanged();
+        }
+    }
     public string InputPath { get => _inputPath; set { if (SetProperty(ref _inputPath, value ?? "")) InputChanged(); } }
     /// <summary>例: "QSVEnc 8.35"。</summary>
-    public string EncoderDescription { get => _encoderDescription; set => SetProperty(ref _encoderDescription, value); }
+    public string EncoderDescription
+    {
+        get => _isEncoderPathAutomatic
+            ? (_encoderDescription.Length == 0 ? AppMessages.AutomaticallySelected : _encoderDescription + " (" + AppMessages.AutomaticallySelected + ")")
+            : _encoderDescription;
+        set => SetProperty(ref _encoderDescription, value);
+    }
     public string InputArgsText { get => _inputArgsText; set { if (SetProperty(ref _inputArgsText, value ?? "")) InputChanged(); } }
 
     public ObservableCollection<FilterLineViewModel> FilterLines { get; } = new();
@@ -921,11 +955,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private static string DescribeEncoder(string version, string encoder)
     {
         string first = version.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? Path.GetFileName(encoder);
-        var match = Regex.Match(first, @"\b(NVEncC?|QSVEncC?|VCEEncC?)\b.*?\b(\d+\.\d+(?:\.\d+)?)\b", RegexOptions.CultureInvariant);
+        var match = Regex.Match(first, @"\b(NVEncC?|QSVEncC?|VCEEncC?|rkmppenc)\b.*?\b(\d+\.\d+(?:\.\d+)?)\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
         if (match.Success)
         {
             string name = match.Groups[1].Value;
-            if (name.EndsWith('C')) name = name[..^1];
+            if (name.Equals("rkmppenc", StringComparison.OrdinalIgnoreCase)) name = "rkmppenc";
+            else if (name.EndsWith("C", StringComparison.OrdinalIgnoreCase)) name = name[..^1];
             return name + " " + match.Groups[2].Value;
         }
         return first.Length > 48 ? first[..48] + "…" : first;

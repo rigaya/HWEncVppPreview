@@ -28,6 +28,7 @@ public static class AppMessages
     public static string SelectInput => T("入力ファイルを選択", "Select input file");
     public static string LoadFilters => T("フィルタのテキストを読み込み", "Load filter text");
     public static string SaveFilters => T("フィルタのテキストを保存", "Save filter text");
+    public static string AutomaticallySelected => T("自動選択", "Automatically selected");
     public static string Automatic => T("自動", "Auto");
     public static string CommaUnavailable => T("値にカンマは使えません。エンコーダがパラメータの区切りとして扱います。", "Commas cannot be used in values; the encoder treats them as separators.");
     public static string SchemaUnavailable => T("helpのスキーマを取得していません。テキストで編集してください。", "Help schema is unavailable. Edit the text instead.");

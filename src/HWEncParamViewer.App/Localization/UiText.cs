@@ -8,7 +8,7 @@ public sealed class UiText
     private readonly bool _japanese = UiLanguage.Current == "ja";
     private string T(string japanese, string english) => _japanese ? japanese : english;
 
-    public string WindowTitle => T("HWEnc パラメータビューワー", "HWEnc Parameter Viewer");
+    public string WindowTitle => T("HWEnc パラメータビューワー", "HWEnc Parameter Viewer") + " " + ApplicationVersion.Value;
     public string Encoder => T("エンコーダ", "Encoder");
     public string BrowseEncoder => T("エンコーダを選択", "Choose encoder");
     public string Input => T("入力", "Input");

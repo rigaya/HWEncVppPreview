@@ -1,0 +1,13 @@
+﻿<Project>
+  <PropertyGroup>
+    <!-- 表示する版は文字列で保持する。数値化すると小数点以下の先頭の零が消えるため、画面には使わない。 -->
+    <HWEncParamViewerVersion>0.01</HWEncParamViewerVersion>
+    <Version>$(HWEncParamViewerVersion)</Version>
+    <InformationalVersion>$(HWEncParamViewerVersion)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- アセンブリとファイルの版だけは整数へ直し、Windowsの版情報の制約に合わせる。 -->
+    <_HWEncParamViewerNumericVersion>$([System.Version]::Parse('$(HWEncParamViewerVersion)'))</_HWEncParamViewerNumericVersion>
+    <AssemblyVersion>$(_HWEncParamViewerNumericVersion).0.0</AssemblyVersion>
+    <FileVersion>$(AssemblyVersion)</FileVersion>
+  </PropertyGroup>
+</Project>
