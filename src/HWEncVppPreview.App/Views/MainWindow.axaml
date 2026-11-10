@@ -1,0 +1,523 @@
+﻿<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HWEncVppPreview.App.ViewModels"
+        xmlns:ctrl="using:HWEncVppPreview.App.Controls"
+        xmlns:views="using:HWEncVppPreview.App.Views"
+        xmlns:loc="using:HWEncVppPreview.App.Localization"
+        x:Class="HWEncVppPreview.App.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="{Binding Text.WindowTitle, Source={x:Static loc:Localizer.Instance}}"
+        Width="1440" Height="900" MinWidth="960" MinHeight="600"
+        WindowStartupLocation="CenterScreen">
+
+  <Window.Resources>
+    <!-- パラメータの欄1つ分。よく使うものとその他の2つの一覧で使う -->
+    <DataTemplate x:Key="ParameterTemplate" x:DataType="vm:FilterParameterViewModel">
+      <Grid ColumnDefinitions="128,*,Auto" RowDefinitions="Auto,Auto,Auto" Margin="0,3">
+        <TextBlock Grid.Column="0" Classes="paramName" Classes.set="{Binding IsSet}" Text="{Binding Name}"
+                   ToolTip.Tip="{Binding Description}" TextTrimming="CharacterEllipsis" />
+
+        <!-- 欄の種類は Kind で切り替える (23.3) -->
+        <Panel Grid.Column="1">
+          <Grid ColumnDefinitions="*,88"
+                IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Slider}}">
+            <!-- 値は ViewModel から一方向。利用者の操作だけを code-behind で書き戻す (初期化時の補正で行を書き換えないため) -->
+            <Slider Grid.Column="0" Classes="param" Minimum="{Binding Minimum, FallbackValue=0}"
+                    Maximum="{Binding Maximum, FallbackValue=1}" SmallChange="{Binding Step}"
+                    LargeChange="{Binding Step}" TickFrequency="{Binding Step}" IsSnapToTickEnabled="True"
+                    Value="{Binding NumberValue, Mode=OneWay}" />
+            <TextBox Grid.Column="1" Classes="mono paramValue number" Margin="6,0,0,0"
+                     Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}" />
+          </Grid>
+          <TextBox Classes="mono paramValue number" Width="140" HorizontalAlignment="Left"
+                   Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}"
+                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Number}}" />
+          <!--
+            語と数値の両方を取るもの (int|auto|off など): 語ごとのボタンと「数値」のボタンから1つを選ぶ。
+            数値の欄は「数値」を選んでいるときだけ使える (語と数値を同時に指定できるように見せない)
+          -->
+          <StackPanel Orientation="Horizontal" Spacing="6"
+                      IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.NumberOrChoice}}">
+            <Border Classes="segGroup">
+              <StackPanel Orientation="Horizontal">
+                <ItemsControl ItemsSource="{Binding Words}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <StackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ChoiceOptionViewModel">
+                      <Button Classes="seg" Classes.active="{Binding IsSelected}" Content="{Binding Text}"
+                              Command="{Binding SelectCommand}" />
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Button Classes="seg" Classes.active="{Binding IsNumberSelected}" Content="{Binding Text.Number, Source={x:Static loc:Localizer.Instance}}"
+                        Command="{Binding SelectNumberCommand}" Click="NumberChoice_Click" />
+              </StackPanel>
+            </Border>
+            <TextBox Classes="mono paramValue number numberChoice" Width="110"
+                     Text="{Binding NumberText}" PlaceholderText="{Binding NumberPlaceholder}"
+                     IsEnabled="{Binding IsNumberSelected}" LostFocus="NumberChoice_LostFocus" />
+          </StackPanel>
+          <ComboBox Classes="param" MinWidth="180" ItemsSource="{Binding Choices}" SelectedItem="{Binding ChoiceValue}"
+                    IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Choice}}" />
+          <StackPanel Orientation="Horizontal" Spacing="6"
+                      IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.FromTo}}">
+            <ComboBox Classes="param" MinWidth="120" ItemsSource="{Binding FromChoices}" SelectedItem="{Binding FromValue}" />
+            <TextBlock Classes="subtle" Text="→" VerticalAlignment="Center" />
+            <ComboBox Classes="param" MinWidth="120" ItemsSource="{Binding ToChoices}" SelectedItem="{Binding ToValue}" />
+          </StackPanel>
+          <ToggleSwitch Classes="param" IsChecked="{Binding BoolValue}" OnContent="true" OffContent="false"
+                        IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Bool}}" />
+          <Grid ColumnDefinitions="*,Auto"
+                IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Path}}">
+            <TextBox Grid.Column="0" Classes="mono paramValue" Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}" />
+            <Button Grid.Column="1" Classes="icon" Content="…" Margin="4,0,0,0" Click="ParameterBrowse_Click"
+                    ToolTip.Tip="{Binding Text.BrowseFile, Source={x:Static loc:Localizer.Instance}}" />
+          </Grid>
+          <TextBox Classes="mono paramValue" Text="{Binding ValueText}" PlaceholderText="{Binding DefaultText}"
+                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:FilterParameterKind.Text}}" />
+        </Panel>
+
+        <!-- 書かれていないときも場所は空けておく (出たり消えたりで欄の幅が変わらないように) -->
+        <Button Grid.Column="2" Classes="icon flat reset" Content="↺" Margin="4,0,0,0" Command="{Binding ResetCommand}"
+                IsEnabled="{Binding IsSet}" ToolTip.Tip="{Binding Text.ResetHint, Source={x:Static loc:Localizer.Instance}}" />
+
+        <!-- 既定値と説明 -->
+        <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" ColumnDefinitions="Auto,*" Margin="0,1,0,0">
+          <TextBlock Grid.Column="0" Classes="paramDesc" Margin="0,0,10,0"
+                     IsVisible="{Binding DefaultText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <TextBlock.Text>
+              <MultiBinding StringFormat="{}{0} {1}">
+                <Binding Path="Text.DefaultLabel" Source="{x:Static loc:Localizer.Instance}" />
+                <Binding Path="DefaultText" />
+              </MultiBinding>
+            </TextBlock.Text>
+          </TextBlock>
+          <TextBlock Grid.Column="1" Classes="paramDesc" Text="{Binding Description}" ToolTip.Tip="{Binding Description}" />
+        </Grid>
+        <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Classes="paramError" Text="{Binding ValidationMessage}"
+                   IsVisible="{Binding ValidationMessage, Converter={x:Static ObjectConverters.IsNotNull}}" />
+        <!-- 効く条件 (help の when:) を満たさないのに行に書かれているもの -->
+        <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Classes="paramError" Text="{Binding Text.InactiveParameter, Source={x:Static loc:Localizer.Instance}}"
+                   IsVisible="{Binding IsInactive}" />
+      </Grid>
+    </DataTemplate>
+  </Window.Resources>
+
+  <Window.KeyBindings>
+    <KeyBinding Gesture="F5" Command="{Binding RefreshCommand}" />
+    <KeyBinding Gesture="Ctrl+S" Command="{Binding SaveFiltersCommand}" />
+    <KeyBinding Gesture="Ctrl+O" Command="{Binding LoadFiltersCommand}" />
+  </Window.KeyBindings>
+
+  <Grid RowDefinitions="Auto,*,Auto,Auto">
+
+    <!-- ツールバー: エンコーダと入力 -->
+    <Border Grid.Row="0" Background="{DynamicResource BarBackgroundBrush}"
+            BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1" Padding="10,8">
+      <Grid ColumnDefinitions="Auto,2*,Auto,Auto,Auto,Auto,3*,Auto">
+        <TextBlock Grid.Column="0" Classes="header" Text="{Binding Text.Encoder, Source={x:Static loc:Localizer.Instance}}" Margin="0,0,8,0" />
+        <!-- エンコーダ欄・入力欄・表示領域はファイルのドロップを受け付ける (設計書 19.4) -->
+        <TextBox Grid.Column="1" x:Name="EncoderBox" Classes="mono" Text="{Binding EncoderPath}" DragDrop.AllowDrop="True"
+                 PlaceholderText="QSVEncC64.exe / NVEncC64.exe / VCEEncC64.exe" />
+        <Button Grid.Column="2" Classes="icon" Content="…" Margin="4,0,0,0"
+                Command="{Binding BrowseEncoderCommand}" ToolTip.Tip="{Binding Text.BrowseEncoder, Source={x:Static loc:Localizer.Instance}}" />
+        <TextBlock Grid.Column="3" Classes="subtle" Text="{Binding EncoderDescription}" Margin="10,0,20,0" />
+        <TextBlock Grid.Column="5" Classes="header" Text="{Binding Text.Input, Source={x:Static loc:Localizer.Instance}}" Margin="0,0,8,0" />
+        <TextBox Grid.Column="6" x:Name="InputBox" Classes="mono" Text="{Binding InputPath}" DragDrop.AllowDrop="True"
+                 PlaceholderText="{Binding Text.InputFile, Source={x:Static loc:Localizer.Instance}}" />
+        <Button Grid.Column="7" Classes="icon" Content="…" Margin="4,0,0,0"
+                Command="{Binding BrowseInputCommand}" ToolTip.Tip="{Binding Text.BrowseInput, Source={x:Static loc:Localizer.Instance}}" />
+      </Grid>
+    </Border>
+
+    <!-- 本体: 左にプレビュー、右にフィルタ編集とヘルプ -->
+    <Grid Grid.Row="1" ColumnDefinitions="*,Auto,560">
+
+      <!-- 左: プレビューとシーク -->
+      <Grid Grid.Column="0" RowDefinitions="*,Auto">
+        <Border Grid.Row="0" x:Name="PreviewArea" Background="{StaticResource PreviewBackgroundBrush}" ClipToBounds="True"
+                DragDrop.AllowDrop="True">
+          <Panel>
+            <!--
+              単一・切替・分割は MainViewer 1つで表示する。並べて表示は左右2つのビューアで、拡大・パンを共有する。
+              2枚とも「フィルタ後の表示サイズ (SAR 考慮後)」の矩形に描くので、解像度が変わるフィルタでも位置がそろう。
+            -->
+            <ctrl:ZoomPanViewer x:Name="MainViewer"
+                                IsVisible="{Binding CompareMode, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:PreviewCompareMode.SideBySide}}"
+                                AfterSource="{Binding PreviewImage}" BeforeSource="{Binding BeforeImage}"
+                                ContentWidth="{Binding DisplayWidth}" ContentHeight="{Binding DisplayHeight}"
+                                ShowBefore="{Binding IsShowingBefore}"
+                                IsSplit="{Binding CompareMode, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PreviewCompareMode.Split}}"
+                                SplitPosition="{Binding SplitPosition}" />
+            <Grid ColumnDefinitions="*,2,*"
+                  IsVisible="{Binding CompareMode, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PreviewCompareMode.SideBySide}}">
+              <ctrl:ZoomPanViewer Grid.Column="0" x:Name="BeforeViewer" CornerLabel="{Binding Text.Before, Source={x:Static loc:Localizer.Instance}}" ShowBefore="True"
+                                  BeforeSource="{Binding BeforeImage}"
+                                  ContentWidth="{Binding DisplayWidth}" ContentHeight="{Binding DisplayHeight}"
+                                  Zoom="{Binding #MainViewer.Zoom, Mode=TwoWay}" />
+              <Border Grid.Column="1" Background="{DynamicResource DividerBrush}" />
+              <ctrl:ZoomPanViewer Grid.Column="2" x:Name="AfterViewer" CornerLabel="{Binding Text.After, Source={x:Static loc:Localizer.Instance}}"
+                                  AfterSource="{Binding PreviewImage}"
+                                  ContentWidth="{Binding DisplayWidth}" ContentHeight="{Binding DisplayHeight}"
+                                  Zoom="{Binding #MainViewer.Zoom, Mode=TwoWay}" />
+            </Grid>
+
+            <TextBlock Text="{Binding Text.ChooseInputHint, Source={x:Static loc:Localizer.Instance}}"
+                       Foreground="{StaticResource PreviewPlaceholderBrush}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
+                       IsVisible="{Binding PreviewImage, Converter={x:Static ObjectConverters.IsNull}}" />
+
+            <!-- エラー: 上端に帯で表示 (画像の中央は隠さない) -->
+            <Border VerticalAlignment="Top" Background="{StaticResource ErrorBackgroundBrush}" Padding="12,8"
+                    IsVisible="{Binding ErrorText, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <SelectableTextBlock Text="{Binding ErrorText}" Foreground="{StaticResource ErrorTextBrush}"
+                                   FontFamily="{StaticResource MonoFont}" FontSize="12" TextWrapping="Wrap"
+                                   MaxHeight="160" />
+            </Border>
+
+            <!-- 状態: 右下に小さく重ねる (直前の画像は表示したまま) -->
+            <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom" Orientation="Horizontal" IsHitTestVisible="False">
+              <Border Classes="overlay" IsVisible="{Binding IsShowingBefore}">
+                <TextBlock Text="{Binding Text.BeforeFilter, Source={x:Static loc:Localizer.Instance}}" Foreground="{StaticResource OverlayTextBrush}" FontSize="12" />
+              </Border>
+              <Border Classes="overlay" IsVisible="{Binding IsBeforeBusy}">
+                <TextBlock Text="{Binding Text.LoadingBefore, Source={x:Static loc:Localizer.Instance}}" Foreground="{StaticResource OverlayTextBrush}" FontSize="12" />
+              </Border>
+              <Border Classes="overlay" IsVisible="{Binding IsBusy}">
+                <TextBlock Text="{Binding Text.Processing, Source={x:Static loc:Localizer.Instance}}" Foreground="{StaticResource OverlayTextBrush}" FontSize="12" />
+              </Border>
+            </StackPanel>
+          </Panel>
+        </Border>
+
+        <!-- シーク操作 -->
+        <Border Grid.Row="1" Background="{DynamicResource PaneBackgroundBrush}"
+                BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,1,0,0" Padding="10,6">
+          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto">
+            <Button Grid.Column="0" Classes="icon flat" Content="⏮" Command="{Binding GoToStartCommand}" ToolTip.Tip="{Binding Text.GoToStart, Source={x:Static loc:Localizer.Instance}}" />
+            <Button Grid.Column="1" Classes="icon flat" Content="◀" Command="{Binding StepFrameCommand}"
+                    CommandParameter="-1" ToolTip.Tip="{Binding Text.PreviousFrame, Source={x:Static loc:Localizer.Instance}}" />
+            <TextBox Grid.Column="2" x:Name="TimeBox" Classes="mono" Width="120" Margin="4,0" VerticalAlignment="Center"
+                     HorizontalContentAlignment="Center" Text="{Binding CurrentTimeText}"
+                     ToolTip.Tip="{Binding Text.TimeHint, Source={x:Static loc:Localizer.Instance}}" />
+            <Button Grid.Column="3" Classes="icon flat" Content="▶" Command="{Binding StepFrameCommand}"
+                    CommandParameter="1" ToolTip.Tip="{Binding Text.NextFrame, Source={x:Static loc:Localizer.Instance}}" />
+            <Button Grid.Column="4" Classes="icon flat" Content="⏭" Command="{Binding GoToEndCommand}" ToolTip.Tip="{Binding Text.GoToEnd, Source={x:Static loc:Localizer.Instance}}" />
+            <Slider Grid.Column="5" x:Name="SeekBar" Margin="12,0" VerticalAlignment="Center"
+                    Minimum="0" Maximum="{Binding DurationSeconds}" Value="{Binding CurrentSeconds}"
+                    IsVisible="{Binding HasDuration}" />
+            <TextBlock Grid.Column="6" Classes="subtle" FontFamily="{StaticResource MonoFont}"
+                       Text="{Binding DurationText}" IsVisible="{Binding HasDuration}" />
+
+            <!-- 表示モード (設計書 18.2)。切替モードは単一表示で Space を押している間 -->
+            <StackPanel Grid.Column="7" Orientation="Horizontal" Margin="16,0,0,0" Spacing="0">
+              <Button Classes="seg first" Content="{Binding Text.Single, Source={x:Static loc:Localizer.Instance}}" ToolTip.Tip="{Binding Text.SingleHint, Source={x:Static loc:Localizer.Instance}}"
+                      Classes.active="{Binding CompareMode, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PreviewCompareMode.Single}}"
+                      Command="{Binding SetCompareModeCommand}" CommandParameter="{x:Static vm:PreviewCompareMode.Single}" />
+              <Button Classes="seg" Content="{Binding Text.Split, Source={x:Static loc:Localizer.Instance}}" ToolTip.Tip="{Binding Text.SplitHint, Source={x:Static loc:Localizer.Instance}}"
+                      Classes.active="{Binding CompareMode, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PreviewCompareMode.Split}}"
+                      Command="{Binding SetCompareModeCommand}" CommandParameter="{x:Static vm:PreviewCompareMode.Split}" />
+              <Button Classes="seg last" Content="{Binding Text.SideBySide, Source={x:Static loc:Localizer.Instance}}" ToolTip.Tip="{Binding Text.SideBySideHint, Source={x:Static loc:Localizer.Instance}}"
+                      Classes.active="{Binding CompareMode, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PreviewCompareMode.SideBySide}}"
+                      Command="{Binding SetCompareModeCommand}" CommandParameter="{x:Static vm:PreviewCompareMode.SideBySide}" />
+            </StackPanel>
+
+            <!-- 拡大率。クリックでウィンドウに合わせる (0)、右の 1:1 で等倍 (Ctrl+0) -->
+            <StackPanel Grid.Column="8" Orientation="Horizontal" Margin="12,0,0,0" Spacing="2">
+              <Button Classes="small flat" x:Name="ZoomFitButton" MinWidth="56" FontFamily="{StaticResource MonoFont}"
+                      ToolTip.Tip="{Binding Text.ZoomFitHint, Source={x:Static loc:Localizer.Instance}}" />
+              <Button Classes="small flat" x:Name="ZoomActualButton" Content="1:1" ToolTip.Tip="{Binding Text.ActualSizeHint, Source={x:Static loc:Localizer.Instance}}" />
+            </StackPanel>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <GridSplitter Grid.Column="1" Width="4" ResizeDirection="Columns" />
+
+      <!-- 右: フィルタの一覧と、選んだフィルタのフォーム (設計書 23.2) -->
+      <Grid Grid.Column="2" RowDefinitions="Auto,*,Auto,1.6*,Auto" Background="{DynamicResource PaneBackgroundBrush}">
+
+        <!-- 見出しと操作 -->
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="10,8,10,4">
+          <TextBlock Grid.Column="0" Classes="header" Text="{Binding Text.Filters, Source={x:Static loc:Localizer.Instance}}" />
+          <Button Grid.Column="1" x:Name="AddFilterButton" Classes="small" Content="{Binding Text.AddFilter, Source={x:Static loc:Localizer.Instance}}" Margin="0,0,8,0"
+                  IsEnabled="{Binding HelpSchema, Converter={x:Static ObjectConverters.IsNotNull}}"
+                  ToolTip.Tip="{Binding Text.AddFilterHint, Source={x:Static loc:Localizer.Instance}}">
+            <Button.Flyout>
+              <Flyout Placement="BottomEdgeAlignedRight">
+                <!-- Flyout の中は DataContext が継承されないことがあるので、Items は code-behind で渡す -->
+                <views:FilterCatalogView x:Name="FlyoutCatalog" Width="460" Height="440" />
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+          <ToggleButton Grid.Column="2" Classes="small" Content="{Binding Text.TextMode, Source={x:Static loc:Localizer.Instance}}" Margin="0,0,8,0" IsChecked="{Binding IsTextListMode}"
+                        ToolTip.Tip="{Binding Text.TextModeHint, Source={x:Static loc:Localizer.Instance}}" />
+          <Button Grid.Column="3" Classes="small" Content="{Binding Text.Load, Source={x:Static loc:Localizer.Instance}}" Margin="0,0,4,0"
+                  Command="{Binding LoadFiltersCommand}" ToolTip.Tip="{Binding Text.LoadHint, Source={x:Static loc:Localizer.Instance}}" />
+          <Button Grid.Column="4" Classes="small" Content="{Binding Text.Save, Source={x:Static loc:Localizer.Instance}}"
+                  Command="{Binding SaveFiltersCommand}" ToolTip.Tip="{Binding Text.SaveHint, Source={x:Static loc:Localizer.Instance}}" />
+        </Grid>
+
+        <Panel Grid.Row="1">
+          <!-- 一覧: 名前・分類・変えた値の要約 -->
+          <ListBox x:Name="FilterList" Classes="filters" Margin="10,0"
+                   ItemsSource="{Binding FilterLines}" SelectedItem="{Binding SelectedFilterLine}"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.IsVisible>
+              <MultiBinding Converter="{x:Static BoolConverters.And}">
+                <Binding Path="!IsTextListMode" />
+                <Binding Path="!!FilterLines.Count" />
+              </MultiBinding>
+            </ListBox.IsVisible>
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:FilterLineViewModel">
+                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
+                  <CheckBox Grid.Column="0" Grid.RowSpan="2" IsChecked="{Binding IsEnabled}" MinWidth="0" Margin="0,0,6,0"
+                            VerticalAlignment="Center" ToolTip.Tip="{Binding Text.EnableDisable, Source={x:Static loc:Localizer.Instance}}" />
+                  <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal" Spacing="8">
+                    <TextBlock Classes="filterName" Text="{Binding DisplayName}" />
+                    <TextBlock Classes="filterName subtle" Text="{Binding Text.EmptyLine, Source={x:Static loc:Localizer.Instance}}"
+                               IsVisible="{Binding DisplayName, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+                    <TextBlock Classes="subtle" FontSize="11" Text="{Binding CategoryName}" />
+                  </StackPanel>
+                  <Panel Grid.Column="1" Grid.Row="1">
+                    <!-- フォームで扱える行は要約、扱えない行はテキストそのもの -->
+                    <TextBlock Classes="filterSummary" Text="{Binding Summary}" IsVisible="{Binding IsFormAvailable}"
+                               ToolTip.Tip="{Binding Text}" />
+                    <TextBlock Classes="filterSummary" Text="{Binding Text.Defaults, Source={x:Static loc:Localizer.Instance}}">
+                      <TextBlock.IsVisible>
+                        <MultiBinding Converter="{x:Static BoolConverters.And}">
+                          <Binding Path="IsFormAvailable" />
+                          <Binding Path="Summary" Converter="{x:Static StringConverters.IsNullOrEmpty}" />
+                        </MultiBinding>
+                      </TextBlock.IsVisible>
+                    </TextBlock>
+                    <TextBlock Classes="filterSummary" Text="{Binding Text}" IsVisible="{Binding !IsFormAvailable}"
+                               ToolTip.Tip="{Binding Text}" />
+                  </Panel>
+                  <Button Grid.Column="2" Grid.RowSpan="2" Classes="icon flat" Content="✕" Margin="2,0,0,0"
+                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RemoveFilterLineCommand}"
+                          CommandParameter="{Binding}" ToolTip.Tip="{Binding Text.DeleteFilter, Source={x:Static loc:Localizer.Instance}}" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+          <!-- テキストの一覧 (V4〜V6 の表示) -->
+          <ScrollViewer HorizontalScrollBarVisibility="Disabled" Padding="10,0" IsVisible="{Binding IsTextListMode}">
+            <StackPanel Spacing="4">
+              <ItemsControl ItemsSource="{Binding FilterLines}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:FilterLineViewModel">
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,2">
+                      <CheckBox Grid.Column="0" IsChecked="{Binding IsEnabled}" MinWidth="0" Margin="0,0,4,0"
+                                VerticalAlignment="Center" ToolTip.Tip="{Binding Text.EnableDisable, Source={x:Static loc:Localizer.Instance}}" />
+                      <TextBox Grid.Column="1" Classes="mono filterLine" Text="{Binding Text}"
+                               PlaceholderText="--vpp-"
+                               GotFocus="FilterLine_GotFocus" LostFocus="FilterLine_LostFocus"
+                               PointerWheelChanged="FilterLine_PointerWheelChanged"
+                               KeyDown="FilterLine_KeyDown" />
+                      <Button Grid.Column="2" Classes="icon flat" Content="✕" Margin="2,0,0,0"
+                              Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RemoveFilterLineCommand}"
+                              CommandParameter="{Binding}" ToolTip.Tip="{Binding Text.DeleteLine, Source={x:Static loc:Localizer.Instance}}" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <Button Classes="small flat" Content="{Binding Text.AddLine, Source={x:Static loc:Localizer.Instance}}" HorizontalAlignment="Left"
+                      Command="{Binding AddFilterLineCommand}" Click="AddLine_Click" />
+              <TextBlock Classes="subtle" Margin="4,8,0,0" TextWrapping="Wrap"
+                         Text="{Binding Text.TextEditingHint, Source={x:Static loc:Localizer.Instance}}"
+                         IsVisible="{Binding !FilterLines.Count}" />
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- help を読めないエンコーダで、1行もないとき -->
+          <StackPanel Margin="14,4" Spacing="8">
+            <StackPanel.IsVisible>
+              <MultiBinding Converter="{x:Static BoolConverters.And}">
+                <Binding Path="!IsTextListMode" />
+                <Binding Path="!FilterLines.Count" />
+                <Binding Path="HelpSchema" Converter="{x:Static ObjectConverters.IsNull}" />
+              </MultiBinding>
+            </StackPanel.IsVisible>
+            <TextBlock Classes="subtle" TextWrapping="Wrap"
+                       Text="{Binding Text.NoSchemaHint, Source={x:Static loc:Localizer.Instance}}" />
+          </StackPanel>
+        </Panel>
+
+        <GridSplitter Grid.Row="2" Height="4" ResizeDirection="Rows" />
+
+        <!-- 選んだフィルタ: 行のテキストと、パラメータのフォーム (設計書 23.2、23.3) -->
+        <Panel Grid.Row="3">
+          <TextBlock Classes="subtle" Margin="14,10" TextWrapping="Wrap" VerticalAlignment="Top"
+                     Text="{Binding Text.SelectFilterHint, Source={x:Static loc:Localizer.Instance}}"
+                     IsVisible="{Binding SelectedFilterLine, Converter={x:Static ObjectConverters.IsNull}}" />
+          <ContentControl Content="{Binding SelectedFilterLine}" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+            <ContentControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:FilterLineViewModel">
+          <Grid RowDefinitions="Auto,Auto,*">
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="10,8,10,4">
+              <TextBlock Classes="header" FontFamily="{StaticResource MonoFont}" Text="{Binding DisplayName}" />
+              <TextBlock Classes="subtle" FontSize="11" Text="{Binding CategoryName}" />
+            </StackPanel>
+            <!-- 行のテキスト。補完・ホイール・上下ドラッグは今までと同じ (正はこのテキスト) -->
+            <TextBox Grid.Row="1" Classes="mono filterLine" Margin="10,0,10,6" Text="{Binding Text}"
+                     PlaceholderText="--vpp-"
+                     GotFocus="FilterLine_GotFocus" LostFocus="FilterLine_LostFocus"
+                     PointerWheelChanged="FilterLine_PointerWheelChanged"
+                     KeyDown="FilterLine_KeyDown" />
+            <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Disabled" Padding="10,0,10,10">
+              <StackPanel Spacing="2">
+                <TextBlock Classes="subtle" TextWrapping="Wrap" Margin="2,4" Text="{Binding FormUnavailableReason}"
+                           IsVisible="{Binding !IsFormAvailable}" />
+                <TextBlock Classes="subtle" Margin="2,4" Text="{Binding Text.NoParameters, Source={x:Static loc:Localizer.Instance}}">
+                  <TextBlock.IsVisible>
+                    <MultiBinding Converter="{x:Static BoolConverters.And}">
+                      <Binding Path="IsFormAvailable" />
+                      <Binding Path="!Parameters.Count" />
+                    </MultiBinding>
+                  </TextBlock.IsVisible>
+                </TextBlock>
+
+                <!-- よく使うパラメータ (help の main:) と、値が書かれているもの (設計書 23.14) -->
+                <ItemsControl ItemsSource="{Binding MainParameters}" ItemTemplate="{StaticResource ParameterTemplate}"
+                              IsVisible="{Binding IsFormAvailable}" />
+                <!-- 残りは折りたたむ。main: のないオプションでは空になるので出さない -->
+                <Expander Classes="otherParams" Margin="0,6,0,0" HorizontalAlignment="Stretch">
+                  <Expander.IsVisible>
+                    <MultiBinding Converter="{x:Static BoolConverters.And}">
+                      <Binding Path="IsFormAvailable" />
+                      <Binding Path="!!OtherParameterCount" />
+                    </MultiBinding>
+                  </Expander.IsVisible>
+                  <Expander.Header>
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock Text="{Binding Text.OtherParameters, Source={x:Static loc:Localizer.Instance}}" />
+                      <TextBlock Text="{Binding OtherParameterCount, StringFormat=' ({0})'}" />
+                    </StackPanel>
+                  </Expander.Header>
+                  <ItemsControl ItemsSource="{Binding OtherParameters}" ItemTemplate="{StaticResource ParameterTemplate}" />
+                </Expander>
+
+                <!-- help の該当部分 (今までのヘルプ欄) -->
+                <Expander Header="{Binding Text.FullHelp, Source={x:Static loc:Localizer.Instance}}" Margin="0,8,0,0" HorizontalAlignment="Stretch">
+                  <SelectableTextBlock Classes="help" TextWrapping="Wrap"
+                                       Text="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).HelpText, FallbackValue=''}" />
+                </Expander>
+              </StackPanel>
+            </ScrollViewer>
+          </Grid>
+              </DataTemplate>
+            </ContentControl.ContentTemplate>
+          </ContentControl>
+        </Panel>
+
+        <!-- 1行もないとき: 追加の一覧をそのまま出す (最初に触る場所をはっきりさせる)。フォームの区画も使って縦いっぱいに広げる -->
+        <Border Grid.Row="1" Grid.RowSpan="3" Padding="10,0,10,6" Background="{DynamicResource PaneBackgroundBrush}">
+          <Border.IsVisible>
+            <MultiBinding Converter="{x:Static BoolConverters.And}">
+              <Binding Path="!IsTextListMode" />
+              <Binding Path="!FilterLines.Count" />
+              <Binding Path="HelpSchema" Converter="{x:Static ObjectConverters.IsNotNull}" />
+            </MultiBinding>
+          </Border.IsVisible>
+          <Grid RowDefinitions="Auto,*">
+            <TextBlock Grid.Row="0" Classes="subtle" Margin="2,0,0,6" TextWrapping="Wrap"
+                       Text="{Binding Text.EmptyFiltersHint, Source={x:Static loc:Localizer.Instance}}" />
+            <views:FilterCatalogView Grid.Row="1" x:Name="InlineCatalog" Items="{Binding FilterCatalog}" />
+          </Grid>
+        </Border>
+
+        <Grid Grid.Row="4" ColumnDefinitions="Auto,*" Margin="10,6,10,10">
+          <TextBlock Grid.Column="0" Classes="subtle" Text="{Binding Text.InputArguments, Source={x:Static loc:Localizer.Instance}}" Margin="0,0,8,0" />
+          <TextBox Grid.Column="1" Classes="mono" Text="{Binding InputArgsText}" />
+        </Grid>
+      </Grid>
+    </Grid>
+
+    <!-- ログ (折りたたみ) -->
+    <Border Grid.Row="2" Height="180" IsVisible="{Binding IsLogOpen}"
+            BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,1,0,0">
+      <TextBox Classes="mono" Text="{Binding LogText}" IsReadOnly="True" AcceptsReturn="True"
+               Background="{DynamicResource PaneBackgroundBrush}"
+               TextWrapping="NoWrap" FontSize="12" BorderThickness="0" CornerRadius="0"
+               VerticalContentAlignment="Top" />
+    </Border>
+
+    <!-- ステータスバー -->
+    <Border Grid.Row="3" Background="{DynamicResource BarBackgroundBrush}"
+            BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,1,0,0" Padding="10,4">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
+          <TextBlock Classes="subtle" Text="{Binding BackendModeText}" />
+          <TextBlock Classes="subtle" Text="│" />
+          <TextBlock Classes="subtle" Text="{Binding ElapsedText}" />
+          <TextBlock Classes="subtle" Text="│" />
+          <TextBlock Classes="subtle" Text="{Binding InputInfoText}" />
+          <ToggleButton Classes="small mini" Content="SAR" IsChecked="{Binding UseSar}"
+                        ToolTip.Tip="{Binding Text.SarHint, Source={x:Static loc:Localizer.Instance}}" />
+          <TextBlock Classes="subtle" Text="│" />
+          <TextBlock Classes="subtle" Text="{Binding StatusText}" />
+        </StackPanel>
+        <TextBlock Grid.Column="1" x:Name="ColorInfoLabel" Classes="subtle" Margin="10,0" VerticalAlignment="Center"
+                   Text="{Binding ColorInfoText}" ToolTip.Tip="{Binding ColorInfoText}"
+                   TextTrimming="CharacterEllipsis" />
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+          <!-- HDRの入力をSDRへ変換して表示しているときだけ出す。 -->
+          <StackPanel x:Name="HdrReferenceWhitePanel" Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsHdrReferenceWhiteVisible}">
+            <TextBlock Classes="subtle" VerticalAlignment="Center" Text="{Binding Text.HdrReferenceWhite, Source={x:Static loc:Localizer.Instance}}" />
+            <NumericUpDown x:Name="HdrReferenceWhiteEditor" Minimum="50" Maximum="1000" Increment="10" FormatString="0"
+                           Width="136" Height="26" MinHeight="0" Padding="4,0" Value="{Binding HdrReferenceWhiteNits}"
+                           ToolTip.Tip="{Binding Text.HdrReferenceWhiteHint, Source={x:Static loc:Localizer.Instance}}" />
+          </StackPanel>
+          <ComboBox x:Name="LanguageSelector" Classes="small" MinWidth="90"
+                    SelectedIndex="{Binding Language, Converter={x:Static loc:LanguageIndexConverter.Instance}}"
+                    ToolTip.Tip="{Binding Text.Language, Source={x:Static loc:Localizer.Instance}}">
+            <ComboBoxItem Content="{Binding Text.LanguageAuto, Source={x:Static loc:Localizer.Instance}}" />
+            <ComboBoxItem Content="日本語" />
+            <ComboBoxItem Content="English" />
+          </ComboBox>
+          <ToggleButton Classes="small" Content="{Binding Text.Log, Source={x:Static loc:Localizer.Instance}}" IsChecked="{Binding IsLogOpen}" />
+          <Button Classes="small" Content="{Binding Text.CopyCommand, Source={x:Static loc:Localizer.Instance}}" Command="{Binding CopyCommandLineCommand}"
+                  ToolTip.Tip="{Binding Text.CopyCommandHint, Source={x:Static loc:Localizer.Instance}}" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!--
+      フィルタ行の補完 (設計書 21.7)。表示位置はコードでカーソルの下に合わせる。
+      テキストボックスからフォーカスを奪わないよう、一覧はフォーカスを受けない
+    -->
+    <Popup x:Name="CompletionPopup" Placement="BottomEdgeAlignedLeft" IsLightDismissEnabled="False">
+      <Border x:Name="CompletionBorder" Classes="completion">
+        <Grid RowDefinitions="Auto,*">
+          <StackPanel x:Name="CompletionOrderBar" Grid.Row="0" Orientation="Horizontal" Margin="6,6,6,4">
+            <Button x:Name="OrderAlphabeticalButton" Classes="seg first" Content="A–Z" Focusable="False" />
+            <Button x:Name="OrderCategoryButton" Classes="seg last" Content="{Binding Text.ByCategory, Source={x:Static loc:Localizer.Instance}}" Focusable="False" />
+          </StackPanel>
+          <ListBox x:Name="CompletionList" Grid.Row="1" Classes="completion" Focusable="False"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="views:CompletionEntry">
+                <Panel>
+                  <TextBlock Classes="completionHeader" Text="{Binding Text}" IsVisible="{Binding IsHeader}" />
+                  <Grid ColumnDefinitions="Auto,*" IsVisible="{Binding !IsHeader}">
+                    <TextBlock Grid.Column="0" FontFamily="{StaticResource MonoFont}" FontSize="12"
+                               VerticalAlignment="Center" Text="{Binding Text}" />
+                    <TextBlock Grid.Column="1" Classes="subtle" Margin="14,0,0,0" FontSize="11"
+                               Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
+                  </Grid>
+                </Panel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Grid>
+      </Border>
+    </Popup>
+  </Grid>
+</Window>

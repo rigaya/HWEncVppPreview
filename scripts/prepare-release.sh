@@ -31,8 +31,8 @@ if [[ "$mode" == create ]]; then
             exit 1
         fi
         case "${asset##*/}" in
-            "HWEncParamViewer_${TAG}_win-x64.zip") windows_count=$((windows_count + 1)) ;;
-            "HWEncParamViewer_${TAG}_linux-x64.tar.xz") linux_count=$((linux_count + 1)) ;;
+            "HWEncVppPreview_${TAG}_win-x64.zip") windows_count=$((windows_count + 1)) ;;
+            "HWEncVppPreview_${TAG}_linux-x64.tar.xz") linux_count=$((linux_count + 1)) ;;
             *) echo 'ERROR: 想定外の名前の成果物があります。' >&2; exit 1 ;;
         esac
     done

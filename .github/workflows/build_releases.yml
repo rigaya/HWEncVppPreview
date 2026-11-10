@@ -81,7 +81,7 @@ jobs:
       - name: 全件試験
         shell: bash
         run: >-
-          dotnet test HWEncParamViewer.sln -c Debug
+          dotnet test HWEncVppPreview.sln -c Debug
           --logger trx --results-directory test-results
           --blame-hang-timeout 5m
       - name: 試験結果の保存
@@ -103,11 +103,11 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
-            executable: HWEncParamViewer.exe
+            executable: HWEncVppPreview.exe
             extension: zip
           - os: ubuntu-latest
             rid: linux-x64
-            executable: HWEncParamViewer
+            executable: HWEncVppPreview
             extension: tar.xz
     steps:
       - uses: actions/checkout@v4
@@ -121,7 +121,7 @@ jobs:
         env:
           RID: ${{ matrix.rid }}
         run: >-
-          dotnet publish src/HWEncParamViewer.App/HWEncParamViewer.App.csproj
+          dotnet publish src/HWEncVppPreview.App/HWEncVppPreview.App.csproj
           -c Release -p:PublishProfile=Distribution -r "$RID"
           -o "$RUNNER_TEMP/publish/$RID"
       - name: 実行ファイルの版の照合
@@ -135,7 +135,7 @@ jobs:
           $exe = Join-Path $env:RUNNER_TEMP "publish/$env:RID/$env:EXECUTABLE"
           # 標準出力をパイプにして、WindowsのWinExeでも版の出力を待つ。
           $actual = (& $exe --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $actual -cne "HWEncParamViewer $env:EXPECTED_VERSION") {
+          if ($LASTEXITCODE -ne 0 -or $actual -cne "HWEncVppPreview $env:EXPECTED_VERSION") {
             throw "実行ファイルの版が不一致です: '$actual'"
           }
       - name: Windowsの圧縮ファイルを作成
@@ -146,7 +146,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/archives" | Out-Null
-          Compress-Archive -LiteralPath "$env:RUNNER_TEMP/publish/win-x64/HWEncParamViewer.exe" -DestinationPath "$env:RUNNER_TEMP/archives/HWEncParamViewer_$($env:VERSION_NAME)_win-x64.zip"
+          Compress-Archive -LiteralPath "$env:RUNNER_TEMP/publish/win-x64/HWEncVppPreview.exe" -DestinationPath "$env:RUNNER_TEMP/archives/HWEncVppPreview_$($env:VERSION_NAME)_win-x64.zip"
       - name: Linuxの圧縮ファイルを作成
         if: matrix.rid == 'linux-x64'
         shell: bash
@@ -155,13 +155,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/archives"
-          chmod 755 "$RUNNER_TEMP/publish/linux-x64/HWEncParamViewer"
-          tar -cJf "$RUNNER_TEMP/archives/HWEncParamViewer_${VERSION_NAME}_linux-x64.tar.xz" -C "$RUNNER_TEMP/publish/linux-x64" HWEncParamViewer
+          chmod 755 "$RUNNER_TEMP/publish/linux-x64/HWEncVppPreview"
+          tar -cJf "$RUNNER_TEMP/archives/HWEncVppPreview_${VERSION_NAME}_linux-x64.tar.xz" -C "$RUNNER_TEMP/publish/linux-x64" HWEncVppPreview
       - name: 配布物の保存
         uses: actions/upload-artifact@v4
         with:
-          name: HWEncParamViewer_${{ needs.version.outputs.version_name }}_${{ matrix.rid }}
-          path: ${{ runner.temp }}/archives/HWEncParamViewer_${{ needs.version.outputs.version_name }}_${{ matrix.rid }}.${{ matrix.extension }}
+          name: HWEncVppPreview_${{ needs.version.outputs.version_name }}_${{ matrix.rid }}
+          path: ${{ runner.temp }}/archives/HWEncVppPreview_${{ needs.version.outputs.version_name }}_${{ matrix.rid }}.${{ matrix.extension }}
           if-no-files-found: error
           retention-days: 14
 
@@ -175,7 +175,7 @@ jobs:
           ref: ${{ needs.version.outputs.release_sha }}
       - uses: actions/download-artifact@v4
         with:
-          pattern: HWEncParamViewer_*
+          pattern: HWEncVppPreview_*
           path: release-assets
       - name: 成果物の検査と下書きの作成
         id: draft

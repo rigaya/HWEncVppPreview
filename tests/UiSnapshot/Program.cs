@@ -1,18 +1,18 @@
 ﻿using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
-using HWEncParamViewer.App;
-using HWEncParamViewer.App.Services;
-using HWEncParamViewer.App.Localization;
-using HWEncParamViewer.Core;
+using HWEncVppPreview.App;
+using HWEncVppPreview.App.Services;
+using HWEncVppPreview.App.Localization;
+using HWEncVppPreview.Core;
 using Avalonia.Headless;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
-using HWEncParamViewer.App.ViewModels;
-using HWEncParamViewer.App.Views;
+using HWEncVppPreview.App.ViewModels;
+using HWEncVppPreview.App.Views;
 
 // 使い方: UiSnapshot <出力ディレクトリ> [--language ja|en] [--encoder <exe> --input <入力> --time <秒>]
 // MainWindow をデザイン用のダミー値で描画し、ライト/ダーク・状態違いの PNG を保存する。
@@ -21,7 +21,7 @@ Directory.CreateDirectory(outDir);
 // 言語ごとに別の出力先を使い、既存の撮影条件でも英語表示を比較できるようにする。
 Localizer.Instance.Language = Option(args, "--language") ?? "ja";
 
-AppBuilder.Configure<HWEncParamViewer.App.App>()
+AppBuilder.Configure<HWEncVppPreview.App.App>()
     .UseSkia()
     .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })
     .SetupWithoutStarting();
@@ -127,8 +127,8 @@ Capture("dark_zoom_toggle_before", ThemeVariant.Dark, vm =>
 }, window =>
 {
     // カラーバーとグラデーションの境界付近を 800% で表示する (nearest 補間の確認)
-    var viewer = window.FindControl<HWEncParamViewer.App.Controls.ZoomPanViewer>("MainViewer")!;
-    viewer.Zoom = new HWEncParamViewer.App.Controls.ZoomState(false, 8.0, new Point(275, 720));
+    var viewer = window.FindControl<HWEncVppPreview.App.Controls.ZoomPanViewer>("MainViewer")!;
+    viewer.Zoom = new HWEncVppPreview.App.Controls.ZoomState(false, 8.0, new Point(275, 720));
 });
 
 // V6: フィルタ行の補完
@@ -155,7 +155,7 @@ void CaptureForm(string name, ThemeVariant theme, string[] lines, int selected, 
     vm.PreviewImage = CreateTestImage(1440, 1080);
     vm.FilterLines.Clear();
     typeof(MainWindowViewModel).GetProperty(nameof(MainWindowViewModel.HelpSchema))!
-        .SetValue(vm, new HWEncParamViewer.Core.HelpSchema(File.ReadAllText(HelpDataPath("qsvenc-h1.txt"))));
+        .SetValue(vm, new HWEncVppPreview.Core.HelpSchema(File.ReadAllText(HelpDataPath("qsvenc-h1.txt"))));
     foreach (var text in lines) vm.FilterLines.Add(new FilterLineViewModel { Text = text });
     vm.SelectedFilterLine = selected >= 0 ? vm.FilterLines[selected] : null;
     vm.IsTextListMode = textMode;
@@ -185,7 +185,7 @@ void CaptureCompletion(string name, ThemeVariant theme, string text, bool catego
     vm.PreviewImage = CreateTestImage(1440, 1080);
     // デザイン用の ViewModel はエンコーダを実行しないので、H1 の書式の実 help を直接与える (開発用ツールなのでリフレクションで足りる)
     typeof(MainWindowViewModel).GetProperty(nameof(MainWindowViewModel.HelpSchema))!
-        .SetValue(vm, new HWEncParamViewer.Core.HelpSchema(File.ReadAllText(HelpDataPath("qsvenc-h1.txt"))));
+        .SetValue(vm, new HWEncVppPreview.Core.HelpSchema(File.ReadAllText(HelpDataPath("qsvenc-h1.txt"))));
     var line = new FilterLineViewModel { Text = text };
     vm.FilterLines.Add(line);
     // V8 以降、行のテキスト欄は選んだ行のフォームの上にある

@@ -1,7 +1,7 @@
-HWEncParamViewer第三者ライセンスおよび告知
+HWEncVppPreview第三者ライセンスおよび告知
 
 本書はWindows/Linux向け自己完結配布に使用する本番依存のライセンス本文を集めたものです。
-HWEncParamViewer本体のMITライセンスは、リポジトリのLICENSEを参照してください。
+HWEncVppPreview本体のMITライセンスは、リポジトリのLICENSEを参照してください。
 
 原文の著作権表示・条件・免責を保持し、ライセンス本文の翻訳や要約はしていません。
 パッケージ製作者が同梱した包括的な第三者告知は、そのまま収録しています。

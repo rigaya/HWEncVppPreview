@@ -13,6 +13,6 @@
     <PackageReference Include="Avalonia.Skia" Version="12.1.4" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\HWEncParamViewer.App\HWEncParamViewer.App.csproj" />
+    <ProjectReference Include="..\..\src\HWEncVppPreview.App\HWEncVppPreview.App.csproj" />
   </ItemGroup>
 </Project>
