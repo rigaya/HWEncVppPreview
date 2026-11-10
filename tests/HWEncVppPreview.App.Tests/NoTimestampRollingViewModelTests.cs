@@ -10,7 +10,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class NoTimestampRollingViewModelTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static readonly Y4mHeader Header = Y4mHeader.Parse("YUV4MPEG2 W64 H36 F30:1 Ip A1:1 C420");
 
     [AvaloniaTheory]
@@ -39,7 +39,7 @@ public sealed class NoTimestampRollingViewModelTests
             double expected = vm.CurrentSeconds + direction / 30.0;
             vm.StepFrameCommand.Execute(direction);
             Assert.Equal(expected, vm.CurrentSeconds, 8);
-            await vm.WaitForIdleAsync().WaitAsync(Safety);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
             Assert.Equal(expected, vm.CurrentSeconds, 8);
             AssertImages(vm, (int)Math.Round(expected * 30));
         }
@@ -57,13 +57,13 @@ public sealed class NoTimestampRollingViewModelTests
         {
             await Start(vm, clock);
             vm.StepFrameCommand.Execute(1);
-            await backend.SecondStarted.Task.WaitAsync(Safety);
+            await backend.SecondStarted.Task.WaitWithDiagnosticsAsync(Safety);
             Assert.Equal(10 + 1.0 / 30, vm.CurrentSeconds, 8);
             // 最初の3枚窓の末尾から、次の隣だけを有限の完了列で選ばせる。
             vm.StepFrameCommand.Execute(1);
-            await vm.WaitForPreparationAsync().WaitAsync(Safety);
+            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
             backend.ReleaseSecond.TrySetResult();
-            await vm.WaitForIdleAsync().WaitAsync(Safety);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
             // Xtsなしではms丸め済みseekが時計の原点。実配列番号を入力時計へ戻した値を確認する。
             var segment = Interval(vm);
             int index = Enumerable.Range(0, segment.Frames.Count).Single(i => segment.Frames[i].Data[0] == (byte)(302 & 255));
@@ -113,9 +113,9 @@ public sealed class NoTimestampRollingViewModelTests
             CompareMode = PreviewCompareMode.SideBySide };
     private static async Task Start(MainWindowViewModel vm, FakeTimeProvider clock)
     {
-        await vm.InitializeAsync(false).WaitAsync(Safety);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Null(vm.ErrorText);
     }
     private static PreviewSegmentSnapshot Interval(MainWindowViewModel vm)

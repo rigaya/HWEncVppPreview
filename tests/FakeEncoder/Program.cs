@@ -159,13 +159,13 @@ internal static class Program
         using var child = Process.Start(start) ?? throw new InvalidOperationException("パイプ保持用の子を起動できませんでした");
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var timeout = new CancellationTokenSource(TestTimeouts.Hang);
             await WaitForFileAsync(ready, timeout.Token);
         }
         catch
         {
             if (!child.HasExited) child.Kill(entireProcessTree: true);
-            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await child.WaitForExitAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             throw;
         }
     }
@@ -176,7 +176,7 @@ internal static class Program
         string? release = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_RELEASE_FILE");
         if (string.IsNullOrEmpty(ready) || string.IsNullOrEmpty(release)) return -24;
         // テスト側が途中で失敗しても無期限の孤児にしない。通常はreleaseで直ちに終了する。
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Hang);
         string temporaryReady = ready + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + ".tmp";
         await File.WriteAllTextAsync(temporaryReady, Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
         File.Move(temporaryReady, ready, overwrite: true);

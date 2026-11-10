@@ -109,7 +109,7 @@ VPP Options:
             Assert.Equal("en", AppSettings.Load(services.SettingsPath).Language);
             UiLanguage.Set("ja");
             await using var restored = new MainWindowViewModel(services);
-            await restored.InitializeAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            await restored.InitializeAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             Assert.Equal("en", restored.Language);
             Assert.Equal("en", UiLanguage.Current);
             Assert.Equal("+ Add filter", Localizer.Instance.Text.AddFilter);

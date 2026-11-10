@@ -7,4 +7,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <UseAppHost>true</UseAppHost>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\TestTimeouts.cs" Link="Testing\TestTimeouts.cs" />
+  </ItemGroup>
 </Project>

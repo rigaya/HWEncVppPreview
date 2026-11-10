@@ -13,7 +13,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class NavigationTests(ITestOutputHelper output)
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [AvaloniaFact]
     public async Task HeldFrameNavigationShowsIntermediateFramesBeforeKeysAreReleased()
@@ -26,11 +26,11 @@ public sealed class NavigationTests(ITestOutputHelper output)
             EncoderPath = FakeEncoderPath(), InputPath = "navigation input.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00",
         };
-        await vm.InitializeAsync(false).WaitAsync(Safety);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
         await backend.NextStartAsync();
         clock.Advance(TimeSpan.FromMilliseconds(400));
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.NotNull(vm.PreviewImage);
         string previous = ImageHash(vm);
         int imageChanges = 0;
@@ -54,7 +54,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
         {
             vm.StepFrameCommand.Execute(1);
             targets.Add(vm.CurrentSeconds);
-            await vm.WaitForPreparationAsync().WaitAsync(Safety);
+            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
             clock.Advance(TimeSpan.FromMilliseconds(33));
             await UiBarrierAsync();
         }
@@ -84,7 +84,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
         {
             vm.StepFrameCommand.Execute(1);
             targets.Add(vm.CurrentSeconds);
-            await vm.WaitForPreparationAsync().WaitAsync(Safety);
+            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
             await UiBarrierAsync();
         }
         Assert.True(targets.Zip(targets.Skip(1)).All(pair => pair.First <= pair.Second));
@@ -108,7 +108,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
         string initial = ImageHash(vm);
         vm.BeginSeekDrag();
         vm.CurrentSeconds = 1;
-        await vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         await backend.NextStartAsync();
         clock.Advance(TimeSpan.FromMilliseconds(400));
         await WaitUntilAsync(() => ImageHash(vm) != initial);
@@ -158,7 +158,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
             // 取得済みの先頭10枚だけを往復し、前後画像とも全移動をキャッシュ内に保つ。
             vm.StepFrameCommand.Execute((i / 10) % 2 == 0 ? 1 : -1);
             targets.Add(vm.CurrentSeconds);
-            await vm.WaitForPreparationAsync().WaitAsync(Safety);
+            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
             clock.Advance(TimeSpan.FromMilliseconds(33));
             await UiBarrierAsync();
         }
@@ -167,7 +167,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
         // 押下後の残りも時計だけで処理し、失敗時のDispose待ちへ未完了変換を残さない。
         converter.DelayEnabled = false;
         clock.Advance(TimeSpan.FromSeconds(1));
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(starts, backend.Starts);
         Assert.All(targets, target => Assert.InRange(target, 0, 10.0 / 30));
         Assert.Equal(9.0 / 30, vm.CurrentSeconds, 7);
@@ -204,7 +204,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
         vm.StepFrameCommand.Execute(1);
         await UiBarrierAsync();
         line.Text = "--vpp-unsharp";
-        await vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
         await backend.NextStartAsync();
         clock.Advance(TimeSpan.FromMilliseconds(250));
@@ -235,7 +235,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
         string original = ImageHash(vm);
         int cancels = backend.Cancels;
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         await backend.NextStartAsync();
         Assert.Equal(cancels, backend.Cancels);
         // LRU容量0でも現在の区間から前後の画像を選び、元画像を再起動しない。
@@ -243,7 +243,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
         Assert.NotEqual(original, ImageHash(vm));
         Assert.Equal(ExpectedHash(1), ImageHash(vm));
         clock.Advance(TimeSpan.FromMilliseconds(400));
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(1.0 / 30, vm.CurrentSeconds, 7);
         Assert.Equal(cancels, backend.Cancels);
         Assert.Equal(2, backend.Starts);
@@ -266,7 +266,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
         converter.DelayEnabled = true;
         backend.FailAfterFrame = true;
         vm.CurrentSeconds = 1;
-        await vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         await backend.NextStartAsync();
         clock.Advance(TimeSpan.FromMilliseconds(400));
         await WaitUntilAsync(() => vm.ErrorText != null);
@@ -274,7 +274,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
         string? error = vm.ErrorText;
         string log = vm.LogText;
         clock.Advance(TimeSpan.FromMilliseconds(400));
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal("エラー", status);
         Assert.Equal(status, vm.StatusText);
         Assert.Equal(error, vm.ErrorText);
@@ -309,8 +309,8 @@ public sealed class NavigationTests(ITestOutputHelper output)
             await WaitUntilAsync(() => File.Exists(ready));
             vm.StepFrameCommand.Execute(1);
             await File.WriteAllTextAsync(release, "");
-            await initialize.WaitAsync(Safety);
-            await vm.WaitForIdleAsync().WaitAsync(Safety);
+            await initialize.WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
             Assert.False(vm.IsBusy);
             Assert.Equal("エラー", vm.StatusText);
             Assert.NotNull(vm.ErrorText);
@@ -370,12 +370,12 @@ public sealed class NavigationTests(ITestOutputHelper output)
 
     private static async Task InitializeAsync(MainWindowViewModel vm, FakeTimeProvider clock, TimedBackend backend)
     {
-        await vm.InitializeAsync(false).WaitAsync(Safety);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
         await backend.NextStartAsync();
         clock.Advance(TimeSpan.FromMilliseconds(400));
         // フィルタなしの初期区間は、LRUの容量によらず前後表示で共有する。
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.NotNull(vm.PreviewImage);
     }
 
@@ -383,7 +383,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
     {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Dispatcher.UIThread.Post(() => done.TrySetResult());
-        await done.Task.WaitAsync(Safety);
+        await done.Task.WaitWithDiagnosticsAsync(Safety);
     }
 
     private static string ImageHash(MainWindowViewModel vm) => ImageHash(vm.PreviewImage);
@@ -458,7 +458,7 @@ public sealed class NavigationTests(ITestOutputHelper output)
         public bool FailAfterFrame { get; set; }
         public int Starts => Volatile.Read(ref _started);
         public int Cancels => Volatile.Read(ref _cancelled);
-        public Task NextStartAsync() => _starts.Reader.ReadAsync().AsTask().WaitAsync(Safety);
+        public Task NextStartAsync() => _starts.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
         public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
         {
             var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);

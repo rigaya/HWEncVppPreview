@@ -90,7 +90,7 @@ public sealed class RawBufferPoolViewModelTests
         var frame = session.DisplayedFrame()!;
         long oldRunId = session.Scope.NewRunId();
         // 通常の破棄は所有ゼロで終える。破棄前の要求情報だけで遅れて読取を開始する場合を分けて確かめる。
-        await session.Vm.DisposeAsync().AsTask().WaitAsync(OwnedProcessSession.Safety);
+        await session.Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
         Assert.True(session.Scope.Capture().IsEmpty);
         Assert.True(PoolBoolean(session.Scope, "Closed"));
         long dropped = session.Scope.CapturePool().DropClosed;

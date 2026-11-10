@@ -11,7 +11,7 @@ namespace HWEncVppPreview.App.Tests;
 public sealed class SnapshotRetentionViewModelTests
 {
     private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [AvaloniaFact]
     public async Task QueuedFrameReadyCannotRestoreAnObsoleteWholeSnapshot()
@@ -26,12 +26,12 @@ public sealed class SnapshotRetentionViewModelTests
         Invoke(vm, "OnFrameReady", new PreviewFrameResult(request, frames[30], false) { Segment = segment });
         Invoke(vm, "BeginIntent", true);
         Assert.Null(Property(context, "Segment"));
-        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
+        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
         var held = Assert.IsType<PreviewSegmentSnapshot>(Property(context, "Segment"));
         Assert.Same(frames[30], Assert.Single(held.Frames));
         Assert.Equal(segment.SafeStartSeconds, held.SafeStartSeconds);
         Assert.Equal(segment.SafeEndSeconds, held.SafeEndSeconds);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
     }
 
     [AvaloniaTheory]
@@ -49,7 +49,7 @@ public sealed class SnapshotRetentionViewModelTests
         if (completion)
             Invoke(vm, "OnCompleted", new PreviewCompletion(request, new(0, ""), false, false) { Segment = segment, Frames = frames });
         else Invoke(vm, "OnSegmentUpdated", new PreviewSegmentUpdate(request, segment, false, false));
-        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
+        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
         Assert.Null(Property(context, "Segment"));
         Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<Y4mFrame>>(Field(vm, "_intervalFrames")));
     }
@@ -75,7 +75,7 @@ public sealed class SnapshotRetentionViewModelTests
         for (int i = 4; i < 8; i++) Assert.True(cache.Append(id, Frame(i)));
         // UI待ちの間にrollingで解放したprefixを、古い通知から取り戻さない。
         Invoke(vm, "OnSegmentUpdated", new PreviewSegmentUpdate(request, previous, false, false));
-        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
+        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
         var current = cache.GetSegment(id)!;
         foreach (string name in new[] { "_intervalFrames", "_beforeIntervalFrames" })
             Assert.Equal(current.Frames, Assert.IsAssignableFrom<IReadOnlyList<Y4mFrame>>(Field(vm, name)));
@@ -122,7 +122,7 @@ public sealed class SnapshotRetentionViewModelTests
         SetField(vm, "_intervalFrames", segment.Frames);
         SetField(vm, "_beforeIntervalSegment", segment);
         SetField(vm, "_beforeIntervalFrames", segment.Frames);
-        await vm.DisposeAsync().AsTask().WaitAsync(Safety);
+        await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
         Assert.Null(Field(vm, "_context"));
         Assert.Null(Property(context, "Segment"));
         Assert.Empty(Assert.IsAssignableFrom<IEnumerable>(Field(vm, "_afterRequests")));

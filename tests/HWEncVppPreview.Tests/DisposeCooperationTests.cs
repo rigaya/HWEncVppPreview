@@ -6,7 +6,7 @@ namespace HWEncVppPreview.Tests;
 public sealed class DisposeCooperationTests
 {
     private static readonly TimeSpan Grace = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static PreviewRequest Request(bool continuous = false) => new()
     {
         EncoderPath = "dispose-stub", InputFile = "input", Fps = 2,
@@ -23,7 +23,7 @@ public sealed class DisposeCooperationTests
         {
             controller.Submit(Request());
             await backend.Started.Task;
-            await controller.DisposeAsync().AsTask().WaitAsync(Safety);
+            await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
             Assert.True(backend.Cancelled);
             Assert.Equal(0, backend.Aborts);
             Assert.Equal(1, backend.Disposals);
@@ -42,14 +42,14 @@ public sealed class DisposeCooperationTests
             controller.Submit(Request());
             await backend.Started.Task;
             Task dispose = controller.DisposeAsync().AsTask();
-            await clock.GraceArmed.Task.WaitAsync(Safety);
-            await backend.CancellationStarted.Task.WaitAsync(Safety);
+            await clock.GraceArmed.Task.WaitWithDiagnosticsAsync(Safety);
+            await backend.CancellationStarted.Task.WaitWithDiagnosticsAsync(Safety);
             Assert.True(backend.Cancelled);
             Assert.Equal(0, backend.Aborts);
             clock.Advance(Grace - TimeSpan.FromMilliseconds(1));
             Assert.Equal(0, backend.Aborts);
             clock.Advance(TimeSpan.FromMilliseconds(1));
-            await dispose.WaitAsync(Safety);
+            await dispose.WaitWithDiagnosticsAsync(Safety);
             Assert.Equal(1, backend.Aborts);
             Assert.Equal(1, backend.Disposals);
         }
@@ -67,14 +67,14 @@ public sealed class DisposeCooperationTests
         try
         {
             controller.Submit(Request(continuous: true));
-            await foreground.Paused.Task.WaitAsync(Safety);
+            await foreground.Paused.Task.WaitWithDiagnosticsAsync(Safety);
             controller.Submit(Request() with { VppArgs = new[] { "before" } }, background: true);
-            await background.Started.Task.WaitAsync(Safety);
+            await background.Started.Task.WaitWithDiagnosticsAsync(Safety);
             Task dispose = controller.DisposeAsync().AsTask();
-            await clock.GraceArmed.Task.WaitAsync(Safety);
-            await foreground.Running!.WaitAsync(Safety);
+            await clock.GraceArmed.Task.WaitWithDiagnosticsAsync(Safety);
+            await foreground.Running!.WaitWithDiagnosticsAsync(Safety);
             clock.Advance(Grace);
-            await dispose.WaitAsync(Safety);
+            await dispose.WaitWithDiagnosticsAsync(Safety);
             Assert.Equal(0, foreground.Aborts);
             Assert.Equal(1, background.Aborts);
             Assert.Equal(1, foreground.Disposals);
@@ -94,18 +94,18 @@ public sealed class DisposeCooperationTests
         try
         {
             controller.Submit(Request(continuous: true));
-            await foreground.Paused.Task.WaitAsync(Safety);
+            await foreground.Paused.Task.WaitWithDiagnosticsAsync(Safety);
             controller.Submit(Request() with { VppArgs = new[] { "before" } }, background: true);
-            await background.Started.Task.WaitAsync(Safety);
+            await background.Started.Task.WaitWithDiagnosticsAsync(Safety);
             Task dispose = controller.DisposeAsync().AsTask();
-            await clock.GraceArmed.Task.WaitAsync(Safety);
-            await foreground.Running!.WaitAsync(Safety);
+            await clock.GraceArmed.Task.WaitWithDiagnosticsAsync(Safety);
+            await foreground.Running!.WaitWithDiagnosticsAsync(Safety);
             clock.Advance(Grace);
-            await background.AbortStarted.Task.WaitAsync(Safety);
-            await foreground.Disposed.Task.WaitAsync(Safety);
+            await background.AbortStarted.Task.WaitWithDiagnosticsAsync(Safety);
+            await foreground.Disposed.Task.WaitWithDiagnosticsAsync(Safety);
             Assert.False(dispose.IsCompleted);
             background.ReleaseAbort();
-            await dispose.WaitAsync(Safety);
+            await dispose.WaitWithDiagnosticsAsync(Safety);
             Assert.Equal(0, foreground.Aborts);
             Assert.Equal(1, background.Aborts);
         }
@@ -125,9 +125,9 @@ public sealed class DisposeCooperationTests
             Task first = controller.DisposeAsync().AsTask();
             Task second = controller.DisposeAsync().AsTask();
             Assert.Same(first, second);
-            await clock.GraceArmed.Task.WaitAsync(Safety);
+            await clock.GraceArmed.Task.WaitWithDiagnosticsAsync(Safety);
             clock.Advance(Grace);
-            await Task.WhenAll(first, second).WaitAsync(Safety);
+            await Task.WhenAll(first, second).WaitWithDiagnosticsAsync(Safety);
             Assert.Equal(1, backend.Aborts);
             Assert.Equal(1, backend.Disposals);
         }
@@ -142,20 +142,20 @@ public sealed class DisposeCooperationTests
         var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero,
             disposeGrace: Grace, disposeTimeout: TimeSpan.FromSeconds(1));
         controller.Submit(Request());
-        await backend.Started.Task.WaitAsync(Safety);
+        await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
         Task dispose = controller.DisposeAsync().AsTask();
-        await clock.GraceArmed.Task.WaitAsync(Safety);
+        await clock.GraceArmed.Task.WaitWithDiagnosticsAsync(Safety);
         clock.Advance(Grace);
-        await backend.AbortStarted.Task.WaitAsync(Safety);
-        await clock.DeadlineArmed.Task.WaitAsync(Safety);
+        await backend.AbortStarted.Task.WaitWithDiagnosticsAsync(Safety);
+        await clock.DeadlineArmed.Task.WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromSeconds(1));
-        await dispose.WaitAsync(Safety);
+        await dispose.WaitWithDiagnosticsAsync(Safety);
         Assert.True(controller.ShutdownIncomplete);
         // Disposeが期限で戻った後でも、実行finallyのsemaphore.Releaseは成功する。
         backend.ReleaseAbort();
         backend.Finish();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
-        await backend.Disposed.Task.WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await backend.Disposed.Task.WaitWithDiagnosticsAsync(Safety);
     }
 
     [Fact]
@@ -166,12 +166,12 @@ public sealed class DisposeCooperationTests
         var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero,
             disposeGrace: Grace, disposeTimeout: TimeSpan.FromSeconds(1));
         controller.Submit(Request());
-        await backend.Started.Task.WaitAsync(Safety);
+        await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
         Task dispose = controller.DisposeAsync().AsTask();
-        await backend.Disposed.Task.WaitAsync(Safety);
-        await clock.DeadlineArmed.Task.WaitAsync(Safety);
+        await backend.Disposed.Task.WaitWithDiagnosticsAsync(Safety);
+        await clock.DeadlineArmed.Task.WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromSeconds(1));
-        await dispose.WaitAsync(Safety);
+        await dispose.WaitWithDiagnosticsAsync(Safety);
         Assert.True(controller.ShutdownIncomplete);
         Assert.Equal(0, backend.Aborts);
         backend.ReleaseDispose();
@@ -185,16 +185,16 @@ public sealed class DisposeCooperationTests
         var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero,
             disposeGrace: Grace, disposeTimeout: TimeSpan.FromSeconds(1));
         controller.Submit(Request());
-        await backend.Started.Task.WaitAsync(Safety);
+        await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
         Task dispose = controller.DisposeAsync().AsTask();
         try
         {
-            await backend.CancellationStarted.Task.WaitAsync(Safety);
-            await clock.GraceArmed.Task.WaitAsync(Safety);
+            await backend.CancellationStarted.Task.WaitWithDiagnosticsAsync(Safety);
+            await clock.GraceArmed.Task.WaitWithDiagnosticsAsync(Safety);
             clock.Advance(Grace);
-            await clock.DeadlineArmed.Task.WaitAsync(Safety);
+            await clock.DeadlineArmed.Task.WaitWithDiagnosticsAsync(Safety);
             clock.Advance(TimeSpan.FromSeconds(1));
-            await dispose.WaitAsync(Safety);
+            await dispose.WaitWithDiagnosticsAsync(Safety);
             Assert.True(controller.ShutdownIncomplete);
         }
         finally { backend.ReleaseCancellation(); backend.Finish(); }
@@ -215,15 +215,15 @@ public sealed class DisposeCooperationTests
         finally { SynchronizationContext.SetSynchronizationContext(previous); }
         try
         {
-            Task winner = await Task.WhenAny(dispose, context.Posted.Task).WaitAsync(Safety);
+            Task winner = await Task.WhenAny(dispose, context.Posted.Task).WaitWithDiagnosticsAsync(Safety);
             Assert.Same(dispose, winner);
-            await dispose.WaitAsync(Safety);
+            await dispose.WaitWithDiagnosticsAsync(Safety);
         }
         finally
         {
             // 修正前でもUIへ残した継続を回収し、テスト自身の未完了処理を残さない。
             context.Drain();
-            await dispose.WaitAsync(Safety);
+            await dispose.WaitWithDiagnosticsAsync(Safety);
         }
     }
 

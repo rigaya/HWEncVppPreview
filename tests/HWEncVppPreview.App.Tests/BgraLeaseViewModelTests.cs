@@ -8,7 +8,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class BgraLeaseViewModelTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static Y4mFrame Frame() => new(new Y4mHeader { Width = 2, Height = 2 }, 1, 1, new byte[6]);
     private static BgraBufferPool Pool(MainWindowViewModel vm) => (BgraBufferPool)typeof(MainWindowViewModel)
         .GetField("_bgraPool", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
@@ -21,12 +21,12 @@ public sealed class BgraLeaseViewModelTests
         var copied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task work = vm.WithConvertedBgraAsync(Frame(), new(), CancellationToken.None, async data =>
         { entered.TrySetResult(data); await copied.Task; });
-        byte[] output = await entered.Task.WaitAsync(Safety);
+        byte[] output = await entered.Task.WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(YuvToBgra.Convert(Frame()), output);
         Assert.Equal(1, Pool(vm).Capture().Leased); Assert.Equal(0, Pool(vm).Capture().Idle);
         vm.InputPath = "different-input.ts";
         Assert.Equal(1, Pool(vm).Capture().Leased);
-        copied.TrySetResult(); await work.WaitAsync(Safety);
+        copied.TrySetResult(); await work.WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, Pool(vm).Capture().Buffers);
     }
     [AvaloniaTheory]
@@ -48,8 +48,8 @@ public sealed class BgraLeaseViewModelTests
             "ui_cancel" => Task.FromCanceled(new CancellationToken(true)),
             _ => Task.CompletedTask,
         });
-        if (reason == "stale_noop") await work.WaitAsync(Safety);
-        else await Assert.ThrowsAnyAsync<Exception>(() => work.WaitAsync(Safety));
+        if (reason == "stale_noop") await work.WaitWithDiagnosticsAsync(Safety);
+        else await Assert.ThrowsAnyAsync<Exception>(() => work.WaitWithDiagnosticsAsync(Safety));
         Assert.Equal(0, Pool(vm).Capture().Leased);
         Assert.InRange(Pool(vm).Capture().Buffers, 0, 1);
     }
@@ -61,7 +61,7 @@ public sealed class BgraLeaseViewModelTests
         await using var vm = new MainWindowViewModel(services, null, null, null, null, null,
             (_, _) => Task.FromResult(external));
         await vm.WithConvertedBgraAsync(Frame(), new(), CancellationToken.None, data =>
-        { Assert.Same(external, data); return Task.CompletedTask; }).WaitAsync(Safety);
+        { Assert.Same(external, data); return Task.CompletedTask; }).WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, Pool(vm).Capture().Buffers);
         Assert.Equal(0, Pool(vm).Capture().Leased);
     }
@@ -86,7 +86,7 @@ public sealed class BgraLeaseViewModelTests
         Assert.True(Task.Run(() => SpinWait.SpinUntil(() => Pool(vm).Capture().Leased == 1, Safety)).GetAwaiter().GetResult());
         Assert.Equal(1, Pool(vm).Capture().Leased);
         if (supersede) typeof(MainWindowViewModel).GetMethod("BeginIntent", flags)!.Invoke(vm, new object[] { false });
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, Pool(vm).Capture().Leased);
         Assert.Equal(1, Pool(vm).Capture().Idle);
         if (supersede) Assert.Null(vm.PreviewImage); else Assert.NotNull(vm.PreviewImage);

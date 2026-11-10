@@ -21,7 +21,7 @@ public sealed class SafeRangeQuantizationTests
             InputDurationSeconds = 20, Capabilities = new(true), TimestampOriginSeconds = 0,
             TimestampOriginTrusted = true, VppArgs = new[] { "--vpp-decimate" },
         });
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.NotNull(selected);
         Assert.Null(failed);
         Assert.NotNull(completed);
@@ -137,7 +137,7 @@ public sealed class SafeRangeQuantizationTests
         controller.FrameReady += value => selected = value;
         controller.Failed += value => failed = value;
         controller.Submit(Request() with { TimestampOriginSeconds = origin });
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.NotNull(selected);
         Assert.Null(failed);
         Assert.True(selected.Segment!.Clock.TrustedAbsolute);
@@ -159,7 +159,7 @@ public sealed class SafeRangeQuantizationTests
         controller.FrameReady += value => selected = value;
         controller.Failed += value => failed = value;
         controller.Submit(Request());
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Null(selected);
         Assert.NotNull(failed);
     }
@@ -177,7 +177,7 @@ public sealed class SafeRangeQuantizationTests
         PreviewFrameResult? selected = null;
         controller.FrameReady += value => selected = value;
         controller.Submit(Request());
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.NotNull(selected);
         Assert.Same(frames[4], selected.Frame);
         Assert.Equal(5.000001, selected.Frame.Xts);

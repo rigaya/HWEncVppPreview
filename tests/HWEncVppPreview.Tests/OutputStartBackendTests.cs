@@ -45,7 +45,7 @@ public sealed class OutputStartBackendTests
                 start.Environment["FAKE_ENCODER_WINDOW_SEEK"]="1";
                 if(capability!=null)start.Environment["FAKE_ENCODER_OUTPUT_START"]=capability;
                 else start.Environment.Remove("FAKE_ENCODER_OUTPUT_START");
-            })) Assert.Equal(0,(await backend.RunAsync(Request(),new Sink()).WaitAsync(TimeSpan.FromSeconds(15))).ExitCode);
+            })) Assert.Equal(0,(await backend.RunAsync(Request(),new Sink()).WaitWithDiagnosticsAsync(TestTimeouts.Hang)).ExitCode);
             var commands=FakeLogFiles.ReadAllLines(log).Select(line=>JsonDocument.Parse(line).RootElement.Clone()).Where(x=>x.GetProperty("cmd").GetString()=="run").ToArray();
             var run=Assert.Single(commands);
             Assert.Equal(expected,run.TryGetProperty("output_start_us",out var value));

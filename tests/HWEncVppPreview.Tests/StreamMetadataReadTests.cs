@@ -8,7 +8,7 @@ public sealed class StreamMetadataReadTests
     private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
     private const int FrameBytes = 6;
     private const long DefaultCapacityBytes = 4096;
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static readonly TimeSpan WatchdogTimeout = TimeSpan.FromSeconds(30);
     private const double Origin = 1000;
     private static readonly Y4mHeader Header = new() { Width = 2, Height = 2, FpsNum = 30, FpsDen = 1 };
@@ -23,7 +23,7 @@ public sealed class StreamMetadataReadTests
         Assert.Equal(initial.TotalRetains, state.Scope.Capture().TotalRetains);
         state.Set("LatestRequest", state.Request with { TargetSeconds = 1 });
         state.SignalRead();
-        await paused.WaitAsync(Safety);
+        await paused.WaitWithDiagnosticsAsync(Safety);
         Assert.True(state.Sink.BeforeReadAsync(state.Cancellation.Token).IsCompletedSuccessfully);
         Assert.Equal(initial.TotalRetains, state.Scope.Capture().TotalRetains);
         Assert.Equal(initial.LiveTokens, state.Scope.Capture().LiveTokens);
@@ -40,7 +40,7 @@ public sealed class StreamMetadataReadTests
         Task paused = state.Sink.BeforeReadAsync(state.Cancellation.Token).AsTask();
         Assert.False(paused.IsCompleted);
         state.Cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await paused.WaitAsync(Safety));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await paused.WaitWithDiagnosticsAsync(Safety));
         Assert.Equal(initial.TotalRetains, state.Scope.Capture().TotalRetains);
         Assert.Equal(FrameCount, state.Cache.GetSegment(state.SegmentId)!.Frames.Count);
         Assert.True(state.Sink.BeforeReadAsync(state.Cancellation.Token).IsCompletedSuccessfully);
@@ -90,7 +90,7 @@ public sealed class StreamMetadataReadTests
         Assert.Equal(FrameCount, state.Cache.GetSegment(state.SegmentId)!.Frames.Count);
         Assert.Equal(initial.TotalRetains + 1, state.Scope.Capture().TotalRetains);
         Assert.Equal(initial.LiveTokens, state.Scope.Capture().LiveTokens);
-        await paused.WaitAsync(Safety);
+        await paused.WaitWithDiagnosticsAsync(Safety);
         var after = state.Scope.Capture();
         Assert.True(state.Sink.BeforeReadAsync(state.Cancellation.Token).IsCompletedSuccessfully);
         Assert.Equal(after.TotalRetains, state.Scope.Capture().TotalRetains);

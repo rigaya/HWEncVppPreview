@@ -10,7 +10,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class StreamNeighborReuseViewModelTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     [AvaloniaTheory]
     [InlineData(false)]
     [InlineData(true)]
@@ -23,10 +23,10 @@ public sealed class StreamNeighborReuseViewModelTests
         await using var vm = Create(services, clock, backend);
         await Start(vm, clock, backend);
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         backend.Next.TrySetResult();
         await Until(() => Math.Abs(vm.CurrentSeconds - 10.37) < 1e-8 && !vm.IsBusy);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         // 入力30fpsの推測値ではなく、実VFRの隣10.37へ1回だけ進む。
         Assert.Single(backend.Requests);
         Assert.False(backend.FirstCancelled.Task.IsCompleted);
@@ -43,10 +43,10 @@ public sealed class StreamNeighborReuseViewModelTests
         await using var vm = Create(services, clock, backend);
         await Start(vm, clock, backend);
         vm.RefreshCommand.Execute(null);
-        await vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await backend.SecondStarted.Task.WaitAsync(Safety);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await backend.SecondStarted.Task.WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(2, backend.Requests.Count);
         Assert.True(backend.FirstCancelled.Task.IsCompleted);
         Assert.Null(vm.ErrorText);
@@ -61,9 +61,9 @@ public sealed class StreamNeighborReuseViewModelTests
         await using var vm = Create(services, clock, backend);
         await Start(vm, clock, backend);
         vm.StepFrameCommand.Execute(-1);
-        await vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         await Until(() => Math.Abs(vm.CurrentSeconds - 9.5) < 1e-8 && !vm.IsBusy);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(2, backend.Requests.Count);
         Assert.False(backend.Requests.Last().Continuous);
         Assert.True(backend.FirstCancelled.Task.IsCompleted);
@@ -74,9 +74,9 @@ public sealed class StreamNeighborReuseViewModelTests
         { EncoderPath = FakeEncoderPath(), InputPath = "c0b-neighbor.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
     private static async Task Start(MainWindowViewModel vm, FakeTimeProvider clock, ControlledBackend backend)
     {
-        await vm.InitializeAsync(false).WaitAsync(Safety);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await backend.Center.Task.WaitAsync(Safety);
+        await backend.Center.Task.WaitWithDiagnosticsAsync(Safety);
         await Until(() => vm.PreviewImage != null && !vm.IsBusy);
         Assert.Single(backend.Requests);
         Assert.Equal(10, vm.CurrentSeconds);

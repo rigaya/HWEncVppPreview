@@ -6,7 +6,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class IdleReuseTests(ITestOutputHelper output)
 {
-    private static readonly TimeSpan SetupTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan SetupTimeout = TestTimeouts.Hang;
     private static PreviewRequest Request(long id, double target, bool continuous = true) => new()
     {
         EncoderPath = "encoder", InputFile = "input", CorrelationId = id, Fps = 10, TargetSeconds = target,
@@ -26,11 +26,11 @@ public sealed class IdleReuseTests(ITestOutputHelper output)
         controller.FrameReady += images.Add;
 
         controller.Submit(Request(1, 103));
-        Assert.Equal(105, await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(SetupTimeout), 6);
-        await controller.WaitForIdleAsync().WaitAsync(SetupTimeout);
+        Assert.Equal(105, await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(SetupTimeout), 6);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SetupTimeout);
         controller.Submit(Request(2, 100, false), navigation: true);
-        var older = await finite.Task.WaitAsync(SetupTimeout);
-        await controller.WaitForIdleAsync().WaitAsync(SetupTimeout);
+        var older = await finite.Task.WaitWithDiagnosticsAsync(SetupTimeout);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SetupTimeout);
         Assert.Equal(95, CommandBuilder.Plan(backend.Requests[1]).SeekSeconds);
         // 暖機のunsafeなpixelは保持しない。旧物理窓のseekとsafe域は維持する。
         Assert.Equal(1097, older.Frames[0].Xts!.Value, 6);
@@ -39,8 +39,8 @@ public sealed class IdleReuseTests(ITestOutputHelper output)
         Assert.Equal(100.4, older.Segment.SafeEndSeconds, 6);
 
         controller.Submit(Request(3, 101), navigation: true);
-        Assert.Equal(103, await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(SetupTimeout), 6);
-        await controller.WaitForIdleAsync().WaitAsync(SetupTimeout);
+        Assert.Equal(103, await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(SetupTimeout), 6);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SetupTimeout);
         var active = cache.GetSegment(images.Last(value => value.Request.CorrelationId == 3).Segment!.SegmentId)!;
         Assert.True(active.CanStitch);
         Assert.True(active.Clock.TrustedAbsolute);
@@ -56,7 +56,7 @@ public sealed class IdleReuseTests(ITestOutputHelper output)
         controller.Submit(Request(4, 100, false), navigation: true);
         output.WriteLine($"戻りSubmit後のDemand完了={controller.WaitForCurrentDemandAsync().IsCompleted}、requests={backend.Requests.Count}");
         // 読取済みの旧streamへ再結合しても、cache通知または明示的な終了で必ず需要を解決する。
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(1));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         var image = images.Last(value => value.Request.CorrelationId == 4);
         Assert.Equal(1100, image.Frame.Xts!.Value, 6);
         Assert.Equal(3, backend.Requests.Count);
@@ -90,7 +90,7 @@ public sealed class IdleReuseTests(ITestOutputHelper output)
         controller.FrameReady += value => early = value;
         controller.Completed += value => done = value;
         controller.Submit(Request(1, 101, false) with { PreMarginSeconds = 2 });
-        await controller.WaitForIdleAsync().WaitAsync(SetupTimeout);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SetupTimeout);
         Assert.Equal(0, Assert.Single(backend.Requests).WarmupSeconds);
         Assert.NotNull(early);
         Assert.NotNull(done);

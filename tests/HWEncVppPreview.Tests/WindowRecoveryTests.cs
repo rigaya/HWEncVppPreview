@@ -11,7 +11,7 @@ public sealed class WindowRecoveryTests
         PreviewFrameResult? image=null;PreviewFailure? failure=null;
         controller.FrameReady+=value=>image=value;controller.Failed+=value=>failure=value;
         controller.Submit(Request(3,24000.0/1001),background:true);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Null(failure);Assert.NotNull(image);
         Assert.Equal(2,backend.Requests.Count);
         Assert.Null(CommandBuilder.Plan(backend.Requests[1]).SeekSeconds);
@@ -25,7 +25,7 @@ public sealed class WindowRecoveryTests
         PreviewFrameResult? image=null;PreviewFailure? failure=null;
         controller.FrameReady+=value=>image=value;controller.Failed+=value=>failure=value;
         controller.Submit(Request(472.583,60000.0/1001) with {PreMarginSeconds=5});
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Null(failure);Assert.NotNull(image);
         Assert.Equal(2,backend.Requests.Count);
         Assert.Equal(CommandBuilder.Plan(backend.Requests[0]).SeekSeconds,CommandBuilder.Plan(backend.Requests[1]).SeekSeconds);
@@ -42,7 +42,7 @@ public sealed class WindowRecoveryTests
         controller.FrameReady += value => image = value;
         controller.Failed += value => failure = value;
         controller.Submit(Request(10, 10) with { Continuous = true });
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Null(failure);
         Assert.NotNull(image);
         Assert.Equal(2, backend.Requests.Count);
@@ -62,7 +62,7 @@ public sealed class WindowRecoveryTests
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request(10, 10), background: background);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.NotNull(failure);
         Assert.True(failure.WindowShortfall!.MissingHead);
         Assert.False(failure.WindowShortfall.MissingTail);
@@ -78,7 +78,7 @@ public sealed class WindowRecoveryTests
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request(0.1, 10));
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.NotNull(failure);
         Assert.True(failure.WindowShortfall!.MissingHead);
         Assert.Single(backend.Requests);
@@ -107,7 +107,7 @@ public sealed class WindowRecoveryTests
         controller.FrameReady += value => image = value;
         controller.Failed += value => failure = value;
         controller.Submit(Request(9, 10));
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Null(failure);
         Assert.NotNull(image);
         Assert.Equal(1009, image.Frame.Xts);
@@ -123,9 +123,9 @@ public sealed class WindowRecoveryTests
         var selected = new List<double>();
         controller.FrameReady += value => selected.Add(value.Request.TargetSeconds);
         controller.Submit(Request(10, 10) with { PreMarginSeconds = 5 });
-        await backend.RecoveryStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await backend.RecoveryStarted.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         controller.Submit(Request(20, 10));
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.True(backend.Cancelled);
         Assert.Equal(new[] { 20d }, selected);
     }
@@ -138,7 +138,7 @@ public sealed class WindowRecoveryTests
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request(100, 10));
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Equal(1 + PreviewWindowRecovery.MaximumRetries, backend.Requests.Count);
         Assert.NotNull(failure);
         Assert.True(failure.WindowShortfall!.MissingHead);
@@ -188,7 +188,7 @@ public sealed class WindowRecoveryTests
         controller.FrameReady += _ => ++images;
         controller.Failed += value => failure = value;
         controller.Submit(Request(10, 10));
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Null(failure);
         Assert.Equal(2, backend.Runs);
         Assert.Equal(1, images);

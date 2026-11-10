@@ -35,9 +35,9 @@ public sealed class UiLanguageTests
             var run = HWEncVppPreview.Cli.Program.RunAsync([
                 "--enc", BackendTests.FakeEncoderPath(), "--input", "fake.ts", "--time", "0.3",
                 "--mode", "oneshot", "--watchdog-seconds", "2", "--vpp", "--fake-hang-after 0"], output, clock);
-            await clock.Registered.Task.WaitAsync(TimeSpan.FromSeconds(20));
+            await clock.Registered.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             clock.Advance();
-            Assert.Equal(3, await run.WaitAsync(TimeSpan.FromSeconds(20)));
+            Assert.Equal(3, await run.WaitWithDiagnosticsAsync(TestTimeouts.Hang));
             using var json = System.Text.Json.JsonDocument.Parse(output.ToString());
             Assert.True(json.RootElement.GetProperty("timedOut").GetBoolean());
             Assert.Equal(CoreText.OutputTimedOut, json.RootElement.GetProperty("error").GetString());

@@ -102,8 +102,8 @@ public sealed class PreviewWarmupPolicyTests
         controller.FrameReady += value => image = value;
         controller.Completed += value => done = value;
         controller.Submit(Request() with { Continuous = continuous }, background: background);
-        if (continuous) await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        if (continuous) await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         var physical = Assert.Single(backend.Requests);
         Assert.Equal(9, CommandBuilder.Plan(physical).SeekSeconds);
         Assert.Equal(0, physical.WarmupSeconds);
@@ -128,12 +128,12 @@ public sealed class PreviewWarmupPolicyTests
         var images = new List<PreviewFrameResult>();
         controller.FrameReady += images.Add;
         controller.Submit(Request());
-        await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         long old = images[^1].Segment!.SegmentId;
         controller.Submit(Request(10.5), bypassCache: true);
-        await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         var current = cache.GetSegment(images[^1].Segment!.SegmentId)!;
         Assert.Equal(9.5, current.SafeStartSeconds);
         Assert.Equal(1010.5, images[^1].Frame.Xts);

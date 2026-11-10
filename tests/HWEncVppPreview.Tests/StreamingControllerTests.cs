@@ -25,7 +25,7 @@ public sealed class StreamingControllerTests
         controller.SegmentUpdated += updates.Add;
         controller.FrameReady += frames.Add;
         controller.Submit(Request());
-        await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         // 中心だけの確定では隣を選べないため、次の1枚もpause前の更新に含まれる必要がある。
         Assert.Contains(updates, update => !update.IsReadPaused && update.DemandSatisfied
             && update.Segment.Frames.Any(frame => frame.Xts == 1010.5));

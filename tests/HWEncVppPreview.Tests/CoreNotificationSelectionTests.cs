@@ -10,7 +10,7 @@ public sealed class CoreNotificationSelectionTests
     private const int FrameCount = 4;
     private const int FrameBytes = 6;
     private const long CapacityBytes = 4096;
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static readonly TimeSpan WatchdogTimeout = TimeSpan.FromSeconds(30);
     private const double Origin = 1000;
     private static readonly Y4mHeader Header = new() { Width = 2, Height = 2, FpsNum = 30, FpsDen = 1 };
@@ -195,8 +195,8 @@ public sealed class CoreNotificationSelectionTests
         var request = state.Request with { CorrelationId = 2 };
         Assert.True((bool)Invoke(state.Controller, "TrySubmitStreaming", request, true, true, true,
             CancellationToken.None, true)!);
-        await removed.WaitAsync(Safety);
-        await backend.Started.Task.WaitAsync(Safety);
+        await removed.WaitWithDiagnosticsAsync(Safety);
+        await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
         Assert.True(((CancellationTokenSource)type.GetProperty("Cancellation")!.GetValue(session)!).IsCancellationRequested);
         Assert.True(((TaskCompletionSource)type.GetProperty("ReadAllowed")!.GetValue(session)!).Task.IsCompletedSuccessfully);
         Assert.True(((TaskCompletionSource)type.GetProperty("Demand")!.GetValue(session)!).Task.IsCompletedSuccessfully);
@@ -261,7 +261,7 @@ public sealed class CoreNotificationSelectionTests
                 foreach (var registration in (List<CancellationTokenRegistration>)_session.GetType()
                     .GetProperty("Registrations")!.GetValue(_session)!) registration.Dispose();
             }
-            await Controller.DisposeAsync().AsTask().WaitAsync(Safety);
+            await Controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
             Cache.Clear();
             _cancellation.Dispose();
             Assert.True(Scope.Capture().IsEmpty);

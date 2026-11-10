@@ -10,7 +10,7 @@ namespace HWEncVppPreview.App.Tests;
 public sealed class BeforeCompletionEvictionTests
 {
     private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [AvaloniaTheory]
     [InlineData(false, false)]
@@ -38,8 +38,8 @@ public sealed class BeforeCompletionEvictionTests
         Invoke(vm, "OnCompleted", new PreviewCompletion(request, new(0, ""), false, false)
             { Segment = segment, Frames = segment.Frames });
         if (!beforePost) cache.RemoveSegment(stored.SegmentId);
-        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.False(vm.IsBeforeBusy);
         Assert.NotNull(vm.BeforeImage);
         Assert.Same(frames[30], Field(vm, "_beforeDisplayedFrame"));
@@ -72,8 +72,8 @@ public sealed class BeforeCompletionEvictionTests
         vm.IsBeforeBusy = true;
         Invoke(vm, "OnCompleted", new PreviewCompletion(request, new(0, ""), false, false) { Segment = segment });
         cache.RemoveSegment(segment.SegmentId);
-        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.False(vm.IsBeforeBusy);
         Assert.Null(vm.BeforeImage);
         Assert.Null(Field(vm, "_beforeDisplayedFrame"));

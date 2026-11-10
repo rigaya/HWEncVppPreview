@@ -11,7 +11,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class DurationTests
 {
-    private static readonly TimeSpan SafetyTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
     [AvaloniaFact]
     public async Task ExitDurationDoesNotDelayImageOrReplaceImageStateAndSurvivesEditingAndSeeking()
@@ -37,7 +37,7 @@ public sealed class DurationTests
         var image = vm.PreviewImage;
         string status = vm.StatusText, log = vm.LogText, elapsed = vm.ElapsedText;
         await File.WriteAllTextAsync(files.Gate, "");
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(vm.HasDuration);
         Assert.Equal(10, vm.DurationSeconds);
         Assert.Equal("0:00:10", vm.DurationText);
@@ -48,14 +48,14 @@ public sealed class DurationTests
         Assert.Equal(elapsed, vm.ElapsedText);
         Assert.Null(vm.ErrorText);
         line.Text = "--vpp-nlmeans sigma=0.2";
-        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         vm.CurrentSeconds = 2;
-        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         // 元画像の静止待ちも偽時計で進め、Durationの進行とは分けて確認する。
         clock.Advance(TimeSpan.FromMilliseconds(300));
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(1, starts);
         Assert.True(vm.HasDuration);
     }
@@ -76,18 +76,18 @@ public sealed class DurationTests
         await PrepareAsync(vm, clock);
         await WaitForFileAsync(files.Ready);
         vm.FilterLines.Add(new() { Text = "--vpp-nlmeans sigma=0.1" });
-        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         clock.Advance(TimeSpan.FromMilliseconds(150));
         await WaitUntilAsync(vm, () => vm.PreviewImage != null && !vm.IsBusy);
         vm.CurrentSeconds = 2;
-        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         // 元画像の静止待ちも偽時計で進め、Durationの進行とは分けて確認する。
         clock.Advance(TimeSpan.FromMilliseconds(300));
         await WaitUntilAsync(vm, () => !vm.IsBusy);
         Assert.Equal(1, starts);
         Assert.False(vm.HasDuration);
         await File.WriteAllTextAsync(files.Gate, "");
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(10, vm.DurationSeconds);
         Assert.Equal(2, vm.CurrentSeconds);
         Assert.Equal(1, starts);
@@ -104,7 +104,7 @@ public sealed class DurationTests
         });
         await using var vm = Create(files, clock, probe);
         await PrepareAsync(vm, clock);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(vm.HasDuration);
         Assert.Equal(10, vm.DurationSeconds);
         Assert.NotNull(vm.PreviewImage);
@@ -132,16 +132,16 @@ public sealed class DurationTests
         await WaitForFileAsync(files.Ready);
         int pid = int.Parse(Assert.Single(FakeLogFiles.ReadAllLines(files.Pid)));
         vm.InputPath = "new.ts";
-        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         AssertStopped(pid);
         Assert.True(vm.HasDuration);
         Assert.Equal(20, vm.DurationSeconds);
         Assert.NotNull(vm.PreviewImage);
         Assert.Null(vm.ErrorText);
         await File.WriteAllTextAsync(files.Gate, "");
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(20, vm.DurationSeconds);
     }
 
@@ -158,7 +158,7 @@ public sealed class DurationTests
             await PrepareAsync(vm, clock);
             await WaitForFileAsync(files.Ready);
             int pid = int.Parse(Assert.Single(FakeLogFiles.ReadAllLines(files.Pid)));
-            await vm.DisposeAsync().AsTask().WaitAsync(SafetyTimeout);
+            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
             AssertStopped(pid);
             Assert.False(vm.HasDuration);
             Assert.Null(vm.PreviewImage);
@@ -173,8 +173,8 @@ public sealed class DurationTests
             // 偽時計が進まない失敗時も、同じDisposeの再待機を実時間で打ち切る。
             try
             {
-                try { await vm.DisposeAsync().AsTask().WaitAsync(SafetyTimeout); }
-                finally { await probe.DisposeAsync().AsTask().WaitAsync(SafetyTimeout); }
+                try { await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout); }
+                finally { await probe.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout); }
             }
             catch (Exception cleanupFailure) when (failure != null)
             {
@@ -194,7 +194,7 @@ public sealed class DurationTests
         await using var vm = Create(files, clock, probe);
         vm.InputArgsText = "--avhw --fake-duration 00:00:10.00";
         await PrepareAsync(vm, clock);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(vm.HasDuration);
         Assert.Equal(10, vm.DurationSeconds);
         Assert.Equal(1, starts);
@@ -226,13 +226,13 @@ public sealed class DurationTests
         };
         try
         {
-            await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
             await WaitForFileAsync(files.Ready);
             Assert.NotNull(vm.PreviewImage);
             Assert.Null(vm.BeforeImage);
         }
         finally { await File.WriteAllTextAsync(files.Gate, ""); }
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(vm.HasDuration);
     }
 
@@ -254,14 +254,14 @@ public sealed class DurationTests
         vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
         try
         {
-            await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
             await WaitForFileAsync(files.Ready);
             Assert.NotNull(vm.PreviewImage);
             Assert.Null(vm.BeforeImage);
             Assert.Null(vm.ErrorText);
         }
         finally { await File.WriteAllTextAsync(files.Gate, ""); }
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(vm.HasDuration);
     }
 
@@ -291,12 +291,12 @@ public sealed class DurationTests
         vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
         try
         {
-            await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
             await WaitUntilAsync(vm, () => vm.BeforeImage != null);
             Assert.Null(vm.PreviewImage);
             Assert.False(File.Exists(files.Ready));
             vm.CurrentSeconds = 0.2;
-            await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             after.Release.TrySetResult();
             await WaitForFileAsync(files.Ready);
             Assert.NotNull(vm.PreviewImage);
@@ -310,7 +310,7 @@ public sealed class DurationTests
             await File.WriteAllTextAsync(files.Gate, "");
             Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", old);
         }
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(vm.HasDuration);
     }
 
@@ -383,7 +383,7 @@ public sealed class DurationTests
     }
     private static async Task PrepareAsync(MainWindowViewModel vm, FakeTimeProvider clock)
     {
-        await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
         clock.Advance(TimeSpan.FromMilliseconds(150));
     }
     private static async Task WaitUntilAsync(MainWindowViewModel vm, Func<bool> condition)
@@ -392,7 +392,7 @@ public sealed class DurationTests
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         PropertyChangedEventHandler changed = (_, _) => { if (condition()) completion.TrySetResult(); };
         vm.PropertyChanged += changed;
-        try { await completion.Task.WaitAsync(SafetyTimeout); }
+        try { await completion.Task.WaitWithDiagnosticsAsync(SafetyTimeout); }
         finally { vm.PropertyChanged -= changed; }
     }
     private static async Task WaitForFileAsync(string path)
@@ -405,7 +405,7 @@ public sealed class DurationTests
         watcher.EnableRaisingEvents = true;
         // UIへの反映を待ってから長さ検査が始まるので、Yield連打でUIのPostを飢餓させない。
         if (File.Exists(path)) ready.TrySetResult();
-        await ready.Task.WaitAsync(SafetyTimeout);
+        await ready.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
     }
     private static void AssertStopped(int pid)
     {

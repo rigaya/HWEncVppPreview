@@ -73,8 +73,8 @@ public sealed class OwnedEvictionOrderingTests(ITestOutputHelper output)
         try
         {
             await session.InitializeAsync();
-            var savedAfter = await afterPacket.Task.WaitAsync(OwnedProcessSession.Safety);
-            var savedBefore = await beforePacket.Task.WaitAsync(OwnedProcessSession.Safety);
+            var savedAfter = await afterPacket.Task.WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
+            var savedBefore = await beforePacket.Task.WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
             // concurrentなBeforeが先着しても、初回After完了のUI反映だけは先に済ませる。
             // 表示通知を抑止しているため、この待機でAfter画像は作られない。
             await session.WaitUntilAsync(() => (long)OwnedVmCheck.Field(session.Vm, "_lastCompletedAfter")! >= 1);

@@ -16,7 +16,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class ViewModelTests
 {
-    private static readonly TimeSpan SafetyTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
     [AvaloniaFact]
     public async Task OpensWindowAndShowsARealFrameFromFakeEncoder()
@@ -85,12 +85,12 @@ public sealed class ViewModelTests
         await InitializeAsync(vm, clock);
         string first = ImageHash(vm);
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(1, starts);
         Assert.Equal(10 / 30.0, vm.CurrentSeconds, 7);
         Assert.NotEqual(first, ImageHash(vm));
         vm.StepFrameCommand.Execute(-1);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(1, starts);
         Assert.Equal(0.3, vm.CurrentSeconds, 7);
         vm.RefreshCommand.Execute(null);
@@ -110,12 +110,12 @@ public sealed class ViewModelTests
         vm.CurrentSeconds = 2;
         vm.CurrentSeconds = 3;
         // ドラッグを離す前に最新位置の要求を完了でき、編集用の待機時間は不要。
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(starts >= 2);
         Assert.Equal(3, vm.CurrentSeconds);
         Assert.NotNull(vm.PreviewImage);
         vm.EndSeekDrag(3);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(3, vm.CurrentSeconds);
         foreach (var item in new[] { ("0:04", 4.0), ("0:00:05.500", 5.5), ("6.25", 6.25) })
         {
@@ -126,7 +126,7 @@ public sealed class ViewModelTests
         }
         vm.CurrentTimeText = "invalid";
         vm.CommitTimeTextCommand.Execute(null);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.NotNull(vm.ErrorText);
     }
 
@@ -160,16 +160,16 @@ public sealed class ViewModelTests
             vm.FilterLines.Add(new() { Text = "--vpp-edgelevel strength=10", IsEnabled = false });
             await InitializeAsync(vm, clock);
             vm.CopyCommandLineCommand.Execute(null);
-            await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Contains("--vpp-nlmeans", services.ClipboardText);
             Assert.DoesNotContain("--vpp-edgelevel", services.ClipboardText);
             await vm.SaveSettingsAsync(1200, 780);
         }
         await using (var restored = new MainWindowViewModel(services, clock))
         {
-            await restored.InitializeAsync().WaitAsync(SafetyTimeout);
+            await restored.InitializeAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             clock.Advance(TimeSpan.FromMilliseconds(150));
-            await restored.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+            await restored.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal(FakeEncoderPath(), restored.EncoderPath);
             Assert.Equal("fake input.ts", restored.InputPath);
             Assert.Equal(1200, restored.WindowWidth);
@@ -177,7 +177,7 @@ public sealed class ViewModelTests
             Assert.Equal(2, restored.FilterLines.Count);
             Assert.False(restored.FilterLines[1].IsEnabled);
             restored.SaveFiltersCommand.Execute(null);
-            await restored.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+            await restored.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.True(File.Exists(services.FiltersPath));
             Assert.Contains("# --vpp-edgelevel", await File.ReadAllTextAsync(services.FiltersPath));
             restored.FilterLines[1].IsEnabled = true;
@@ -210,7 +210,7 @@ public sealed class ViewModelTests
             Assert.Equal(lines[1], vm.FilterLines[1].Text);
             Assert.Equal(lines[2], vm.FilterLines[2].Text);
             vm.SaveFiltersCommand.Execute(null);
-            await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal(original, await File.ReadAllTextAsync(services.FiltersPath));
         }
     }
@@ -227,13 +227,13 @@ public sealed class ViewModelTests
             EncoderPath = FakeEncoderPath(), InputPath = "old input.ts", InputArgsText = "--fake-hang-after 0",
         };
         var initialization = vm.InitializeAsync(false);
-        await started.Task.WaitAsync(SafetyTimeout);
+        await started.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
         vm.InputArgsText = "--avhw --fake-duration 00:00:10.00";
         vm.InputPath = "new input.ts";
-        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await initialization.WaitAsync(SafetyTimeout);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await initialization.WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.NotNull(vm.PreviewImage);
         Assert.Null(vm.ErrorText);
         Assert.False(vm.IsBusy);
@@ -260,7 +260,7 @@ public sealed class ViewModelTests
         clock.Advance(TimeSpan.FromMilliseconds(149));
         Assert.Null(vm.HelpSchema);
         clock.Advance(TimeSpan.FromMilliseconds(1));
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.NotSame(first, vm.HelpSchema);
         Assert.NotNull(vm.HelpSchema!.Lookup("--vpp-nlmeans"));
         Assert.Contains("--vpp-nlmeans", vm.HelpText);
@@ -297,30 +297,30 @@ public sealed class ViewModelTests
         int starts = 0;
         await using var vm = Create(services, clock, new OneShotBackend(_ => Interlocked.Increment(ref starts)));
         // 初回と入力交換は偽時計を進めずに比較まで終わる。
-        await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.NotNull(vm.PreviewImage);
         vm.OpenInput("second input.ts");
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Null(vm.ErrorText);
         var line = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.1" };
         vm.FilterLines.Add(line);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         int beforeText = starts;
         line.Text = "--vpp-nlmeans sigma=0.2";
-        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(beforeText, starts);
         clock.Advance(TimeSpan.FromMilliseconds(149));
         Assert.Equal(beforeText, starts);
         clock.Advance(TimeSpan.FromMilliseconds(1));
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(starts > beforeText);
         line.IsEnabled = false;
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         vm.FilterLines.Remove(line);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         vm.RefreshCommand.Execute(null);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Null(vm.ErrorText);
     }
 
@@ -336,8 +336,8 @@ public sealed class ViewModelTests
             EncoderPath = FakeEncoderPath(), InputPath = "initial.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00"
         };
-        await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         int before = commands.Count;
         vm.InputPath = "typing-1.ts";
         vm.InputPath = "typing-2.ts";
@@ -345,7 +345,7 @@ public sealed class ViewModelTests
         clock.Advance(TimeSpan.FromMilliseconds(149));
         Assert.Equal(before, commands.Count);
         clock.Advance(TimeSpan.FromMilliseconds(1));
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(commands.Count > before);
         Assert.DoesNotContain(commands.Skip(before), command => command.Contains("typing-1.ts"));
         Assert.Contains(commands.Skip(before), command => command.Contains("typing-2.ts"));
@@ -361,16 +361,16 @@ public sealed class ViewModelTests
 
     private static async Task InitializeAsync(MainWindowViewModel vm, FakeTimeProvider clock)
     {
-        await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
     }
 
     private static async Task RunPreparedAsync(MainWindowViewModel vm, FakeTimeProvider clock)
     {
-        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
     }
 
     private static async Task LoadFiltersAndWaitAsync(MainWindowViewModel vm, FakeTimeProvider clock, Func<bool> condition)
@@ -386,7 +386,7 @@ public sealed class ViewModelTests
         try
         {
             vm.LoadFiltersCommand.Execute(null);
-            await loaded.Task.WaitAsync(SafetyTimeout);
+            await loaded.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
         }
         finally { vm.FilterLines.CollectionChanged -= loading; }
         await RunPreparedAsync(vm, clock);

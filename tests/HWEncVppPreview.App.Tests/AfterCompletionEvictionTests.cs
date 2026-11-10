@@ -10,7 +10,7 @@ namespace HWEncVppPreview.App.Tests;
 public sealed class AfterCompletionEvictionTests
 {
     private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static readonly Y4mHeader Header = new() { Width = 2, Height = 2, FpsNum = 30, FpsDen = 1 };
 
     [AvaloniaTheory]
@@ -180,11 +180,11 @@ public sealed class AfterCompletionEvictionTests
             var segment = fixture.Store(frames);
             object context = fixture.Register(segment);
             Invoke(fixture.Vm, "OnFrameReady", new PreviewFrameResult(fixture.Request, frames[30], false) { Segment = segment });
-            await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
-            await started.Task.WaitAsync(Safety);
+            await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
+            await started.Task.WaitWithDiagnosticsAsync(Safety);
             fixture.Complete(segment);
             fixture.Cache.RemoveSegment(segment.SegmentId);
-            await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
+            await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
             release.TrySetResult();
             await fixture.Idle();
             Assert.Equal(1L, Field(fixture.Vm, "_generation"));
@@ -270,8 +270,8 @@ public sealed class AfterCompletionEvictionTests
             new PreviewCompletion(Request, new(0, "after only"), false, false) { Segment = segment, Frames = segment.Frames });
         public async Task Idle()
         {
-            await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
-            await Vm.WaitForIdleAsync().WaitAsync(Safety);
+            await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
+            await Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         }
         public void AssertCompact(object context, int maximum)
         {

@@ -271,10 +271,10 @@ public sealed class NativeExtractionCleanupTests
                 using var process = Process.Start(start) ?? throw new IOException("ジャンクション作成を開始できません。");
                 Task<string> stdout = process.StandardOutput.ReadToEndAsync();
                 Task<string> stderr = process.StandardError.ReadToEndAsync();
-                if (!process.WaitForExit(10000))
+                if (!process.WaitForExit((int)TestTimeouts.Hang.TotalMilliseconds))
                 {
                     process.Kill(entireProcessTree: true);
-                    process.WaitForExit(10000);
+                    process.WaitForExit((int)TestTimeouts.Hang.TotalMilliseconds);
                     throw new IOException("ジャンクション作成が期限内に完了しません。");
                 }
                 Assert.True(process.ExitCode == 0, "ジャンクション作成失敗: "

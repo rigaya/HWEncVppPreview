@@ -49,7 +49,7 @@ public sealed class FiniteRawBudgetTests
         controller.Completed+=value=>complete=value;
         controller.Failed+=value=>failure=value;
         controller.Submit(Request(timestamps));
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Null(failure);
         Assert.NotNull(complete);
         Assert.NotNull(selected);
@@ -80,7 +80,7 @@ public sealed class FiniteRawBudgetTests
         controller.Failed+=value=>failure=value;
         controller.Completed+=_=>++completed;
         controller.Submit(Request(true));
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.NotNull(failure);
         Assert.Contains("byte budget",failure.Reason);
         Assert.Equal(0,completed);
@@ -98,7 +98,7 @@ public sealed class FiniteRawBudgetTests
         controller.Completed+=value=>complete=value;
         controller.Failed+=value=>failure=value;
         controller.Submit(Request(true));
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Null(failure);
         Assert.NotNull(complete);
         Assert.Equal(1010,Assert.Single(complete.Frames).Xts);

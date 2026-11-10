@@ -5,7 +5,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class PrefetchSnapshotReleaseTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [Theory]
     [InlineData(false)]
@@ -43,9 +43,9 @@ public sealed class PrefetchSnapshotReleaseTests
         try
         {
             controller.Submit(request);
-            await controller.WaitForIdleAsync().WaitAsync(Safety);
+            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
             for (int i = 1; i <= 5; i++) controller.NotifyNavigation(request with { TargetSeconds = 10 - i / 30d }, -1);
-            await controller.WaitForIdleAsync().WaitAsync(Safety);
+            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
             var weak = backend.PrefetchedRaw;
             Assert.NotNull(weak);
             Assert.True(IsAlive(weak));

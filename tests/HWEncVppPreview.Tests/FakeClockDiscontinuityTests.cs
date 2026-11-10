@@ -6,7 +6,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class FakeClockDiscontinuityTests
 {
-    private static readonly TimeSpan SafetyTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
     [Theory]
     [InlineData(false, "--fake-clock-backstep-at")]
@@ -63,7 +63,7 @@ public sealed class FakeClockDiscontinuityTests
                 while (reader.ReadFrame() is { } frame) frames.Add(frame);
                 return frames;
             });
-            await Task.WhenAll(reading, child.Process.WaitForExitAsync()).WaitAsync(SafetyTimeout);
+            await Task.WhenAll(reading, child.Process.WaitForExitAsync()).WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal(0, child.Process.ExitCode);
             result.Add(await reading);
         }
@@ -95,13 +95,13 @@ public sealed class FakeClockDiscontinuityTests
             result.Add(frames);
         }
         await SendAsync(child.Process, new { cmd = "quit" });
-        await child.Process.WaitForExitAsync().WaitAsync(SafetyTimeout);
+        await child.Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(0, child.Process.ExitCode);
         return result;
     }
 
     private static async Task<PreviewEvent> NextAsync(PreviewProtocolReader reader)
-        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException()).WaitAsync(SafetyTimeout);
+        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException()).WaitWithDiagnosticsAsync(SafetyTimeout);
 
     private static async Task SendAsync(Process process, object command)
     {
@@ -128,8 +128,8 @@ public sealed class FakeClockDiscontinuityTests
         public async ValueTask DisposeAsync()
         {
             if (!Process.HasExited) Process.Kill(entireProcessTree: true);
-            await Process.WaitForExitAsync().WaitAsync(SafetyTimeout);
-            await _stderr.WaitAsync(SafetyTimeout);
+            await Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            await _stderr.WaitWithDiagnosticsAsync(SafetyTimeout);
             Process.Dispose();
         }
     }

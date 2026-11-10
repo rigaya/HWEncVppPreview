@@ -10,7 +10,7 @@ namespace HWEncVppPreview.App.Tests;
 public sealed class BeforeEarlyDisplayTests
 {
     private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static readonly Y4mHeader Header = new() { Width = 2, Height = 2, FpsNum = 2, FpsDen = 1 };
 
     [AvaloniaFact]
@@ -190,12 +190,12 @@ public sealed class BeforeEarlyDisplayTests
             { Frames = frames, Segment = segment ?? Segment(frames), EarlyDisplayFallbackReason = reason });
         internal async Task Pump()
         {
-            await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
-            await Vm.WaitForIdleAsync().WaitAsync(Safety);
+            await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
+            await Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         }
         public async ValueTask DisposeAsync()
         {
-            await Vm.DisposeAsync().AsTask().WaitAsync(Safety);
+            await Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
             Assert.True(Scope.Capture().IsEmpty);
             Assert.Equal(Scope.Capture().TotalRetains, Scope.Capture().TotalTokenReleases);
             _before.Dispose();

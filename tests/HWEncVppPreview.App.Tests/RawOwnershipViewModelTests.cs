@@ -13,7 +13,7 @@ namespace HWEncVppPreview.App.Tests;
 public sealed class RawOwnershipViewModelTests
 {
     private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static readonly Y4mHeader Header = new() { Width = 2, Height = 2 };
 
     [AvaloniaTheory]
@@ -76,7 +76,7 @@ public sealed class RawOwnershipViewModelTests
         Assert.Equal(1, scope.Capture().OwnerKinds["VmUi"]);
         if (dispose) await vm.DisposeAsync();
         else Invoke(vm, "BeginIntent", false);
-        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
+        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, calls);
         Assert.True(scope.Capture().IsEmpty);
     }
@@ -103,14 +103,14 @@ public sealed class RawOwnershipViewModelTests
         Task executing = Task.Run(() => Invoke(post, "Execute"));
         try
         {
-            await entered.Task.WaitAsync(Safety);
+            await entered.Task.WaitWithDiagnosticsAsync(Safety);
             Invoke(vm, "BeginIntent", false);
             Assert.Equal(1, scope.Capture().LiveOwners);
         }
         finally
         {
             release.TrySetResult();
-            await executing.WaitAsync(Safety);
+            await executing.WaitWithDiagnosticsAsync(Safety);
         }
         Assert.True(scope.Capture().IsEmpty);
     }
@@ -133,7 +133,7 @@ public sealed class RawOwnershipViewModelTests
         });
         try
         {
-            await entered.Task.WaitAsync(Safety);
+            await entered.Task.WaitWithDiagnosticsAsync(Safety);
             frame.Dispose();
             Assert.Equal(1, scope.Capture().OwnerKinds["VmConversion"]);
             Assert.Equal(1, scope.Capture().LiveOwners);
@@ -141,7 +141,7 @@ public sealed class RawOwnershipViewModelTests
         finally
         {
             release.TrySetResult();
-            await converting.WaitAsync(Safety);
+            await converting.WaitWithDiagnosticsAsync(Safety);
             frame.Dispose();
         }
         Assert.True(scope.Capture().IsEmpty);
@@ -162,7 +162,7 @@ public sealed class RawOwnershipViewModelTests
         Invoke(vm, "EnqueueImage", image);
         frame.Dispose();
         if (supersede) Invoke(vm, "BeginIntent", false);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(supersede, vm.PreviewImage == null);
         if (supersede) Assert.True(scope.Capture().IsEmpty);
         else Assert.Equal(1, scope.Capture().OwnerKinds["VmDisplayed"]);
@@ -197,7 +197,7 @@ public sealed class RawOwnershipViewModelTests
         Assert.Equal(1, scope.Capture().OwnerKinds["VmDisplayed"]);
         Assert.Equal(1, scope.Capture().OwnerKinds["VmBeforeDisplayed"]);
         vm.HdrReferenceWhiteNits = 400;
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.NotSame(oldAfter, vm.PreviewImage);
         Assert.NotSame(oldBefore, vm.BeforeImage);
         byte[] expected = YuvToBgra.Convert(new Y4mFrame(header, 1, 1,
@@ -255,7 +255,7 @@ public sealed class RawOwnershipViewModelTests
         }
         Assert.Equal(1, scope.Capture().LiveOwners);
         Assert.Equal(1, scope.Capture().FinalReleases);
-        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
+        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
         await vm.DisposeAsync();
         Assert.True(scope.Capture().IsEmpty);
     }
@@ -275,7 +275,7 @@ public sealed class RawOwnershipViewModelTests
         frame.Dispose();
         Invoke(vm, "OnReplayStarted", request);
         Assert.True(scope.Capture().IsEmpty);
-        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(Safety);
+        await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, calls);
     }
 
@@ -307,7 +307,7 @@ public sealed class RawOwnershipViewModelTests
             Assert.Equal(YuvToBgra.Convert(new Y4mFrame(Header, 1, 1,
                 new byte[] { 17, 17, 17, 17, 128, 128 })), pixels);
             return Task.CompletedTask;
-        }).WaitAsync(Safety);
+        }).WaitWithDiagnosticsAsync(Safety);
         selection.Dispose();
         Assert.True(scope.Capture().IsEmpty);
     }
@@ -891,7 +891,7 @@ public sealed class RawOwnershipViewModelTests
         Assert.Null(context.GetType().GetProperty("Segment")!.GetValue(context));
         long beforeComplete = scope.Capture().TotalRetains;
         Invoke(vm, "CompleteBefore", context, heldFrames);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Null(Field(vm, "_beforeIntervalSegment"));
         var metadata = (IReadOnlyList<Y4mFrame>)Field(vm, "_beforeIntervalFrames")!;
         Assert.Equal(frames.Length, metadata.Count);
@@ -1145,7 +1145,7 @@ public sealed class RawOwnershipViewModelTests
             Assert.Equal(frames[index].FrameId, notification.SegmentUpdated.Segment.Frames[index].FrameId);
             Assert.Throws<ObjectDisposedException>(() => frames[index].RawPixels);
         }
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Null(Field(vm, "_pendingSegmentUpdate"));
         Assert.Null(Field(vm, "_intervalSegment"));
         Assert.Empty((IReadOnlyList<Y4mFrame>)Field(vm, "_intervalFrames")!);
@@ -1183,7 +1183,7 @@ public sealed class RawOwnershipViewModelTests
         Assert.Equal(FrameCount, scope.Capture().LiveOwners);
         Assert.Equal(FrameCount, scope.Capture().LiveTokens);
         Assert.Equal(FrameCount, scope.Capture().OwnerKinds["NotificationCompletionWindow"]);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Null(Field(vm, "_intervalSegment"));
         Assert.Null(context.GetType().GetProperty("Segment")!.GetValue(context));
         var held = (IReadOnlyList<Y4mFrame>)Field(vm, "_intervalFrames")!;
@@ -1231,7 +1231,7 @@ public sealed class RawOwnershipViewModelTests
         notification.Dispose();
         Assert.Equal(retained, scope.Capture().TotalRetains);
         Assert.Equal(FrameCount, scope.Capture().LiveTokens);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(retained, scope.Capture().TotalRetains);
         Assert.Equal(FrameCount, scope.Capture().LiveOwners);
         Assert.Equal(FrameCount, scope.Capture().LiveTokens);
@@ -1287,7 +1287,7 @@ public sealed class RawOwnershipViewModelTests
         notification.Dispose();
         Assert.Equal(1, scope.Capture().LiveTokens);
         Assert.Equal(1, scope.Capture().OwnerKinds["VmCompletionRescue"]);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         var held = Assert.IsType<PreviewSegmentSnapshot>(Field(vm, "_intervalSegment"));
         Assert.Equal(0, held.SegmentId);
         Assert.False(held.CanStitch);
@@ -1336,7 +1336,7 @@ public sealed class RawOwnershipViewModelTests
         foreach (var producer in producers) producer.Dispose();
         context.GetType().GetProperty("Segment")!.SetValue(context, segment);
         Invoke(vm, "DisplayFrame", frames[0], context);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         var bitmap = vm.PreviewImage;
         long retained = scope.Capture().TotalRetains;
         using var notification = new OwnedPreviewEnvelope(completed: new(request, new(0, ""), false, false)
@@ -1346,7 +1346,7 @@ public sealed class RawOwnershipViewModelTests
         notification.Dispose();
         Assert.Equal(retained + 1, scope.Capture().TotalRetains);
         Assert.Equal(1, scope.Capture().OwnerKinds["VmCompletionRescue"]);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(retained + 1, scope.Capture().TotalRetains);
         Assert.False(scope.Capture().OwnerKinds.ContainsKey("VmCompletionRescue"));
         var latest = Assert.IsType<PreviewSegmentSnapshot>(Field(vm, "_intervalSegment"));
@@ -1411,7 +1411,7 @@ public sealed class RawOwnershipViewModelTests
         for (int index = 0; index < FrameCount; ++index)
             if (Math.Abs(index - CenterIndex) > NeighborRadius)
                 Assert.Throws<ObjectDisposedException>(() => frames[index].RawPixels);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         var held = Assert.IsType<PreviewSegmentSnapshot>(Field(vm, "_intervalSegment"));
         Assert.Equal(0, held.SegmentId);
         Assert.False(held.CanStitch);

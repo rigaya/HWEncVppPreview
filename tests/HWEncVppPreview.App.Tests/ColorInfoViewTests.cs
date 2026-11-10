@@ -30,9 +30,9 @@ public sealed class ColorInfoViewTests
             Assert.Equal("", vm.ColorInfoText);
             Assert.False(vm.IsHdrReferenceWhiteVisible);
             window.Show();
-            await vm.InitializeAsync(false).WaitAsync(TimeSpan.FromSeconds(20));
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             clock.Advance(TimeSpan.FromMilliseconds(150));
-            await vm.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             await Flush();
             Assert.NotNull(vm.PreviewImage);
             Assert.Contains("BT.2020", vm.ColorInfoText);
@@ -47,7 +47,7 @@ public sealed class ColorInfoViewTests
             string after = vm.ColorInfoText;
 
             vm.IsShowingBefore = true;
-            await vm.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             await Flush();
             Assert.NotNull(vm.BeforeImage);
             Assert.Equal("BT.601 limited", vm.ColorInfoText);
@@ -76,9 +76,9 @@ public sealed class ColorInfoViewTests
         try
         {
             window.Show();
-            await vm.InitializeAsync(false).WaitAsync(TimeSpan.FromSeconds(20));
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             clock.Advance(TimeSpan.FromMilliseconds(150));
-            await vm.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             await Flush();
             Assert.NotNull(vm.PreviewImage);
             Assert.DoesNotContain("SDR", vm.ColorInfoText);

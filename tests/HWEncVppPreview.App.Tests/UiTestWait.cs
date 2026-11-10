@@ -24,7 +24,7 @@ internal static class UiTestWait
         }
         catch (OperationCanceledException exception) when (deadline.IsCancellationRequested)
         {
-            throw new TimeoutException("UIの条件待ちが期限を超えました。", exception);
+            throw new TimeoutException(TestTimeouts.DescribeTimeout("UIの条件待ちが期限を超えました。"), exception);
         }
     }
 }

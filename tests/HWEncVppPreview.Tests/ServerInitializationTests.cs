@@ -6,7 +6,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class ServerInitializationTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [Fact]
     public async Task ActualRequestWaitsBehindInitializationWithoutCancellingIt()
@@ -21,8 +21,8 @@ public sealed class ServerInitializationTests
         Assert.False(actual.IsCompleted);
         Assert.Equal(0, sink.Frames);
         await File.WriteAllTextAsync(files.Release, "");
-        await initialization.WaitAsync(Safety);
-        Assert.Equal(0, (await actual.WaitAsync(Safety)).ExitCode);
+        await initialization.WaitWithDiagnosticsAsync(Safety);
+        Assert.Equal(0, (await actual.WaitWithDiagnosticsAsync(Safety)).ExitCode);
         Assert.Equal(2, sink.Frames);
         var commands = FakeLogFiles.ReadAllLines(files.Log).Select(line => JsonDocument.Parse(line))
             .Where(document => document.RootElement.GetProperty("cmd").GetString() == "run").ToArray();
@@ -43,8 +43,8 @@ public sealed class ServerInitializationTests
         Task initialization = backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath());
         await files.WaitReadyAsync();
         int pid = int.Parse(await File.ReadAllTextAsync(files.Ready));
-        await backend.DisposeAsync().AsTask().WaitAsync(Safety);
-        await initialization.WaitAsync(Safety);
+        await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        await initialization.WaitWithDiagnosticsAsync(Safety);
         AssertStopped(pid);
     }
 
@@ -59,8 +59,8 @@ public sealed class ServerInitializationTests
         await files.WaitReadyAsync();
         int pid = int.Parse(await File.ReadAllTextAsync(files.Ready));
         string alternate = Path.GetDirectoryName(encoder) + Path.DirectorySeparatorChar + "." + Path.DirectorySeparatorChar + Path.GetFileName(encoder);
-        await backend.InitializeEncoderAsync(alternate).WaitAsync(Safety);
-        await old.WaitAsync(Safety);
+        await backend.InitializeEncoderAsync(alternate).WaitWithDiagnosticsAsync(Safety);
+        await old.WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(2, starts);
         AssertStopped(pid);
     }
@@ -74,9 +74,9 @@ public sealed class ServerInitializationTests
             files.Configure(info, hold: false);
             info.Environment["FAKE_ENCODER_INITIALIZE_RC"] = "-24";
         });
-        await backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath()).WaitAsync(Safety);
+        await backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath()).WaitWithDiagnosticsAsync(Safety);
         var sink = new Sink();
-        Assert.Equal(0, (await backend.RunAsync(Request(), sink).WaitAsync(Safety)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(Safety)).ExitCode);
         Assert.Equal(2, sink.Frames);
     }
 
@@ -85,7 +85,7 @@ public sealed class ServerInitializationTests
     {
         var method = typeof(ServerBackend).GetMethod("CreateWarmupInputAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
         Task<string>[] creations = Enumerable.Range(0, 8).Select(_ => (Task<string>)method.Invoke(null, null)!).ToArray();
-        string[] paths = await Task.WhenAll(creations).WaitAsync(Safety);
+        string[] paths = await Task.WhenAll(creations).WaitWithDiagnosticsAsync(Safety);
         string path = Assert.Single(paths.Distinct());
         Assert.Equal("warmup-64x64.y4m", Path.GetFileName(path));
         byte[] bytes = await File.ReadAllBytesAsync(path);
@@ -139,7 +139,7 @@ public sealed class ServerInitializationTests
             watcher.Renamed += (_, _) => ready.TrySetResult();
             watcher.EnableRaisingEvents = true;
             if (File.Exists(Ready)) ready.TrySetResult();
-            await ready.Task.WaitAsync(Safety);
+            await ready.Task.WaitWithDiagnosticsAsync(Safety);
         }
         public void Dispose()
         {

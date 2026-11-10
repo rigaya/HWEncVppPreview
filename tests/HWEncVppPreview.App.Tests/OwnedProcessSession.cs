@@ -10,7 +10,7 @@ namespace HWEncVppPreview.App.Tests;
 
 internal sealed class OwnedProcessSession : IAsyncDisposable
 {
-    internal static readonly TimeSpan Safety = TimeSpan.FromSeconds(20);
+    internal static readonly TimeSpan Safety = TestTimeouts.Hang;
     private readonly Dictionary<string, string?> _environment = new();
     private readonly OwnedVmCheck _check;
     private readonly SignalClock _signalClock;
@@ -83,20 +83,20 @@ internal sealed class OwnedProcessSession : IAsyncDisposable
     internal async Task InitializeAsync()
     {
         Task initialize = Vm.InitializeAsync(false);
-        await initialize.WaitAsync(Safety);
-        await Vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await initialize.WaitWithDiagnosticsAsync(Safety);
+        await Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         Clock.Advance(TimeSpan.FromMilliseconds(150));
     }
 
     internal async Task WaitIdleAsync()
     {
-        await Vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         Clock.Advance(TimeSpan.FromMilliseconds(150));
         if (_beforeEnabled)
         {
             Vm.IsShowingBefore = true;
         }
-        await Vm.WaitForIdleAsync().WaitAsync(Safety);
+        await Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
     }
 
     internal Y4mFrame? DisplayedFrame(bool before = false)
@@ -122,7 +122,7 @@ internal sealed class OwnedProcessSession : IAsyncDisposable
             {
                 completion.TrySetResult();
             }
-            await completion.Task.WaitAsync(Safety);
+            await completion.Task.WaitWithDiagnosticsAsync(Safety);
         }
         finally
         {

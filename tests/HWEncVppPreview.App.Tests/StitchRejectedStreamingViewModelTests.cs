@@ -11,7 +11,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class StitchRejectedStreamingViewModelTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private const byte OldPixels = 40, RejectedPixels = 90, StreamPixels = 140, ReversePixels = 190;
     private static readonly Y4mHeader Header = Y4mHeader.Parse("YUV4MPEG2 W64 H36 F30:1 Ip A1:1 C420");
 
@@ -37,9 +37,9 @@ public sealed class StitchRejectedStreamingViewModelTests
             if (args.PropertyName == nameof(vm.PreviewImage) && vm.PreviewImage is WriteableBitmap bitmap)
                 applied.Enqueue(Pixels(bitmap));
         };
-        await vm.InitializeAsync(false).WaitAsync(Safety);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Empty(backend.Requests);
         Assert.NotNull(vm.PreviewImage);
         Assert.True(cache.CanStitch(request));
@@ -54,9 +54,9 @@ public sealed class StitchRejectedStreamingViewModelTests
         while (applied.TryDequeue(out _)) { }
 
         vm.CurrentSeconds = 13;
-        await vm.WaitForPreparationAsync().WaitAsync(Safety);
-        await backend.ForwardPaused.Task.WaitAsync(Safety);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
+        await backend.ForwardPaused.Task.WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         var forward = Assert.Single(backend.Requests, value => value.CorrelationId >= 0);
         Assert.True(forward.Continuous);
         Assert.Equal(13, forward.TargetSeconds);
@@ -84,13 +84,13 @@ public sealed class StitchRejectedStreamingViewModelTests
         {
             while (applied.TryDequeue(out _)) { }
             vm.StepFrameCommand.Execute(-1);
-            await vm.WaitForPreparationAsync().WaitAsync(Safety);
-            await vm.WaitForIdleAsync().WaitAsync(Safety);
+            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
             if (backend.Requests.Any(value => value.CorrelationId >= 0 && !value.Continuous)) break;
         }
         var reverse = Assert.Single(backend.Requests, value => value.CorrelationId >= 0 && !value.Continuous);
         Assert.InRange(reverse.TargetSeconds, 12 - 1.0 / 30, 12);
-        await backend.ForwardCancelled.Task.WaitAsync(Safety);
+        await backend.ForwardCancelled.Task.WaitWithDiagnosticsAsync(Safety);
         Assert.NotEmpty(applied);
         Assert.All(applied, image => Assert.Equal(YuvToBgra.Convert(Frame(reverse.TargetSeconds, ReversePixels)), image));
         Assert.False(cache.CanStitch(request));

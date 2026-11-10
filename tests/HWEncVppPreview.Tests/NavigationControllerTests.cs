@@ -8,7 +8,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class NavigationControllerTests(ITestOutputHelper output)
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [Fact]
     public async Task NewNavigationDoesNotCancelTheAlreadyRunningRequest()
@@ -45,7 +45,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         {
             while (cache.Count == 0) await Task.Yield();
         }
-        await WaitUntilStoredAsync().WaitAsync(Safety);
+        await WaitUntilStoredAsync().WaitWithDiagnosticsAsync(Safety);
         output.WriteLine($"先行要求の成功保存={cache.Count}, cancellation通知={backend.Cancels}, FrameReady={images.Count}");
         Assert.False(first.Token.IsCancellationRequested);
         Assert.Single(images);
@@ -69,7 +69,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var latest = await backend.NextAsync();
         Assert.Equal(3, latest.Request.TargetSeconds);
         latest.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(2, backend.Starts);
     }
 
@@ -93,7 +93,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var edit = await backend.NextAsync();
         Assert.Equal(2, edit.Request.TargetSeconds);
         edit.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(2, Assert.Single(images).Request.TargetSeconds);
         Assert.Equal(2, Assert.Single(completions).Request.TargetSeconds);
         Assert.Equal(2, backend.Starts);
@@ -120,7 +120,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var edit = await backend.NextAsync();
         Assert.Empty(completions);
         edit.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(1, Assert.Single(images).Request.TargetSeconds);
         Assert.Equal(1, Assert.Single(completions).Request.TargetSeconds);
     }
@@ -141,7 +141,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var latest = await backend.NextAsync();
         Assert.Empty(failures);
         latest.Fail();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(1, Assert.Single(failures).Request.TargetSeconds);
     }
 
@@ -161,7 +161,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         first.End();
         var latest = await backend.NextAsync();
         latest.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(new[] { "frame:0", "completed:0", "frame:1", "completed:1" }, notifications);
     }
 
@@ -184,7 +184,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         first.End();
         var edit = await backend.NextAsync();
         edit.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(new[] { "frame:0", "frame:1", "completed:1" }, notifications);
     }
 
@@ -210,7 +210,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         Assert.Equal(0, Assert.Single(frames).Request.TargetSeconds);
         Assert.Equal(0, Assert.Single(completions).Request.TargetSeconds);
         background.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(new[] { 0.0, 10.0 }, completions.Select(value => value.Request.TargetSeconds));
     }
 
@@ -234,7 +234,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var background = await backend.NextAsync();
         Assert.Equal(10, background.Request.TargetSeconds);
         background.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(3, backend.Starts);
     }
 
@@ -257,7 +257,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var background = await backend.NextAsync();
         Assert.Equal(10, background.Request.TargetSeconds);
         background.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
     }
 
     [Fact]
@@ -277,7 +277,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var foreground = await backend.NextAsync();
         Assert.Equal(1, foreground.Request.TargetSeconds);
         foreground.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(new[] { 0.0, 1.0 }, completions.Select(value => value.Request.TargetSeconds));
     }
 
@@ -299,7 +299,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         background.End();
         var foreground = await backend.NextAsync();
         foreground.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(1, Assert.Single(frames).Request.TargetSeconds);
         Assert.Equal(1, Assert.Single(completions).Request.TargetSeconds);
     }
@@ -318,7 +318,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         cancellation.Cancel();
         Assert.False(foreground.Token.IsCancellationRequested);
         foreground.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(1, backend.Starts);
     }
 
@@ -337,7 +337,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         cancellation.Cancel();
         Assert.True(background.Token.IsCancellationRequested);
         background.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Empty(frames);
     }
 
@@ -350,7 +350,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         await using var teardown = new ControllerLifetime(controller, clock);
         controller.Submit(Request(0));
         controller.Submit(Request(10), background: true);
-        await controller.DisposeAsync().AsTask().WaitAsync(Safety);
+        await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, backend.Starts);
     }
 
@@ -378,7 +378,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         if (allowed) Assert.False(first.Done.Task.IsCompleted);
         second.End();
         first.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
     }
 
     [Fact]
@@ -398,7 +398,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         Assert.False(before.Token.IsCancellationRequested);
         before.End();
         after.End();
-        await controller.WaitForIdleAsync().WaitAsync(Safety);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
     }
 
     private sealed class ControllerLifetime(PreviewController controller, NavigationClock clock) : IAsyncDisposable
@@ -407,9 +407,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         {
             Task dispose = controller.DisposeAsync().AsTask();
             // このstubはcancelを観測するだけで終了しない。既定の協調猶予を時計で進めてAbort回収する。
-            Task winner = await Task.WhenAny(dispose, clock.GraceArmed.Task).WaitAsync(Safety);
+            Task winner = await Task.WhenAny(dispose, clock.GraceArmed.Task).WaitWithDiagnosticsAsync(Safety);
             if (ReferenceEquals(winner, clock.GraceArmed.Task)) clock.Advance(TimeSpan.FromSeconds(2));
-            await dispose.WaitAsync(Safety);
+            await dispose.WaitWithDiagnosticsAsync(Safety);
             Assert.False(controller.ShutdownIncomplete);
         }
     }
@@ -441,7 +441,7 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         private int _starts;
         public int Starts => Volatile.Read(ref _starts);
         public int Cancels => Volatile.Read(ref _cancels);
-        public Task<Run> NextAsync() => _started.Reader.ReadAsync().AsTask().WaitAsync(Safety);
+        public Task<Run> NextAsync() => _started.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
         {
             var run = new Run(request, sink, cancellationToken);

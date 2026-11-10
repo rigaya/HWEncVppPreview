@@ -17,12 +17,12 @@ public sealed class ForwardByteBudgetTests
         var request = new PreviewRequest { EncoderPath = "stub", InputFile = "input", Fps = fps,
             TargetSeconds = 10, Continuous = true, Capabilities = new(true), TimestampOriginSeconds = 1000 };
         controller.Submit(request);
-        double last = await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        double last = await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.InRange(last, expected - 1e-7, expected + 1.0 / fps + 1e-7);
-        await controller.WaitForCurrentDemandAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await controller.WaitForCurrentDemandAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         // 目標を進めると同じstreamのgateが開き、実byteの先読みも移動する。
         controller.Submit(request with { TargetSeconds = 10.1, CorrelationId = 2 }, navigation: true);
-        double next = await backend.Pauses.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        double next = await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.True(next > last);
         Assert.Equal(1, backend.Calls);
     }

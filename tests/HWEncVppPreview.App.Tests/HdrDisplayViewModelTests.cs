@@ -11,7 +11,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class HdrDisplayViewModelTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [AvaloniaFact]
     public async Task WhiteChangesReconvertBothDisplayedFramesAndCachedFramesWithoutRequests()
@@ -20,14 +20,14 @@ public sealed class HdrDisplayViewModelTests
         var backend = new FramesBackend(afterHdr: true, beforeHdr: true);
         var clock = new FakeTimeProvider();
         await using var vm = Create(services, backend, clock);
-        await vm.InitializeAsync(false).WaitAsync(Safety);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         int runs = backend.Runs;
         string after = Hash(vm.PreviewImage!), before = Hash(vm.BeforeImage!);
         string status = vm.StatusText;
         double seconds = vm.CurrentSeconds;
         vm.HdrReferenceWhiteNits = 400;
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.NotEqual(after, Hash(vm.PreviewImage!));
         Assert.NotEqual(before, Hash(vm.BeforeImage!));
         Assert.Equal(runs, backend.Runs);
@@ -35,7 +35,7 @@ public sealed class HdrDisplayViewModelTests
         Assert.Equal(status, vm.StatusText);
         Assert.Contains("PQ→SDR 400nit", vm.ColorInfoText);
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(runs, backend.Runs);
         var raw = Assert.IsType<Y4mFrame>(typeof(MainWindowViewModel)
             .GetField("_displayedFrame", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(vm));
@@ -50,22 +50,22 @@ public sealed class HdrDisplayViewModelTests
         using var services = new Services();
         var backend = new FramesBackend(afterHdr: false, beforeHdr: true);
         await using var vm = Create(services, backend, new FakeTimeProvider());
-        await vm.InitializeAsync(false).WaitAsync(Safety);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         // AfterがSDRでも、Beforeを変換しているので基準白は出す。
         Assert.True(vm.IsHdrReferenceWhiteVisible);
         int runs = backend.Runs;
         Bitmap after = vm.PreviewImage!;
         string afterHash = Hash(after), beforeHash = Hash(vm.BeforeImage!);
         vm.HdrReferenceWhiteNits = 500;
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Same(after, vm.PreviewImage);
         Assert.Equal(afterHash, Hash(vm.PreviewImage!));
         Assert.NotEqual(beforeHash, Hash(vm.BeforeImage!));
         Assert.Equal(runs, backend.Runs);
         Assert.DoesNotContain("→SDR", vm.ColorInfoText);
         vm.IsShowingBefore = true;
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Contains("PQ→SDR 500nit", vm.ColorInfoText);
     }
 
@@ -98,13 +98,13 @@ public sealed class HdrDisplayViewModelTests
         };
         try
         {
-            await vm.InitializeAsync(false).WaitAsync(Safety);
-            await started.Task.WaitAsync(Safety);
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+            await started.Task.WaitWithDiagnosticsAsync(Safety);
             vm.HdrReferenceWhiteNits = 400;
             vm.HdrReferenceWhiteNits = 500;
         }
         finally { release.TrySetResult(); }
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(2, hdrConversions);
         Assert.Equal(new byte[] { 20 }, shown);
         Assert.Equal(500, vm.HdrReferenceWhiteNits);

@@ -8,7 +8,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class FilterFormTests
 {
-    private static readonly TimeSpan SafetyTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
     private const string Help = """
 VPP Options:
   [denoise] Noise
@@ -287,9 +287,9 @@ VPP Options:
             int starts = 0;
             await using var vm = new MainWindowViewModel(services, clock, new OneShotBackend(_ => ++starts))
             { EncoderPath = FakeEncoderPath(), InputPath = "fake input.ts" };
-            await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
             clock.Advance(TimeSpan.FromMilliseconds(150));
-            await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal(new[] { "--vpp-alpha", "--vpp-empty", "--vpp-scalar", "--vpp-legacy" }, vm.FilterCatalog.Select(item => item.OptionName));
             Assert.All(vm.FilterCatalog, item => Assert.False(item.IsInUse));
             vm.AddFilterCommand.Execute("--vpp-alpha");
@@ -332,16 +332,16 @@ VPP Options:
             await vm.SaveSettingsAsync();
         }
         await using var restored = new MainWindowViewModel(services);
-        await restored.InitializeAsync().WaitAsync(SafetyTimeout);
+        await restored.InitializeAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(restored.IsTextListMode);
         Assert.True(AppSettings.Load(services.SettingsPath).IsTextListMode);
     }
 
     private static async Task RunPreparedAsync(MainWindowViewModel vm, FakeTimeProvider clock)
     {
-        await vm.WaitForPreparationAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
     }
 
     private static string FakeEncoderPath()

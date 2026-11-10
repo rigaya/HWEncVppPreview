@@ -23,7 +23,7 @@ internal sealed class OwnedVmCheck(MainWindowViewModel vm, bool requireOwned = t
             return;
         }
         _checked = true;
-        await vm.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20));
+        await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         var scope = Scope(vm);
         bool incomplete = (int)Field(vm, "_shutdownIncomplete")! != 0;
         var state = scope?.Capture();

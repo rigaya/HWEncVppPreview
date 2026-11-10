@@ -8,7 +8,7 @@ public sealed class RawPooledReaderTests
     private const int FrameBytes = 6;
     private const byte Pixel = 0x2a;
     private const byte Poison = 0xa5;
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static readonly Y4mHeader Header = new() { Width = 2, Height = 2, FpsNum = 30, FpsDen = 1 };
     private static long Run(RawOwnershipScope scope) => scope.NewRunId();
 
@@ -47,7 +47,7 @@ public sealed class RawPooledReaderTests
         Task<RawFrameLease> reading = Task.Run(() => new Y4mReader(body, Header).ReadOwnedFrameBody("FRAME", scope, run));
         try
         {
-            await body.Started.Task.WaitAsync(Safety);
+            await body.Started.Task.WaitWithDiagnosticsAsync(Safety);
             Assert.Equal(FrameBytes, scope.CapturePool().LoanedBytes);
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
@@ -60,7 +60,7 @@ public sealed class RawPooledReaderTests
             // 入力変更で読取中の配列を回収せず、実際に使い終わったときだけ返す。
             scope.ClearFreeBuffers();
             body.Release.TrySetResult();
-            using var completed = await reading.WaitAsync(Safety);
+            using var completed = await reading.WaitWithDiagnosticsAsync(Safety);
             Assert.NotSame(concurrent.Frame.RawPixels, completed.Frame.RawPixels);
             Assert.All(completed.Frame.RawPixels, value => Assert.Equal(Pixel, value));
             completed.Dispose(); concurrent.Dispose();
@@ -71,7 +71,7 @@ public sealed class RawPooledReaderTests
         finally
         {
             body.Release.TrySetResult();
-            try { (await reading.WaitAsync(Safety)).Dispose(); }
+            try { (await reading.WaitWithDiagnosticsAsync(Safety)).Dispose(); }
             catch (Y4mFormatException) { }
         }
     }
@@ -82,13 +82,29 @@ public sealed class RawPooledReaderTests
         var scope = new RawOwnershipScope(new RawBufferPool());
         scope.SetReturnedBufferPoisonForTesting(Poison);
         var clock = new FakeTimeProvider();
+        // 共通の停止検知でも仮想時計を使い、実時間を待たずに両方のTask型の診断を確かめる。
+        var diagnosticClock = new FakeTimeProvider();
+        var pendingDiagnostic = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task diagnostic = ((Task)pendingDiagnostic.Task).WaitWithDiagnosticsAsync(TestTimeouts.Hang, diagnosticClock);
+        Task<int> genericDiagnostic = pendingDiagnostic.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang, diagnosticClock);
+        diagnosticClock.Advance(TestTimeouts.Hang);
+        foreach (Task waiting in new Task[] { diagnostic, genericDiagnostic })
+        {
+            var exception = await Assert.ThrowsAsync<TimeoutException>(() => waiting);
+            Assert.Contains("ThreadPool.ThreadCount=", exception.Message);
+            Assert.Contains("ThreadPool.PendingWorkItemCount=", exception.Message);
+            Assert.Contains("ThreadPool.CompletedWorkItemCount=", exception.Message);
+            Assert.IsAssignableFrom<OperationCanceledException>(exception.InnerException);
+        }
+        pendingDiagnostic.SetResult(1);
+        Assert.Equal(1, await pendingDiagnostic.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang));
         var deadline = TimeSpan.FromSeconds(1);
         using var body = new BlockingBody();
         var run = Run(scope);
         Task<RawFrameLease> reading = Task.Run(() => new Y4mReader(body, Header).ReadOwnedFrameBody("FRAME", scope, run));
         try
         {
-            await body.Started.Task.WaitAsync(Safety);
+            await body.Started.Task.WaitWithDiagnosticsAsync(Safety);
             Task<RawFrameLease> timed = reading.WaitAsync(deadline, clock);
             clock.Advance(deadline);
             await Assert.ThrowsAsync<TimeoutException>(() => timed);
@@ -98,7 +114,7 @@ public sealed class RawPooledReaderTests
             using var concurrent = scope.RentReader(Header, 0, null, Run(scope));
             Assert.Equal(0, scope.CapturePool().Hits);
             body.Release.TrySetResult();
-            using var completed = await reading.WaitAsync(Safety);
+            using var completed = await reading.WaitWithDiagnosticsAsync(Safety);
             byte[] original = completed.Frame.RawPixels;
             Assert.NotSame(concurrent.Frame.RawPixels, original);
             using var conversion = completed.Retain("FrameWork");
@@ -119,7 +135,7 @@ public sealed class RawPooledReaderTests
         finally
         {
             body.Release.TrySetResult();
-            (await reading.WaitAsync(Safety)).Dispose();
+            (await reading.WaitWithDiagnosticsAsync(Safety)).Dispose();
         }
     }
 

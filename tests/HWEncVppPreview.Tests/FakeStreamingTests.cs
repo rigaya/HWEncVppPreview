@@ -6,7 +6,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class FakeStreamingTests
 {
-    private static readonly TimeSpan SafetyTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
     [Fact]
     public async Task MissingFrameLimitStreamsUntilInputEndInOneShotMode()
@@ -117,7 +117,7 @@ public sealed class FakeStreamingTests
         Assert.Equal(1001, recovered[0].Xts);
         Assert.Equal(first.Header.ExtTags["XPID"], recovered[0].Header.ExtTags["XPID"]);
         await SendAsync(child.Process, new { cmd = "quit" });
-        await child.Process.WaitForExitAsync().WaitAsync(SafetyTimeout);
+        await child.Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(0, child.Process.ExitCode);
     }
 
@@ -125,12 +125,12 @@ public sealed class FakeStreamingTests
     public async Task CapabilitiesAreAdvertisedOnlyWhenExplicitlyEnabled()
     {
         await using var legacy = Start(["--help"], capabilities: false);
-        string oldHelp = await legacy.Process.StandardOutput.ReadToEndAsync().WaitAsync(SafetyTimeout);
-        await legacy.Process.WaitForExitAsync().WaitAsync(SafetyTimeout);
+        string oldHelp = await legacy.Process.StandardOutput.ReadToEndAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await legacy.Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.DoesNotContain("--timestamp-passthrough", oldHelp);
         await using var modern = Start(["--help"], capabilities: true);
-        string help = await modern.Process.StandardOutput.ReadToEndAsync().WaitAsync(SafetyTimeout);
-        await modern.Process.WaitForExitAsync().WaitAsync(SafetyTimeout);
+        string help = await modern.Process.StandardOutput.ReadToEndAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await modern.Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Contains("--timestamp-passthrough", help);
         Assert.Contains("--opencl-task-threads", help);
     }
@@ -142,7 +142,7 @@ public sealed class FakeStreamingTests
     }
 
     private static async Task<PreviewEvent> NextAsync(PreviewProtocolReader reader)
-        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException()).WaitAsync(SafetyTimeout);
+        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException()).WaitWithDiagnosticsAsync(SafetyTimeout);
 
     private static async Task SendAsync(Process process, object command)
     {
@@ -161,7 +161,7 @@ public sealed class FakeStreamingTests
             while (reader.ReadFrame() is { } frame) frames.Add(frame);
             return frames;
         });
-        await Task.WhenAll(read, child.Process.WaitForExitAsync()).WaitAsync(SafetyTimeout);
+        await Task.WhenAll(read, child.Process.WaitForExitAsync()).WaitWithDiagnosticsAsync(SafetyTimeout);
         return (child.Process.ExitCode, await read);
     }
 
@@ -187,8 +187,8 @@ public sealed class FakeStreamingTests
         public async ValueTask DisposeAsync()
         {
             if (!Process.HasExited) Process.Kill(entireProcessTree: true);
-            await Process.WaitForExitAsync().WaitAsync(SafetyTimeout);
-            await _stderr.WaitAsync(SafetyTimeout);
+            await Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            await _stderr.WaitWithDiagnosticsAsync(SafetyTimeout);
             Process.Dispose();
         }
     }

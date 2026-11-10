@@ -52,11 +52,11 @@ public sealed class OwnedProcessLifetimeViewModelTests
                 session.Cache.Clear();
                 Invoke(session.Vm, "ClearInterval");
                 session.Vm.StepFrameCommand.Execute(-1);
-                await session.Vm.WaitForPreparationAsync().WaitAsync(OwnedProcessSession.Safety);
+                await session.Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
                 session.Clock.Advance(TimeSpan.FromMilliseconds(150));
             }
             else await session.InitializeAsync();
-            using var packet = await completed.Task.WaitAsync(OwnedProcessSession.Safety);
+            using var packet = await completed.Task.WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
             var source = packet.Completed!.Segment!;
             var ids = source.Frames.Select(frame => frame.FrameId).ToHashSet();
             Assert.NotEmpty(ids);
@@ -160,7 +160,7 @@ public sealed class OwnedProcessLifetimeViewModelTests
         };
         session.Controller.ReplayStarted += _ => replay.TrySetResult();
         await session.InitializeAsync();
-        await replay.Task.WaitAsync(OwnedProcessSession.Safety);
+        await replay.Task.WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
         await session.WaitIdleAsync();
         await session.WaitForImageAsync(false, frame => frame.RawRunId != firstRun);
         Assert.True(firstRun > 0);
@@ -184,7 +184,7 @@ public sealed class OwnedProcessLifetimeViewModelTests
         long previousRun = session.DisplayedFrame()!.RawRunId;
         session.Vm.InputArgsText = "--avhw --fake-body-gate " + gate;
         session.Vm.OpenInput("owned-cancel.ts");
-        await session.Vm.WaitForPreparationAsync().WaitAsync(OwnedProcessSession.Safety);
+        await session.Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
         session.Clock.Advance(TimeSpan.FromMilliseconds(150));
         await WaitForBlockedReaderAsync(session, gate, "owned-cancel.ts", previousOwners, previousRun);
         session.Vm.InputArgsText = "--avhw";
@@ -211,7 +211,7 @@ public sealed class OwnedProcessLifetimeViewModelTests
             long previousRun = session.DisplayedFrame()!.RawRunId;
             session.Vm.InputArgsText = "--avhw --fake-body-gate " + gate;
             session.Vm.OpenInput("owned-active-dispose.ts");
-            await session.Vm.WaitForPreparationAsync().WaitAsync(OwnedProcessSession.Safety);
+            await session.Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
             session.Clock.Advance(TimeSpan.FromMilliseconds(150));
             await WaitForBlockedReaderAsync(session, gate, "owned-active-dispose.ts", previousOwners, previousRun);
         }

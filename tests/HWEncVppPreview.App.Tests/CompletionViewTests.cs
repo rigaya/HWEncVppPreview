@@ -16,7 +16,7 @@ namespace HWEncVppPreview.App.Tests;
 /// <summary>フィルタ行の補完と数値の上下ドラッグ (設計書 21.7)。help は H1 の書式の実 help を偽エンコーダから出す。</summary>
 public sealed class CompletionViewTests
 {
-    private static readonly TimeSpan SafetyTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
     [AvaloniaFact]
     public async Task TypingAnOptionThenAParameterAndAValueCompletesTheLine()
@@ -183,8 +183,8 @@ public sealed class CompletionViewTests
             var clock = new FakeTimeProvider();
             // 入力ファイルなしでプレビューは要求せず、--help の読み込みだけを行う
             var vm = new MainWindowViewModel(services, clock) { EncoderPath = FakeEncoderPath(), InputPath = "" };
-            await vm.InitializeAsync(false).WaitAsync(SafetyTimeout);
-            await vm.WaitForIdleAsync().WaitAsync(SafetyTimeout);
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.NotNull(vm.HelpSchema);
             // 補完はテキストの一覧の行で確かめる (V8 のフォームの上の行のテキスト欄も同じ処理を使う)
             vm.IsTextListMode = textListMode;

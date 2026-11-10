@@ -13,7 +13,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class CliHelpCheckTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private const string Prefix = "VPP Options:\n\n  [denoise] Denoise\n";
     private const string Valid = Prefix + "   --vpp-example [<param1>=<value>][,<param2>=<value>][...]\n    params\n"
         + "      amount=<float> Amount. (default: 0.25, range: 0..1)\n"
@@ -169,7 +169,7 @@ public sealed class CliHelpCheckTests
     public async Task CaptureDrainsBothStreamsIncludingStderrOnlyHelp(bool stderrOnly)
     {
         await using var child = new ShellChild(stderrOnly ? "stderr" : "stdout");
-        var result = await HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TimeSpan.FromSeconds(10)).WaitAsync(Safety);
+        var result = await HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TestTimeouts.Hang).WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(Valid, stderrOnly ? result.StandardError : result.StandardOutput);
         if (!stderrOnly) Assert.Equal(131072, result.StandardError.Length);
@@ -180,7 +180,7 @@ public sealed class CliHelpCheckTests
     public async Task CaptureRetainsNonzeroExitAndDiagnostics()
     {
         await using var child = new ShellChild("error");
-        var result = await HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TimeSpan.FromSeconds(10)).WaitAsync(Safety);
+        var result = await HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TestTimeouts.Hang).WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(23, result.ExitCode);
         Assert.Contains("child failed", result.StandardError);
         AssertStopped(child.Pid);
@@ -195,7 +195,7 @@ public sealed class CliHelpCheckTests
         await clock.WaitForTimerAsync(TimeSpan.FromSeconds(3));
         await child.WaitUntilReadyAsync();
         clock.Advance(TimeSpan.FromSeconds(3));
-        var error = await Assert.ThrowsAsync<HelpCaptureException>(() => running.WaitAsync(Safety));
+        var error = await Assert.ThrowsAsync<HelpCaptureException>(() => running.WaitWithDiagnosticsAsync(Safety));
         Assert.True(error.TimedOut);
         AssertStopped(child.Pid);
     }
@@ -213,7 +213,7 @@ public sealed class CliHelpCheckTests
         clock.Advance(TimeSpan.FromSeconds(3));
         await clock.WaitForTimerAsync(TimeSpan.FromSeconds(5));
         clock.Advance(TimeSpan.FromSeconds(5));
-        var error = await Assert.ThrowsAsync<HelpCaptureException>(() => running.WaitAsync(Safety));
+        var error = await Assert.ThrowsAsync<HelpCaptureException>(() => running.WaitWithDiagnosticsAsync(Safety));
         Assert.True(error.TimedOut);
         Assert.Equal(0, error.EncoderExitCode);
         Assert.NotNull(error.CleanupError);
@@ -233,7 +233,7 @@ public sealed class CliHelpCheckTests
     private static async Task<Run> RunAsync(params string[] args)
     {
         using var output = new StringWriter(CultureInfo.InvariantCulture);
-        int code = await CliProgram.RunAsync(args, output).WaitAsync(Safety);
+        int code = await CliProgram.RunAsync(args, output).WaitWithDiagnosticsAsync(Safety);
         string[] lines = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.Single(lines);
         return new(code, JsonDocument.Parse(lines[0]));
@@ -270,7 +270,7 @@ public sealed class CliHelpCheckTests
         }
         public async Task WaitForTimerAsync(TimeSpan expected)
         {
-            TimeSpan actual = await _armed.Reader.ReadAsync().AsTask().WaitAsync(Safety);
+            TimeSpan actual = await _armed.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
             Assert.Equal(expected, actual);
         }
     }
@@ -351,7 +351,7 @@ public sealed class CliHelpCheckTests
             try
             {
                 using var process = Process.GetProcessById(_parentPid);
-                await process.WaitForExitAsync().WaitAsync(Safety);
+                await process.WaitForExitAsync().WaitWithDiagnosticsAsync(Safety);
             }
             catch (ArgumentException) { }
         }
@@ -365,7 +365,7 @@ public sealed class CliHelpCheckTests
                     {
                         using var process = Process.GetProcessById(Pid);
                         if (!process.HasExited) process.Kill(entireProcessTree: true);
-                        await process.WaitForExitAsync().WaitAsync(Safety);
+                        await process.WaitForExitAsync().WaitWithDiagnosticsAsync(Safety);
                     }
                     catch (ArgumentException) { }
                 }

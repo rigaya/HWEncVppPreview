@@ -16,7 +16,7 @@ public sealed class OutputStartRecoveryTests
         controller.Failed+=value=>failure=value;
         controller.Submit(new PreviewRequest {EncoderPath="encoder",InputFile="input",Fps=30,TargetSeconds=10,
             PreMarginSeconds=2,PostMarginSeconds=0.5,Continuous=continuous,Capabilities=new(true),TimestampOriginSeconds=1000});
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Null(failure);
         Assert.NotNull(selected);
         Assert.Equal(1010.002,selected.Frame.Xts!.Value,6);

@@ -60,7 +60,7 @@ public sealed class NavigationBenchmarkTests
             PerfTrace.Write("bench.scenario.end", new { vm.CurrentSeconds, vm.StatusText, vm.ErrorText,
                 pauseMs = (GC.GetTotalPauseDuration() - scenarioPauseStart).TotalMilliseconds,
                 collectionDelta = new[] { GC.CollectionCount(0) - scenarioCollections[0], GC.CollectionCount(1) - scenarioCollections[1], GC.CollectionCount(2) - scenarioCollections[2] } });
-            await vm.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(60));
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             PerfTrace.Write("bench.settled", new { vm.CurrentSeconds, vm.StatusText, vm.ErrorText });
             Assert.Null(vm.ErrorText);
             // 実測時だけ、需要が満たされた後の常駐プロセスを観測できる期間を設ける。

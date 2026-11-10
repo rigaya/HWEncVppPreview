@@ -28,4 +28,7 @@
     <None Include="..\Data\**" Link="Data\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\TestTimeouts.cs" Link="Testing\TestTimeouts.cs" />
+  </ItemGroup>
 </Project>

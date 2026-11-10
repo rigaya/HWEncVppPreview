@@ -10,7 +10,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class ReversePrefetchNavigationTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [AvaloniaFact]
     public async Task OneReverseStepThenForwardKeepsPausedPhysicalStream()
@@ -35,7 +35,7 @@ public sealed class ReversePrefetchNavigationTests
         string status = fixture.Vm.StatusText;
         string log = fixture.Vm.LogText;
         fixture.Backend.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(seconds, fixture.Vm.CurrentSeconds);
         Assert.Same(image, fixture.Vm.PreviewImage);
         Assert.Equal(status, fixture.Vm.StatusText);
@@ -60,7 +60,7 @@ public sealed class ReversePrefetchNavigationTests
         Assert.Equal(9, fixture.Vm.CurrentSeconds, 6);
         Assert.Equal(2, fixture.Backend.Requests.Count);
         fixture.Backend.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(9 - 1.0 / 30, fixture.Vm.CurrentSeconds, 6);
         Assert.Equal(2, fixture.Backend.Requests.Count);
         Assert.False(fixture.Vm.IsBusy);
@@ -80,7 +80,7 @@ public sealed class ReversePrefetchNavigationTests
         Assert.Equal(9 + 1.0 / 30, forward, 6);
         Assert.DoesNotContain(fixture.Backend.Cancelled, IsPrefetch);
         fixture.Backend.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(forward, fixture.Vm.CurrentSeconds);
         Assert.DoesNotContain(fixture.Backend.Cancelled, IsPrefetch);
         Assert.Equal(2, fixture.Backend.Requests.Count);
@@ -95,11 +95,11 @@ public sealed class ReversePrefetchNavigationTests
         await fixture.StartPrefetchAsync();
         if (edit) fixture.Vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-nlmeans" });
         else fixture.Vm.CurrentSeconds = 30;
-        await fixture.Vm.WaitForPreparationAsync().WaitAsync(Safety);
+        await fixture.Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         if (edit) fixture.Clock.Advance(TimeSpan.FromMilliseconds(150));
         try
         {
-            await PumpUntilAsync(() => fixture.Backend.Cancelled.Any(IsPrefetch)).WaitAsync(Safety);
+            await PumpUntilAsync(() => fixture.Backend.Cancelled.Any(IsPrefetch)).WaitWithDiagnosticsAsync(Safety);
         }
         catch (Exception exception)
         {
@@ -113,7 +113,7 @@ public sealed class ReversePrefetchNavigationTests
                 + $"started={fixture.Backend.Started.Task.Status}, release={fixture.Backend.Release.Task.Status}, "
                 + $"requests=[{requests}], cancelled=[{cancelled}]", exception);
         }
-        await fixture.Vm.WaitForIdleAsync().WaitAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Null(fixture.Vm.ErrorText);
         if (!edit) Assert.Equal(30, fixture.Vm.CurrentSeconds, 6);
         Assert.Single(fixture.Backend.Requests, IsPrefetch);
@@ -126,10 +126,10 @@ public sealed class ReversePrefetchNavigationTests
         await fixture.StartPrefetchAsync();
         double previous = fixture.Vm.CurrentSeconds;
         fixture.Backend.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         fixture.Vm.StepFrameCommand.Execute(-1);
-        await fixture.Vm.WaitForPreparationAsync().WaitAsync(Safety);
-        await fixture.Vm.WaitForIdleAsync().WaitAsync(Safety);
+        await fixture.Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(previous - 1.0 / 30, fixture.Vm.CurrentSeconds, 6);
         Assert.Equal(3, fixture.Backend.Requests.Count);
         Assert.False(fixture.Backend.Requests.Last().Continuous);
@@ -144,7 +144,7 @@ public sealed class ReversePrefetchNavigationTests
         for (int i = 0; i < 6; ++i) await fixture.StepAsync(-1);
         Assert.Equal(0, fixture.Vm.CurrentSeconds, 6);
         for (int i = 0; i < 5; ++i) fixture.Vm.StepFrameCommand.Execute(-1);
-        await fixture.Vm.WaitForIdleAsync().WaitAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, fixture.Vm.CurrentSeconds, 6);
         Assert.False(fixture.Vm.IsBusy);
         Assert.DoesNotContain(fixture.Backend.Requests, IsPrefetch);
@@ -175,10 +175,10 @@ public sealed class ReversePrefetchNavigationTests
             var fixture = new Fixture(mismatch, seconds);
             try
             {
-                await fixture.Vm.InitializeAsync(false).WaitAsync(Safety);
+                await fixture.Vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
                 fixture.Clock.Advance(TimeSpan.FromMilliseconds(150));
-                await fixture.Backend.Paused.Task.WaitAsync(Safety);
-                await fixture.Vm.WaitForIdleAsync().WaitAsync(Safety);
+                await fixture.Backend.Paused.Task.WaitWithDiagnosticsAsync(Safety);
+                await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
                 return fixture;
             }
             catch { await fixture.DisposeAsync(); throw; }
@@ -186,18 +186,18 @@ public sealed class ReversePrefetchNavigationTests
         public async Task StepAsync(int direction)
         {
             Vm.StepFrameCommand.Execute(direction);
-            await Vm.WaitForPreparationAsync().WaitAsync(Safety);
-            await PumpUntilAsync(() => !Vm.IsBusy).WaitAsync(Safety);
+            await Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
+            await PumpUntilAsync(() => !Vm.IsBusy).WaitWithDiagnosticsAsync(Safety);
         }
         public async Task StartPrefetchAsync()
         {
             for (int i = 0; i < 5; ++i) await StepAsync(-1);
-            await Backend.Started.Task.WaitAsync(Safety);
+            await Backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
         }
         public async ValueTask DisposeAsync()
         {
             Backend.Release.TrySetResult();
-            await Vm.DisposeAsync().AsTask().WaitAsync(Safety);
+            await Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
             Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", _capabilities);
             _services.Dispose();
         }

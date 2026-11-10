@@ -15,15 +15,15 @@ public sealed class EncoderPreparationViewModelTests
         { EncoderPath = FakeEncoderPath() };
         try
         {
-            await vm.InitializeAsync(false).WaitAsync(TimeSpan.FromSeconds(10));
-            await backend.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await backend.Started.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             Task metadata = (Task)typeof(MainWindowViewModel).GetField("_metadataTask", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(vm)!;
-            await metadata.WaitAsync(TimeSpan.FromSeconds(10));
+            await metadata.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             Assert.NotNull(vm.HelpSchema);
             Assert.False(backend.Release.Task.IsCompleted);
         }
         finally { backend.Release.TrySetResult(); }
-        await vm.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
     }
 
     private sealed class HeldInitializationBackend : IPreviewBackend

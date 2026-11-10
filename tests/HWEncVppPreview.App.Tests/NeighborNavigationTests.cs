@@ -11,7 +11,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class NeighborNavigationTests(ITestOutputHelper output)
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [AvaloniaTheory]
     [InlineData(1, 0.0, 0.46, 0.55, 1048576)]
@@ -28,7 +28,7 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
         int starts = backend.AfterStarts;
         string before = ImageHash(vm);
         vm.StepFrameCommand.Execute(direction);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         output.WriteLine($"VFR方向={direction}: 起点={edge:F6}, 目標={vm.CurrentSeconds:F6}, 追加起動={backend.AfterStarts - starts}, 画像変化={before != ImageHash(vm)}");
         Assert.Equal(starts + 1, backend.AfterStarts);
         Assert.Equal(expected, vm.CurrentSeconds, 7);
@@ -48,7 +48,7 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
         string before = ImageHash(vm);
         int starts = backend.Starts;
         vm.StepFrameCommand.Execute(direction);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(origin, vm.CurrentSeconds, 7);
         Assert.Equal(before, ImageHash(vm));
         Assert.Contains(status, vm.StatusText);
@@ -67,16 +67,16 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
         await MoveToAsync(vm, 0.46, 1);
         int starts = backend.Starts;
         vm.StepFrameCommand.Execute(1);
-        await backend.RefetchStarted.Task.WaitAsync(Safety);
+        await backend.RefetchStarted.Task.WaitWithDiagnosticsAsync(Safety);
         for (int i = 0; i < 20; ++i) vm.StepFrameCommand.Execute(1);
         Assert.Equal(0.46, vm.CurrentSeconds, 7);
         Assert.Equal(starts + 1, backend.Starts);
         backend.ReleaseRefetch();
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0.55, vm.CurrentSeconds, 7);
         Assert.Equal(ExpectedHash(0.55), ImageHash(vm));
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0.62, vm.CurrentSeconds, 7);
         Assert.Equal(ExpectedHash(0.62), ImageHash(vm));
         Assert.Equal(starts + 1, backend.Starts);
@@ -91,11 +91,11 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
         await InitializeAsync(vm, clock);
         await MoveToAsync(vm, 0.5, 1);
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0.505, vm.CurrentSeconds, 7);
         Assert.Equal(ExpectedHash(0.505), ImageHash(vm));
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0.51, vm.CurrentSeconds, 7);
         Assert.Equal(ExpectedHash(0.51), ImageHash(vm));
         Assert.Equal(2, backend.Starts);
@@ -110,17 +110,17 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
         await InitializeAsync(vm, clock);
         await MoveToAsync(vm, 0.46, 1);
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0.55, vm.CurrentSeconds, 7);
         Assert.Equal(2, backend.Starts);
         int starts = backend.Starts;
         // 元の中心区間へ戻ってから同じ端を再度越える。どちらの区間も取得済み。
         vm.CurrentSeconds = 0;
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(ExpectedHash(0), ImageHash(vm));
         await MoveToAsync(vm, 0.46, 1);
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         output.WriteLine($"取得済み区間の往復: 追加起動={backend.Starts - starts}, 目標={vm.CurrentSeconds:F6}");
         Assert.Equal(starts, backend.Starts);
         Assert.Equal(0.55, vm.CurrentSeconds, 7);
@@ -135,9 +135,9 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
         };
     private static async Task InitializeAsync(MainWindowViewModel vm, FakeTimeProvider clock)
     {
-        await vm.InitializeAsync(false).WaitAsync(Safety);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.NotNull(vm.PreviewImage);
     }
     private static async Task MoveToAsync(MainWindowViewModel vm, double target, int direction)
@@ -146,7 +146,7 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
         {
             double previous = vm.CurrentSeconds;
             vm.StepFrameCommand.Execute(direction);
-            await vm.WaitForIdleAsync().WaitAsync(Safety);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
             Assert.True((vm.CurrentSeconds - previous) * direction > 0);
         }
         Assert.Equal(target, vm.CurrentSeconds, 7);

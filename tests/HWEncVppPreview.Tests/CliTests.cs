@@ -10,7 +10,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class CliTests
 {
-    private static readonly TimeSpan SafetyTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
     [Theory]
     [InlineData("oneshot", "oneshot")]
@@ -123,9 +123,9 @@ public sealed class CliTests
         using var output = new StringWriter(CultureInfo.InvariantCulture);
         var run = CliProgram.RunAsync(Args("--mode", "oneshot", "--input-args", "--fake-hang-after 0"), output, clock);
         // help取得後に入力検査のタイマーが登録されるまで待ち、登録前Advanceとの競合を避ける。
-        await clock.ProbeTimerRegistered.Task.WaitAsync(SafetyTimeout);
+        await clock.ProbeTimerRegistered.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
         clock.Advance(TimeSpan.FromSeconds(31));
-        Assert.Equal(3, await run.WaitAsync(SafetyTimeout));
+        Assert.Equal(3, await run.WaitWithDiagnosticsAsync(SafetyTimeout));
         using var json = ParseSingleLine(output.ToString());
         Assert.Equal(3, json.RootElement.GetProperty("rc").GetInt32());
         Assert.True(json.RootElement.GetProperty("timedOut").GetBoolean());
@@ -267,7 +267,7 @@ public sealed class CliTests
         Task<string> error = process.StandardError.ReadToEndAsync();
         try
         {
-            await process.WaitForExitAsync().WaitAsync(SafetyTimeout);
+            await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             return new(process.ExitCode, await output, await error);
         }
         finally

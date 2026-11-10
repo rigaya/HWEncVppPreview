@@ -7,7 +7,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class HistoryProbeTests
 {
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Timeout = TestTimeouts.Hang;
     private static PreviewRequest Request() => new()
     {
         EncoderPath = BackendTests.FakeEncoderPath(), InputFile = "input.ts", Fps = 30,
@@ -32,7 +32,7 @@ public sealed class HistoryProbeTests
         PreviewFailure? failed = null;
         controller.Failed += value => failed = value;
         controller.Submit((request ?? Request()) with { Continuous = continuous }, background: background);
-        await controller.WaitForIdleAsync().WaitAsync(Timeout);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Timeout);
         Assert.Null(failed);
         return Assert.IsType<PreviewSegmentSnapshot>(segment);
     }
@@ -190,13 +190,13 @@ public sealed class HistoryProbeTests
             var sink = new EmptySink();
             var run = backend.RunAsync(Request() with { Continuous = true, TargetSeconds = 0, PreMarginSeconds = 0,
                 InputArgs = new[] { "--avhw", "--fake-hang-after", "1" } }, sink, cancellation.Token);
-            await sink.FirstFrame.Task.WaitAsync(Timeout);
+            await sink.FirstFrame.Task.WaitWithDiagnosticsAsync(Timeout);
             var probe = backend.GetHistoryRequirementAsync(Request());
             Assert.False(probe.IsCompleted);
             Assert.DoesNotContain(Commands(log), item => item.GetProperty("cmd").GetString() == "probe");
             cancellation.Cancel();
-            Assert.True((await run.WaitAsync(Timeout)).IsCancelled);
-            Assert.False(await probe.WaitAsync(Timeout));
+            Assert.True((await run.WaitWithDiagnosticsAsync(Timeout)).IsCancelled);
+            Assert.False(await probe.WaitWithDiagnosticsAsync(Timeout));
             string[] commands = Commands(log).Select(item => item.GetProperty("cmd").GetString()!).ToArray();
             Assert.Equal(new[] { "run", "cancel", "probe" }, commands);
         }
@@ -233,7 +233,7 @@ public sealed class HistoryProbeTests
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request());
-        await controller.WaitForIdleAsync().WaitAsync(Timeout);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Timeout);
         Assert.IsType<PreviewServerNotSupportedException>(failure?.Exception);
     }
 

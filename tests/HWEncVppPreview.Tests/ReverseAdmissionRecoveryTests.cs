@@ -55,9 +55,9 @@ public sealed class ReverseAdmissionRecoveryTests
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
         var request = Request();
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         controller.NotifyNavigation(request with { TargetSeconds = 300.08 }, -1);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         var run = Assert.Single(backend.Requests);
         Assert.Equal(5, run.PreMarginSeconds);
         Assert.Equal(1, run.PostMarginSeconds);

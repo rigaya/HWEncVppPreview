@@ -10,7 +10,7 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class ForwardPrefetchViewModelTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [AvaloniaFact]
     public async Task cache順移動の先読み開始で現在画像を境界へ飛ばさず微小逆移動も保持する()
@@ -19,17 +19,17 @@ public sealed class ForwardPrefetchViewModelTests
         var clock = new FakeTimeProvider(); var backend = new Backend();
         await using var vm = new MainWindowViewModel(services, clock, backend, backend)
         { EncoderPath = FakeEncoderPath(), InputPath = "c2-prefetch.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
-        await vm.InitializeAsync(false).WaitAsync(Safety); clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitAsync(Safety);
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety); clock.Advance(TimeSpan.FromMilliseconds(150));
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Single(backend.Requests); Assert.Equal(10, vm.CurrentSeconds);
         for (int i = 0; i < 6; i++)
         {
-            vm.StepFrameCommand.Execute(1); await vm.WaitForIdleAsync().WaitAsync(Safety);
+            vm.StepFrameCommand.Execute(1); await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         }
-        await backend.SecondStarted.Task.WaitAsync(Safety);
+        await backend.SecondStarted.Task.WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(10.6, vm.CurrentSeconds, 7); Assert.Equal(2, backend.Requests.Count);
         Assert.Null(vm.ErrorText); Assert.NotNull(vm.PreviewImage);
-        vm.StepFrameCommand.Execute(-1); await vm.WaitForIdleAsync().WaitAsync(Safety);
+        vm.StepFrameCommand.Execute(-1); await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(10.5, vm.CurrentSeconds, 7); Assert.Equal(0, backend.Cancelled);
         Assert.Equal(2, backend.Requests.Count); Assert.Null(vm.ErrorText);
     }

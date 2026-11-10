@@ -5,7 +5,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class WindowSeekBackendTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [Theory]
     [InlineData(null, false)]
@@ -25,7 +25,7 @@ public sealed class WindowSeekBackendTests
                 else start.Environment.Remove("FAKE_ENCODER_WINDOW_SEEK");
             }))
             {
-                Assert.Equal(0, (await backend.RunAsync(Request(), new Sink()).WaitAsync(Safety)).ExitCode);
+                Assert.Equal(0, (await backend.RunAsync(Request(), new Sink()).WaitWithDiagnosticsAsync(Safety)).ExitCode);
             }
             var runs = ReadRuns(log);
             Assert.Single(runs);
@@ -53,7 +53,7 @@ public sealed class WindowSeekBackendTests
             {
                 string[] trim=value.Length==0?[option]:[option,value];
                 var request=vpp?Request() with {VppArgs=trim}:Request() with {InputArgs=trim};
-                Assert.Equal(0,(await backend.RunAsync(request,new Sink()).WaitAsync(Safety)).ExitCode);
+                Assert.Equal(0,(await backend.RunAsync(request,new Sink()).WaitWithDiagnosticsAsync(Safety)).ExitCode);
             }
             Assert.False(Assert.Single(ReadRuns(log)).TryGetProperty("window_seek",out _));
         }
@@ -74,7 +74,7 @@ public sealed class WindowSeekBackendTests
             }))
             {
                 for (int i = 0; i < 3; ++i)
-                    Assert.Equal(0, (await backend.RunAsync(Request(), new Sink()).WaitAsync(Safety)).ExitCode);
+                    Assert.Equal(0, (await backend.RunAsync(Request(), new Sink()).WaitWithDiagnosticsAsync(Safety)).ExitCode);
             }
             Assert.Equal(3, started);
             var runs = ReadRuns(log);

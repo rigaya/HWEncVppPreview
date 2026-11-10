@@ -6,7 +6,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class ForwardAdoptionTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static PreviewRequest Request(double target, long id = 1) => new()
     {
         EncoderPath = "forward-observed", InputFile = "input", Fps = 10, TargetSeconds = target,
@@ -40,15 +40,15 @@ public sealed class ForwardAdoptionTests
         for (int run = 1; run <= 1; ++run)
         {
             controller.Submit(Request(30, run), bypassCache: true);
-            var calibration = await backend.Started.Reader.ReadAsync().AsTask().WaitAsync(Safety);
+            var calibration = await backend.Started.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
             clock.Advance(TimeSpan.FromSeconds(1)); await calibration.Send(29);
             for (int i = 291; i <= 320; ++i) { clock.Advance(TimeSpan.FromMilliseconds(50)); await calibration.Send(i / 10d); }
-            await controller.WaitForCurrentDemandAsync().WaitAsync(Safety);
+            await controller.WaitForCurrentDemandAsync().WaitWithDiagnosticsAsync(Safety);
         }
         var seed = cache.StoreSegment(Request(10), Enumerable.Range(90, 40).Select(i => Frame(i / 10d)).ToArray(), new(1000, 9, true), 9, 13);
-        controller.Submit(Request(10, 2), navigation: true); await controller.WaitForIdleAsync().WaitAsync(Safety);
+        controller.Submit(Request(10, 2), navigation: true); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         controller.NotifyNavigation(Request(11.5, 3), 1);
-        var forward = await backend.Started.Reader.ReadAsync().AsTask().WaitAsync(Safety);
+        var forward = await backend.Started.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
         if (reason != "unobserved")
         {
             double first = reason == "first_after" ? 13.1 : 12;
@@ -65,14 +65,14 @@ public sealed class ForwardAdoptionTests
             Assert.True(cache.Append(blocker, new(new Y4mHeader { Width = 2, Height = 2 }, 1100, 0.1,
                 new byte[checked((int)(cache.CapacityBytes - cache.SizeBytes))])));
         }
-        if (reason == "eof") { forward.Finished.TrySetResult(); await controller.WaitForIdleAsync().WaitAsync(Safety); }
+        if (reason == "eof") { forward.Finished.TrySetResult(); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety); }
         var neighbor = Request(12.9, 20);
         if (reason == "content") neighbor = neighbor with { VppArgs = new[] { "different" } };
         if (reason == "legacy") neighbor = neighbor with { TimestampOriginTrusted = false };
         controller.Submit(neighbor, bypassCache: true, navigation: reason != "explicit", reuseActiveStream: reason != "no_reuse");
         if (reason == "eof")
         {
-            await backend.Started.Reader.ReadAsync().AsTask().WaitAsync(Safety); Assert.Equal(3, backend.Calls); return;
+            await backend.Started.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety); Assert.Equal(3, backend.Calls); return;
         }
         if (reason is not ("near" or "watchdog" or "generation"))
         {
@@ -84,14 +84,14 @@ public sealed class ForwardAdoptionTests
         if (reason == "watchdog")
         {
             PreviewFailure? failure = null; controller.Failed += value => failure = value;
-            clock.Advance(TimeSpan.FromSeconds(6)); await controller.WaitForIdleAsync().WaitAsync(Safety);
+            clock.Advance(TimeSpan.FromSeconds(6)); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
             Assert.True(failure?.TimedOut); Assert.True(forward.Token.IsCancellationRequested); return;
         }
         if (reason == "generation")
         {
             controller.Submit(Request(30, 21), bypassCache: true);
             Assert.True(forward.Token.IsCancellationRequested);
-            var latest = await backend.Started.Reader.ReadAsync().AsTask().WaitAsync(Safety);
+            var latest = await backend.Started.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
             clock.Advance(TimeSpan.FromSeconds(1)); await latest.Send(29);
             for (int i = 291; i <= 301; ++i) { clock.Advance(TimeSpan.FromMilliseconds(50)); await latest.Send(i / 10d); }
             forward.EmitLate(12.9);

@@ -29,7 +29,7 @@ public sealed class TimestampReplayTests
         controller.Failed += failures.Add;
         var request = Request(fault, continuous);
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Empty(failures);
         var image = Assert.Single(images);
         var completed = Assert.Single(completions);
@@ -45,7 +45,7 @@ public sealed class TimestampReplayTests
         Assert.True(controller.IsLegacySource(request));
         Assert.Equal(2, backend.Requests.Count);
         controller.Submit(request with { TargetSeconds = 11 }, navigation: true);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Equal(3, backend.Requests.Count);
         Assert.False(backend.Requests[^1].Capabilities.TimestampPassthrough);
     }
@@ -61,7 +61,7 @@ public sealed class TimestampReplayTests
         controller.FrameReady += images.Add;
         var request = Request("--fake-clock-jump-at", true) with { InputArgs = new[] { "--fake-clock-jump-at", "100" } };
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.True(Assert.Single(completions).IsReplay);
         Assert.Contains(images, image => !image.IsReplay);
         Assert.True(images[^1].IsReplay);
@@ -76,7 +76,7 @@ public sealed class TimestampReplayTests
         var request = Request("--fake-clock-jump-at", true) with
             { TargetSeconds = 0, InputArgs = new[] { "--fake-clock-jump-at", "1850" } };
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         for (int seconds = 2; seconds <= 60; seconds += 2)
         {
             controller.Submit(request with
@@ -85,7 +85,7 @@ public sealed class TimestampReplayTests
                 SeekSecondsOverride = seconds == 60 ? 0 : null,
                 PreMarginSeconds = seconds == 60 ? 60 : 2,
             }, navigation: true);
-            await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         }
         Assert.Equal(2, backend.Requests.Count);
         var physical = backend.Requests[^1];
@@ -116,7 +116,7 @@ public sealed class TimestampReplayTests
         controller.Completed += value => complete = value;
         var request = Request("--fake-clock-jump-at", true) with { TimestampOriginSeconds = 95443.7, TimestampOriginTrusted = false };
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Single(backend.Requests);
         Assert.False(backend.Requests[0].Capabilities.TimestampPassthrough);
         Assert.NotNull(complete);
@@ -140,7 +140,7 @@ public sealed class TimestampReplayTests
                 InputFile = changeVpp ? "same.ts" : variant == 0 ? "a.ts" : "b.ts",
                 VppArgs = changeVpp && variant == 1 ? new[] { "--fake-origin-seconds", "1000" } : Array.Empty<string>(),
             });
-            await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         }
         Assert.Equal(6, backend.Requests.Count);
         Assert.Equal(new[] { true, false, true, false, true, false }, backend.Requests.Select(value => value.Capabilities.TimestampPassthrough));
@@ -154,12 +154,12 @@ public sealed class TimestampReplayTests
         await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero, backgroundBackend: background);
         var request = Request("--fake-clock-jump-at", false);
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         controller.Submit(request with { VppArgs = new[] { "--fake-origin-seconds", "1000" } }, background: true);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.True(controller.IsLegacySource(request));
         controller.Submit(request with { TargetSeconds = 11 }, navigation: true);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Equal(3, backend.Requests.Count);
         Assert.False(backend.Requests[^1].Capabilities.TimestampPassthrough);
     }
@@ -182,7 +182,7 @@ public sealed class TimestampReplayTests
             VppArgs = new[] { "--timestamp-passthrough" },
         };
         controller.Submit(logical);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         var physical = Assert.Single(completions).Segment!.PhysicalRequest;
         var plan = CommandBuilder.Plan(physical);
         double target = 10 + 1.0 / 30;
@@ -194,7 +194,7 @@ public sealed class TimestampReplayTests
             PostMarginSeconds = (plan.FrameCount - 1) / logical.Fps - pre,
         };
         controller.Submit(retargeted, navigation: true);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Equal(2, backend.Requests.Count);
         var cached = completions[^1];
         Assert.True(cached.FromCache);
@@ -219,7 +219,7 @@ public sealed class TimestampReplayTests
             VppArgs = new[] { "--timestamp-passthrough" },
         };
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         var physical = backend.Requests[^1];
         Assert.DoesNotContain("--timestamp-passthrough", CommandBuilder.BuildOneShot(physical));
         Assert.Contains("--timestamp-passthrough", request.InputArgs);

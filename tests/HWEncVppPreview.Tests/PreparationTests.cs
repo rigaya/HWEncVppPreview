@@ -3,7 +3,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class PreparationTests
 {
-    private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [Fact]
     public async Task InputProbeBorrowsBackendWithoutNotificationsCacheOrDuplicateDispose()
@@ -16,7 +16,7 @@ public sealed class PreparationTests
         controller.FrameReady += _ => notifications++;
         controller.Completed += _ => notifications++;
         controller.Failed += _ => notifications++;
-        var info = await controller.ProbeInputAsync(probe, "encoder", "input.ts", ["--avhw"], new()).WaitAsync(Safety);
+        var info = await controller.ProbeInputAsync(probe, "encoder", "input.ts", ["--avhw"], new()).WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(30, info.Fps);
         Assert.Equal(1, backend.Calls);
         Assert.Equal(0, notifications);
@@ -35,8 +35,8 @@ public sealed class PreparationTests
         var fallback = new CountingBackend();
         await using var controller = new PreviewController(server, fallback);
         await using var probe = new InputProbe();
-        await controller.ProbeInputAsync(probe, "encoder", "a.ts", [], new()).WaitAsync(Safety);
-        await controller.ProbeInputAsync(probe, "encoder", "b.ts", [], new()).WaitAsync(Safety);
+        await controller.ProbeInputAsync(probe, "encoder", "a.ts", [], new()).WaitWithDiagnosticsAsync(Safety);
+        await controller.ProbeInputAsync(probe, "encoder", "b.ts", [], new()).WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(1, server.Calls);
         Assert.Equal(2, fallback.Calls);
     }
@@ -48,8 +48,8 @@ public sealed class PreparationTests
         var controller = new PreviewController(backend, backend);
         await using var probe = new InputProbe();
         Task<InputInfo> pending = controller.ProbeInputAsync(probe, "encoder", "input.ts", [], new());
-        await backend.Started.Task.WaitAsync(Safety);
-        await controller.DisposeAsync().AsTask().WaitAsync(Safety);
+        await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
+        await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
         Assert.Equal(1, backend.Disposals);
         Assert.False(controller.ShutdownIncomplete);

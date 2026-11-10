@@ -7,7 +7,7 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class FakeProcessControlTests
 {
-    private static readonly TimeSpan SafetyTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
     [Fact]
     public async Task IgnoredQuitIsLoggedAndNextRequestStillRuns()
@@ -29,7 +29,7 @@ public sealed class FakeProcessControlTests
             while (await NextAsync(reader) is not PreviewEnd end || end.Id != 7) { }
             Assert.False(process.HasExited);
             process.StandardInput.Close();
-            await process.WaitForExitAsync().WaitAsync(SafetyTimeout);
+            await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal(0, process.ExitCode);
             string[] commands = FakeLogFiles.ReadAllLines(log);
             Assert.Equal(2, commands.Length);
@@ -41,7 +41,7 @@ public sealed class FakeProcessControlTests
         finally
         {
             await StopAsync(process);
-            await stderr.WaitAsync(SafetyTimeout);
+            await stderr.WaitWithDiagnosticsAsync(SafetyTimeout);
             Directory.Delete(directory, recursive: true);
         }
     }
@@ -68,14 +68,14 @@ public sealed class FakeProcessControlTests
             await SendAsync(parent, new { cmd = "quit" });
             await WaitForFileAsync(ready);
             child = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(ready), System.Globalization.CultureInfo.InvariantCulture));
-            await parent.WaitForExitAsync().WaitAsync(SafetyTimeout);
+            await parent.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal(0, parent.ExitCode);
             var eof = parent.StandardOutput.ReadToEndAsync();
             Assert.False(eof.IsCompleted);
             Assert.False(stderr.IsCompleted);
             await File.WriteAllTextAsync(release, "");
-            await child.WaitForExitAsync().WaitAsync(SafetyTimeout);
-            Assert.Equal("", await eof.WaitAsync(SafetyTimeout));
+            await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            Assert.Equal("", await eof.WaitWithDiagnosticsAsync(SafetyTimeout));
             Assert.Equal("0", await File.ReadAllTextAsync(exited));
         }
         finally
@@ -91,11 +91,11 @@ public sealed class FakeProcessControlTests
             }
             if (child != null)
             {
-                try { await child.WaitForExitAsync().WaitAsync(SafetyTimeout); }
+                try { await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout); }
                 catch (TimeoutException) { await StopAsync(child); }
                 child.Dispose();
             }
-            await stderr.WaitAsync(SafetyTimeout);
+            await stderr.WaitWithDiagnosticsAsync(SafetyTimeout);
             Directory.Delete(directory, recursive: true);
         }
     }
@@ -121,11 +121,11 @@ public sealed class FakeProcessControlTests
     private static async Task StopAsync(Process process)
     {
         if (!process.HasExited) process.Kill(entireProcessTree: true);
-        await process.WaitForExitAsync().WaitAsync(SafetyTimeout);
+        await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
     }
 
     private static async Task<PreviewEvent> NextAsync(PreviewProtocolReader reader)
-        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException()).WaitAsync(SafetyTimeout);
+        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException()).WaitWithDiagnosticsAsync(SafetyTimeout);
 
     private static async Task SendAsync(Process process, object command)
     {
@@ -141,6 +141,6 @@ public sealed class FakeProcessControlTests
         watcher.Renamed += (_, _) => { if (File.Exists(path)) ready.TrySetResult(); };
         watcher.EnableRaisingEvents = true;
         if (File.Exists(path)) return;
-        await ready.Task.WaitAsync(SafetyTimeout);
+        await ready.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
     }
 }

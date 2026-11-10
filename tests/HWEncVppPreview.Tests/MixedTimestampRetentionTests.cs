@@ -13,7 +13,7 @@ public sealed class MixedTimestampRetentionTests
         var images=new List<PreviewFrameResult>();
         controller.FrameReady+=images.Add;
         controller.Submit(new(){EncoderPath="mixed",InputFile="input",Fps=30,TargetSeconds=0});
-        await controller.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         if(selectable)
         {
             var image=Assert.Single(images);
