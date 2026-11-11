@@ -4,11 +4,37 @@ using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.ViewModels;
 using HWEncVppPreview.Testing;
 using HWEncVppPreview.App.Views;
+using HWEncVppPreview.Core;
 
 namespace HWEncVppPreview.App.Tests;
 
 public sealed class RealEncoderSeekTests
 {
+    [AvaloniaFact]
+    public async Task StartupRestoresOutOfRangeSavedTimeToZero()
+    {
+        string? encoder = Environment.GetEnvironmentVariable("HWENC_VIEWER_SEEK_ENCODER");
+        string? input = Environment.GetEnvironmentVariable("HWENC_VIEWER_SEEK_INPUT");
+        if (string.IsNullOrWhiteSpace(encoder) || string.IsNullOrWhiteSpace(input))
+            Assert.Skip("起動時の実シーク検証はエンコーダと入力を明示したときだけ実行する");
+        string settingsPath = Path.Combine(Path.GetTempPath(), $"hwenc-startup-seek-{Guid.NewGuid():N}.json");
+        try
+        {
+            new AppSettings
+            {
+                EncoderPath = encoder!, InputPath = input!, InputArgsText = "-d 1", CurrentSeconds = 1541.09,
+            }.Save(settingsPath);
+            await using var vm = new MainWindowViewModel(new SeekServices(settingsPath));
+            await vm.InitializeAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            Assert.Equal(0, vm.CurrentSeconds);
+            Assert.InRange(vm.DurationSeconds, 1419.97, 1419.99);
+            Assert.Null(vm.ErrorText);
+            Assert.NotNull(vm.PreviewImage);
+        }
+        finally { File.Delete(settingsPath); }
+    }
+
     [AvaloniaFact]
     public async Task SwitchingFromTransportStreamUpdatesDurationAndSeekBar()
     {
@@ -83,9 +109,9 @@ public sealed class RealEncoderSeekTests
         }
     }
 
-    private sealed class SeekServices : IViewModelServices
+    private sealed class SeekServices(string? settingsPath = null) : IViewModelServices
     {
-        public string SettingsPath => Path.Combine(Path.GetTempPath(), "hwenc-seek-unused.json");
+        public string SettingsPath => settingsPath ?? Path.Combine(Path.GetTempPath(), "hwenc-seek-unused.json");
         public Task<string?> BrowseEncoderAsync() => Task.FromResult<string?>(null);
         public Task<string?> BrowseInputAsync() => Task.FromResult<string?>(null);
         public Task<string?> ChooseSaveFiltersAsync() => Task.FromResult<string?>(null);

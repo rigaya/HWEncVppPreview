@@ -18,6 +18,34 @@ public sealed class ViewModelTests
 {
     private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
+    [AvaloniaTheory]
+    [InlineData(15, false, 0)]
+    [InlineData(15, true, 0)]
+    [InlineData(5, false, 5)]
+    [InlineData(5, true, 5)]
+    [InlineData(10, false, 10)]
+    [InlineData(0, true, 0)]
+    public async Task RestoredStartupTimeOutsideInputReturnsToZero(double savedTime, bool durationAtExit, double expectedTime)
+    {
+        using var services = new TestServices();
+        new AppSettings
+        {
+            EncoderPath = FakeEncoderPath(), InputPath = "startup.ts", CurrentSeconds = savedTime,
+            InputArgsText = "--fake-duration 00:00:10.00" + (durationAtExit ? " --fake-duration-at-exit" : ""),
+        }.Save(services.SettingsPath);
+        var commands = new List<string[]>();
+        var backend = new OneShotBackend(info => commands.Add(info.ArgumentList.ToArray()));
+        await using var vm = new MainWindowViewModel(services, preferred: backend, fallback: backend);
+        await vm.InitializeAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        Assert.Equal(expectedTime, vm.CurrentSeconds);
+        Assert.Equal(10, vm.DurationSeconds);
+        Assert.Null(vm.ErrorText);
+        Assert.NotNull(vm.PreviewImage);
+        Assert.NotEmpty(commands);
+        if (expectedTime == 0) Assert.DoesNotContain("--seek", commands[0]);
+    }
+
     [AvaloniaFact]
     public async Task OpensWindowAndShowsARealFrameFromFakeEncoder()
     {

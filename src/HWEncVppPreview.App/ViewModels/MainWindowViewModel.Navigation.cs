@@ -42,7 +42,7 @@ public sealed partial class MainWindowViewModel
         Volatile.Write(ref _context, context);
     }
 
-    private Task QueuePreview(bool bypassCache = false, bool navigation = false, int neighborDirection = 0, bool requirePhysicalRefetch = false, bool bypassDebounce = false, bool allowConcurrentBefore = false, NavigationOperation operation = NavigationOperation.Seek)
+    private Task QueuePreview(bool bypassCache = false, bool navigation = false, int neighborDirection = 0, bool requirePhysicalRefetch = false, bool bypassDebounce = false, bool allowConcurrentBefore = false, NavigationOperation operation = NavigationOperation.Seek, bool validateRestoredTime = false)
     {
         if (!_initialized || _suspendChanges || _disposed) return Task.CompletedTask;
         CancelInputEdit();
@@ -108,6 +108,21 @@ public sealed partial class MainWindowViewModel
                 InputInfo info = _inputInfo ?? await (_borrowInputProbe
                     ? _controller.ProbeInputAsync(_probe, encoder, input, inputArgs, capabilities, cancellation.Token)
                     : _probe.ProbeAsync(encoder, input, inputArgs, cancellation.Token, capabilities)).ConfigureAwait(false);
+                // 常駐の初回検査ではDurationのログがまだ届かないことがある。
+                // 復元した非ゼロ時刻は、画像取得に進む前に自然終了する検査で長さを確かめる。
+                if (validateRestoredTime && seconds > 0 && info.Duration == null)
+                {
+                    try
+                    {
+                        var duration = await _probe.ProbeDurationAsync(encoder, input, inputArgs, cancellation.Token).ConfigureAwait(false);
+                        info = info with { Duration = duration };
+                    }
+                    catch (Exception exception) when (!cancellation.IsCancellationRequested)
+                    {
+                        // 長さを判定できない入力も、従来どおりプレビューは利用できる。
+                        if (PerfTrace.Enabled) PerfTrace.Write("vm.startup_duration.failed", new { error = exception.Message });
+                    }
+                }
                 await PostAsync(() =>
                 {
                     if (_disposed || editEpoch != Volatile.Read(ref _editEpoch) || cancellation.IsCancellationRequested) return;
@@ -124,7 +139,9 @@ public sealed partial class MainWindowViewModel
                         target = CurrentSeconds;
                     }
                     ApplyInputInfo(info);
-                    target = HasDuration ? Math.Min(target, DurationSeconds) : target;
+                    if (HasDuration)
+                        target = validateRestoredTime && !actualNavigation && target > DurationSeconds
+                            ? 0 : Math.Min(target, DurationSeconds);
                     // 古い移動の準備完了で目標時刻を過去へ戻さない。
                     if (actualGeneration == Volatile.Read(ref _generation)) SetTimeOnly(target);
                     var request = new PreviewRequest

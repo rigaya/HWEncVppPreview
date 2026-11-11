@@ -167,7 +167,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         if (EncoderPath.Length == 0 && _services.FindEncoder() is { Length: > 0 } automaticPath)
             SetEncoderPath(automaticPath, automatic: true);
         _initialized = true;
-        await QueuePreview(bypassDebounce: true);
+        await QueuePreview(bypassDebounce: true, validateRestoredTime: restoreSettings);
     }
 
     /// <summary>通常要求の入力検査とSubmit登録を待つ。パス文字編集中は待機タイマー登録までを同期点とし、時計を進めた後の完了はWaitForIdleAsyncで待つ。</summary>
