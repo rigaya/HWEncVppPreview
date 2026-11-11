@@ -446,12 +446,7 @@ public sealed partial class MainWindowViewModel
             && (segment == null || FrameSelector.Select(segment, target, request.Fps) >= 0)) return true;
         // 自然終端が確定した既知Durationへの移動だけは、Afterと同じ最終画像を共有する。
         // 通常の取得窓の末尾を、この終端例外で延長しない。
-        if (segment?.ReachedInputEnd != true || frames.Count == 0 || request.InputDurationSeconds is not double end
-            || Math.Abs(target - end) > 1e-8) return false;
-        var last = frames[^1];
-        double lastSeconds = segment.Clock.ToInputSeconds(last, frames.Count - 1, request.Fps);
-        return PreviewSafeRange.Contains(lastSeconds, segment.SafeStartSeconds, segment.SafeEndSeconds)
-            && lastSeconds <= end + 1e-8 && lastSeconds + FrameSelector.Duration(last, request.Fps) >= end - 1e-8;
+        return segment != null && PreviewSafeRange.IsKnownInputEnd(request, segment, target);
     }
 
     private bool SameBeforeInput(PreviewRequest a, PreviewRequest b) => a.EncoderPath == b.EncoderPath

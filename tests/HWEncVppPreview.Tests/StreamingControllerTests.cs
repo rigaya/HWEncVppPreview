@@ -331,6 +331,41 @@ public sealed class StreamingControllerTests
         Assert.True(image.Segment!.Clock.ToInputSeconds(image.Frame, 0, 2) >= image.Segment.SafeStartSeconds);
     }
 
+    [Theory]
+    [InlineData(true, 0.003, true)]
+    [InlineData(false, 0.003, true)]
+    [InlineData(true, 0.005, true)]
+    [InlineData(false, 0.005, true)]
+    [InlineData(true, 0.006, false)]
+    [InlineData(false, 0.006, false)]
+    public async Task KnownEndAllowsOnlyDurationLogRounding(bool continuous, double gap, bool accepted)
+    {
+        var backend = new StreamingBackend
+        {
+            InputEndSeconds = 10.19, StepSeconds = 0.1, FrameDurationSeconds = 0.1 - gap,
+        };
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        PreviewFrameResult? image = null;
+        PreviewFailure? failure = null;
+        controller.FrameReady += value => image = value;
+        controller.Failed += value => failure = value;
+        controller.Submit(Request(10.2) with { Continuous = continuous, Fps = 10, InputDurationSeconds = 10.2 });
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        Assert.Equal(accepted, image != null);
+        Assert.Equal(!accepted, failure != null);
+        Assert.Single(backend.Requests);
+        if (image != null)
+        {
+            Assert.Equal(1010.1, image.Frame.Xts!.Value, 6);
+            Assert.True(image.Segment!.ReachedInputEnd);
+            // 生の表示終了時刻を延ばさず、既知の終端にだけ丸め差を適用する。
+            Assert.Equal(10.2 - gap, image.Segment.SafeEndSeconds, 6);
+            var segment = image.Segment;
+            Assert.False(PreviewSafeRange.IsKnownInputEnd(segment.PhysicalRequest, segment, 10.21));
+            Assert.False(PreviewSafeRange.IsKnownInputEnd(segment.PhysicalRequest, segment with { ReachedInputEnd = false }, 10.2));
+        }
+    }
+
     [Fact]
     public async Task HorizonPauseDoesNotEvictCacheForAnUnreadFrame()
     {

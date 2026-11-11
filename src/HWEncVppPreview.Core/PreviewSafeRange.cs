@@ -11,4 +11,17 @@ public static class PreviewSafeRange
         => seconds >= start - ToleranceSeconds && seconds <= end + ToleranceSeconds;
 
     public static bool IsAfter(double seconds, double end) => seconds > end + ToleranceSeconds;
+
+    /// <summary>ログのDurationは小数2桁へ丸められるため、自然EOFの表示時間との最大5msの差だけを許す。</summary>
+    public static bool IsKnownInputEnd(PreviewRequest request, PreviewSegmentSnapshot segment, double target)
+    {
+        if (!segment.ReachedInputEnd || segment.Frames.Count == 0
+            || request.InputDurationSeconds is not double end || !double.IsFinite(end)
+            || Math.Abs(target - end) > 1e-8) return false;
+        var last = segment.Frames[^1];
+        double start = segment.Clock.ToInputSeconds(last, segment.Frames.Count - 1, request.Fps);
+        return Contains(start, segment.SafeStartSeconds, segment.SafeEndSeconds)
+            && start <= end + ToleranceSeconds
+            && start + FrameSelector.Duration(last, request.Fps) >= end - 0.005 - ToleranceSeconds;
+    }
 }

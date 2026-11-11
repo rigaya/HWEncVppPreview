@@ -17,9 +17,9 @@ public sealed record PreviewWindowShortfall(bool MissingHead, bool MissingTail, 
         double candidate = raw < 0 ? first : segment.Clock.ToInputSeconds(frames[raw], raw, request.Fps);
         bool head = !PreviewSafeRange.Contains(target, segment.SafeStartSeconds, double.PositiveInfinity)
             || raw < 0 && first > target + FrameSelector.Duration(frames[0], request.Fps) / 2;
-        bool tail = PreviewSafeRange.IsAfter(target, segment.SafeEndSeconds)
+        bool tail = !PreviewSafeRange.IsKnownInputEnd(request, segment, target) && (PreviewSafeRange.IsAfter(target, segment.SafeEndSeconds)
             || PreviewSafeRange.IsAfter(candidate, segment.SafeEndSeconds)
-            || !segment.ReachedInputEnd && target > last + FrameSelector.Duration(frames[^1], request.Fps) / 2;
+            || !segment.ReachedInputEnd && target > last + FrameSelector.Duration(frames[^1], request.Fps) / 2);
         return !head && !tail ? null : new(head, tail, frames[0].Xts, frames[^1].Xts,
             segment.PhysicalRequest, target, first, last, segment.SafeStartSeconds, segment.SafeEndSeconds, segment.ReachedInputEnd);
     }
