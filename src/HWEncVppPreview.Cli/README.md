@@ -8,7 +8,7 @@ HWEncVppPreview.Cli --enc <エンコーダ> --input <入力> --time <秒数ま�
     [--dump <生画像ファイル>] [--dump-y4m <区間ファイル>]
 ```
 
-入力引数の既定は`--avhw`、前マージンは2秒、後マージンは0.5秒、方式は`auto`。
+入力引数の既定は空、前マージンは2秒、後マージンは0.5秒、方式は`auto`。
 `--vpp`と`--input-args`はCoreの`OptionTextParser`で解釈する。
 エンコーダと入力のパスはそのまま渡すため、WSLからWindowsのエンコーダを使う場合の入力パスはWindows形式で指定する。
 

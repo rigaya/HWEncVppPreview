@@ -11,7 +11,7 @@ public sealed record AppSettings
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     public string EncoderPath { get; init; } = "";
     public string InputPath { get; init; } = "";
-    public string InputArgsText { get; init; } = "--avhw";
+    public string InputArgsText { get; init; } = "";
     public IReadOnlyList<FilterSetting> FilterLines { get; init; } = Array.Empty<FilterSetting>();
     public double WindowWidth { get; init; } = 1440;
     public double WindowHeight { get; init; } = 900;
@@ -64,7 +64,7 @@ public sealed record AppSettings
             ? Math.Clamp(settings.HdrReferenceWhiteNits, 50, 1000) : 203,
         EncoderPath = settings.EncoderPath ?? "",
         InputPath = settings.InputPath ?? "",
-        InputArgsText = settings.InputArgsText ?? "--avhw",
+        InputArgsText = settings.InputArgsText ?? "",
         FilterLines = Array.AsReadOnly((settings.FilterLines ?? Array.Empty<FilterSetting>())
             .Where(line => line != null).Select(line => line with { Text = line.Text ?? "" }).ToArray()),
         WindowWidth = double.IsFinite(settings.WindowWidth) && settings.WindowWidth > 0 ? Math.Max(960, settings.WindowWidth) : 1440,

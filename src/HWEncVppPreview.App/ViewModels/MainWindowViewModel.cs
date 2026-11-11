@@ -20,7 +20,7 @@ namespace HWEncVppPreview.App.ViewModels;
 /// <remarks>Coreの通知ではUIの完了を待たず、PostでUIスレッドへ戻す。利用終了時はDisposeAsyncを呼ぶ。</remarks>
 public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 {
-    private string _encoderPath = "", _inputPath = "", _encoderDescription = "", _inputArgsText = "--avhw";
+    private string _encoderPath = "", _inputPath = "", _encoderDescription = "", _inputArgsText = "";
     private bool _isEncoderPathAutomatic;
     private FilterLineViewModel? _selectedFilterLine;
     private string _helpText = "";

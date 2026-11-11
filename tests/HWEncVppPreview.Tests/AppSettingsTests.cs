@@ -43,13 +43,13 @@ public sealed class AppSettingsTests
             Assert.Equal(1440, AppSettings.Load(path).WindowWidth);
             Assert.Equal(203, AppSettings.Load(path).HdrReferenceWhiteNits);
             File.WriteAllText(path, "{invalid");
-            Assert.Equal("--avhw", AppSettings.Load(path).InputArgsText);
+            Assert.Equal("", AppSettings.Load(path).InputArgsText);
             File.WriteAllText(path, "null");
             Assert.Empty(AppSettings.Load(path).FilterLines);
             File.WriteAllText(path, "{\"EncoderPath\":null,\"InputArgsText\":null,\"FilterLines\":[null,{\"Text\":null}],\"WindowWidth\":10,\"WindowHeight\":-1,\"CurrentSeconds\":-9}");
             var actual = AppSettings.Load(path);
             Assert.Equal("", actual.EncoderPath);
-            Assert.Equal("--avhw", actual.InputArgsText);
+            Assert.Equal("", actual.InputArgsText);
             Assert.Single(actual.FilterLines);
             Assert.Equal("", actual.FilterLines[0].Text);
             Assert.Equal(960, actual.WindowWidth);

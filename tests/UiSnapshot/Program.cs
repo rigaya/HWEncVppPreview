@@ -232,7 +232,7 @@ if (encoder != null || input != null)
     {
         EncoderPath = encoder,
         InputPath = input,
-        InputArgsText = Option(args, "--input-args") ?? "--avhw",
+        InputArgsText = Option(args, "--input-args") ?? "",
         CurrentSeconds = seconds,
     };
     string? vpp = Option(args, "--vpp");

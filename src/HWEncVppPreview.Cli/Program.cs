@@ -247,7 +247,7 @@ public static class Program
         public TimeSpan Watchdog { get; private set; } = TimeSpan.FromSeconds(30);
         public string Mode { get; private set; } = "auto";
         public string[] VppArgs { get; private set; } = Array.Empty<string>();
-        public string[] InputArgs { get; private set; } = new[] { "--avhw" };
+        public string[] InputArgs { get; private set; } = Array.Empty<string>();
         public string? Dump { get; private set; }
         public string? DumpY4m { get; private set; }
 
