@@ -232,6 +232,34 @@ public sealed class InputProbeTests
     }
 
     [Theory]
+    [InlineData("00:23:39.98", 1419.98)]
+    [InlineData("N/A", null)]
+    [InlineData("invalid", null)]
+    [InlineData("", null)]
+    public void DurationParserIgnoresDelayedLogsFromPreviousInputs(string currentDuration, double? seconds)
+    {
+        string current = @"Z:\dvd\魔女 '06'.mkv";
+        string log = "Input #0, mpegts, from 'Y:\\キャプチャ\\魔女.ts':\r\n"
+            + "  Duration: 00:30:08.11, start: 51839.846433\r\n"
+            + $"Input #0, matroska,webm, from '{current}':\r\n"
+            + "  Metadata:\r\n    title: example\r\n"
+            + (currentDuration.Length > 0 ? $"  Duration: {currentDuration}, start: 0\r\n" : "")
+            + "Input #1, wav, from 'audio.wav':\r\n  Duration: 01:00:00.00, start: 0\r\n";
+        var actual = InputProbe.ParseDuration(log, current);
+        if (seconds.HasValue) Assert.Equal(seconds.Value, actual!.Value.TotalSeconds, 7);
+        else Assert.Null(actual);
+        Assert.Null(InputProbe.ParseDuration(log, "absent.mkv"));
+    }
+
+    [Fact]
+    public void DurationParserDoesNotReuseEarlierDurationWhenLatestMatchingInputIsUnknown()
+    {
+        string log = "Input #0, matroska, from 'current.mkv':\n  Duration: 00:30:08.11, start: 0\n"
+            + "Input #0, matroska, from 'current.mkv':\n  Duration: N/A, start: 0\n";
+        Assert.Null(InputProbe.ParseDuration(log, "current.mkv"));
+    }
+
+    [Theory]
     [InlineData("00:00:10.25", 10.25)]
     [InlineData("100:00:00.00", 360000.0)]
     [InlineData("N/A", null)]

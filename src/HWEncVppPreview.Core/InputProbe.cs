@@ -129,7 +129,7 @@ public sealed class InputProbe : IAsyncDisposable
                 throw new InputProbeException(CoreText.InputHeaderUnavailable, -1, result.StandardError);
             double? origin = capabilities?.TimestampPassthrough == true && sink.FirstTimestamp is double timestamp && double.IsFinite(timestamp) ? timestamp : null;
             var info = new InputInfo(header.Width, header.Height, header.FpsNum, header.FpsDen,
-                header.SarNum, header.SarDen, header.Chroma, header.BitDepth, header.ColorSpaceTag, ParseDuration(result.StandardError),
+                header.SarNum, header.SarDen, header.Chroma, header.BitDepth, header.ColorSpaceTag, ParseDuration(result.StandardError, inputFile),
                 origin, origin.HasValue && !PreviewClockMap.IsNearTimestampWrap(origin.Value));
             lock (_sync)
             {
@@ -222,7 +222,7 @@ public sealed class InputProbe : IAsyncDisposable
                         stderr!.IsCompletedSuccessfully ? stderr.Result : "", exception);
                 }
                 cancellation.Token.ThrowIfCancellationRequested();
-                TimeSpan? duration = ParseDuration(await stderr!.ConfigureAwait(false));
+                TimeSpan? duration = ParseDuration(await stderr!.ConfigureAwait(false), inputFile);
                 lock (_sync)
                 {
                     _durationCache.Add(key, duration);
@@ -241,13 +241,31 @@ public sealed class InputProbe : IAsyncDisposable
         finally { _durationGate.Release(); }
     }
 
-    /// <summary>入力ログのDuration行を読む。N/A、欠落、不正な値やTimeSpanの範囲外ならnull。</summary>
-    public static TimeSpan? ParseDuration(string standardError)
+    /// <summary>入力ログのDuration行を読む。ファイル指定時は対応する最後のInput節に限定する。N/A、欠落、不正な値ならnull。</summary>
+    public static TimeSpan? ParseDuration(string standardError, string? inputFile = null)
     {
         ArgumentNullException.ThrowIfNull(standardError);
         // ログ色指定が数値の前後へ入っても同じ値として読めるようにする。
         string plain = Regex.Replace(standardError, @"\x1B\[[0-?]*[ -/]*[@-~]", "");
-        var line = Regex.Match(plain, @"\bDuration:\s*(?<value>[^,\r\n]*)", RegexOptions.CultureInvariant);
+        if (inputFile != null)
+        {
+            // 常駐VCEEncではlibav側のログが遅れて次の要求に届くことがある。
+            // BEGIN/END内にあっても別入力のDurationを採らず、同じ入力の古い値にも戻らない。
+            var inputs = Regex.Matches(plain, @"^Input #[0-9]+,[^\r\n]*?from '(?<input>[^\r\n]*)':\r?$",
+                RegexOptions.Multiline | RegexOptions.CultureInvariant);
+            if (inputs.Count > 0)
+            {
+                int selected = -1;
+                var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                for (int i = 0; i < inputs.Count; ++i)
+                    if (inputs[i].Groups["input"].Value.Equals(inputFile, comparison)) selected = i;
+                if (selected < 0) return null;
+                int start = inputs[selected].Index + inputs[selected].Length;
+                int end = selected + 1 < inputs.Count ? inputs[selected + 1].Index : plain.Length;
+                plain = plain[start..end];
+            }
+        }
+        var line = Regex.Match(plain, @"^[ \t]*Duration:[ \t]*(?<value>[^,\r\n]*)", RegexOptions.Multiline | RegexOptions.CultureInvariant);
         if (!line.Success) return null;
         var match = Regex.Match(line.Groups["value"].Value.Trim(),
             @"^(?<hours>[0-9]+):(?<minutes>[0-9]{2}):(?<seconds>[0-9]{2})(?:\.(?<fraction>[0-9]{1,7}))?$",
