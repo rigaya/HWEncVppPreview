@@ -24,7 +24,7 @@ public sealed class StitchRejectedStreamingViewModelTests
         var cache = new FrameCache();
         var request = new PreviewRequest
         {
-            EncoderPath = FakeEncoderPath(), InputFile = "reject-stream.ts", Fps = 30, TargetSeconds = 10,
+            EncoderPath = FakeEncoderPath(), InputFile = "reject-stream.ts", InputArgs = ["--avhw"], Fps = 30, TargetSeconds = 10,
             Capabilities = new(true, true), TimestampOriginSeconds = 1000,
         };
         var old = Assert.IsType<PreviewSegmentSnapshot>(cache.StoreSegment(request, Frames(OldPixels), new(1000, 0, true), 9, 12));

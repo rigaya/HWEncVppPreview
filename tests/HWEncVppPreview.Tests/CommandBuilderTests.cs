@@ -26,7 +26,7 @@ public class CommandBuilderTests
 
         Assert.Equal(new[]
         {
-            "--avhw", "-i", @"D:\my videos\in.ts", "--seek", "0:01:38.000", "--frames", "76",
+            "-i", @"D:\my videos\in.ts", "--seek", "0:01:38.000", "--frames", "76",
             "-c", "raw", "--y4m-timestamp", "-o", "-", "--vpp-nlmeans", "d=1", "--log-opt", "color=false",
         }, CommandBuilder.BuildOneShot(req));
     }
@@ -36,7 +36,7 @@ public class CommandBuilderTests
     {
         Assert.Equal(new[]
         {
-            "--avhw", "-i", @"D:\my videos\in.ts", "--seek", "0:01:38.000", "--frames", "76",
+            "-i", @"D:\my videos\in.ts", "--seek", "0:01:38.000", "--frames", "76",
             "--vpp-nlmeans", "d=1", "--log-opt", "color=false",
         }, CommandBuilder.BuildServer(Req(100.0)));
     }
