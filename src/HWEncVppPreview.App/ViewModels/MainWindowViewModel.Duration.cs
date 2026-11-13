@@ -73,7 +73,7 @@ public sealed partial class MainWindowViewModel
         {
             try
             {
-                var duration = await _probe.ProbeDurationAsync(encoder, input, inputArgs, cancellation.Token).ConfigureAwait(false);
+                var duration = await _probe.ProbeDurationAsync(encoder, input, inputArgs, cancellation.Token, _capabilities).ConfigureAwait(false);
                 await PostAsync(() =>
                 {
                     if (_disposed || generation != _durationGeneration || identity != _durationAttempt || duration == null || HasDuration) return;

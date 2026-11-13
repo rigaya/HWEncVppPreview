@@ -114,7 +114,7 @@ public sealed partial class MainWindowViewModel
                 {
                     try
                     {
-                        var duration = await _probe.ProbeDurationAsync(encoder, input, inputArgs, cancellation.Token).ConfigureAwait(false);
+                        var duration = await _probe.ProbeDurationAsync(encoder, input, inputArgs, cancellation.Token, capabilities).ConfigureAwait(false);
                         info = info with { Duration = duration };
                     }
                     catch (Exception exception) when (!cancellation.IsCancellationRequested)

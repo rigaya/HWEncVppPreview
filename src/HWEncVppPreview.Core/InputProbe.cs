@@ -133,7 +133,7 @@ public sealed class InputProbe : IAsyncDisposable
                 origin, origin.HasValue && !PreviewClockMap.IsNearTimestampWrap(origin.Value));
             lock (_sync)
             {
-                if (info.Duration == null && _durationCache.TryGetValue(key with { Capabilities = new() }, out var knownDuration))
+                if (info.Duration == null && _durationCache.TryGetValue(DurationKey(key), out var knownDuration))
                     info = info with { Duration = knownDuration };
                 _cache.Add(key, info);
             }
@@ -146,7 +146,7 @@ public sealed class InputProbe : IAsyncDisposable
     /// <remarks>長さ不明の結果もキャッシュする。画像検査で長さが取得済みなら追加のプロセスは起動しない。総時間の上限は画像検査と同じ。</remarks>
     /// <exception cref="InputProbeTimeoutException">自然終了までの長さ検査が指定時間内に終わらなかった。</exception>
     public async Task<TimeSpan?> ProbeDurationAsync(string encoderPath, string inputFile,
-        IReadOnlyList<string>? inputArgs = null, CancellationToken cancellationToken = default)
+        IReadOnlyList<string>? inputArgs = null, CancellationToken cancellationToken = default, PreviewCapabilities? capabilities = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(encoderPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(inputFile);
@@ -157,7 +157,7 @@ public sealed class InputProbe : IAsyncDisposable
             lifetime = _lifetime.Token;
         }
         string[] arguments = inputArgs?.ToArray() ?? new[] { "--avhw" };
-        var key = new ProbeKey(encoderPath, inputFile, JsonSerializer.Serialize(arguments), new());
+        var key = DurationKey(new ProbeKey(encoderPath, inputFile, JsonSerializer.Serialize(arguments), capabilities ?? new()));
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime);
         await _durationGate.WaitAsync(cancellation.Token).ConfigureAwait(false);
         try
@@ -169,7 +169,8 @@ public sealed class InputProbe : IAsyncDisposable
                 if (known != null) return known.Duration;
                 if (_durationCache.TryGetValue(key, out var cached)) return cached;
             }
-            var command = arguments.Concat(new[]
+            var command = CommandBuilder.BuildReaderArguments(inputFile, arguments, capabilities ?? new(), includeColorAuto: false)
+                .Concat(arguments).Concat(new[]
             {
                 "-i", inputFile, "--log-level", "input=debug", "--frames", "1", "-c", "raw", "-o", "-",
             });
@@ -367,6 +368,13 @@ public sealed class InputProbe : IAsyncDisposable
         await JoinIgnoringFailureAsync(run, deadline, "probe.run_join").ConfigureAwait(false);
         return run.IsCompletedSuccessfully ? run.Result.StandardError : "";
     }
+
+    // vpyの相対パス対応の有無で、失敗してnullだった長さを使い回さない。
+    // 色autoは長さ検査に付けないので、対応する色の違いはここで除く。
+    private static ProbeKey DurationKey(ProbeKey key) => key with
+    {
+        Capabilities = new(VpyAssumeScriptDir: key.Capabilities?.VpyAssumeScriptDir == true),
+    };
 
     private static bool SameInput(ProbeKey a, ProbeKey b) => a.EncoderPath == b.EncoderPath
         && a.InputFile == b.InputFile && a.InputArgs == b.InputArgs;
