@@ -152,15 +152,20 @@ public sealed class OwnedProcessLifetimeViewModelTests
     {
         await using var session = OwnedProcessSession.Create(
             inputArgs: "--avhw --fake-clock-backstep-at 45", beforeEnabled: false);
-        var replay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         long firstRun = 0;
         session.Controller.OwnedFrameReady += value =>
         {
-            if (value.FrameReady is { IsReplay: false } frame) firstRun = frame.Frame.RawRunId;
+            // 逆行を検出した後の取り直しもIsReplay=falseで届くことがあるため、最初のrunだけを記録する。
+            if (value.FrameReady is { IsReplay: false } frame) Interlocked.CompareExchange(ref firstRun, frame.Frame.RawRunId, 0);
         };
-        session.Controller.ReplayStarted += _ => replay.TrySetResult();
         await session.InitializeAsync();
-        await replay.Task.WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
+        // 逆行を検出した後の取り直しは2通りある。
+        // ・Coreが同じ要求をreplayする(ReplayStarted)。
+        // ・replayを始める前に、VMが変換待ちの間に区間が破棄されたことに気づいて新しい要求を出し、元の要求を打ち切る。
+        // 後者はCPUが少ないと起き(2コアのCIで再現)、ReplayStartedは来ない。
+        // どちらも新しいrunで表示し直すため、replayの通知ではなく、時計を信用しないと判定されたことを待つ。
+        var untrusted = (System.Collections.ICollection)OwnedVmCheck.Field(session.Controller, "_untrustedClocks")!;
+        await session.WaitUntilAsync(() => untrusted.Count > 0);
         await session.WaitIdleAsync();
         await session.WaitForImageAsync(false, frame => frame.RawRunId != firstRun);
         Assert.True(firstRun > 0);
