@@ -14,6 +14,8 @@ public static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.Contains("--amatsukaze-engine", StringComparer.Ordinal))
+            return await AmatsukazeEngine.RunCommandAsync(args, Console.OpenStandardInput(), Console.OpenStandardOutput(), Console.Error).ConfigureAwait(false);
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler cancel = (_, e) => { e.Cancel = true; cancellation.Cancel(); };
         Console.CancelKeyPress += cancel;

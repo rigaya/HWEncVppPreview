@@ -7,6 +7,10 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.4" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\HWEncVppPreview.Core\HWEncVppPreview.Core.csproj" />
   </ItemGroup>
 </Project>
