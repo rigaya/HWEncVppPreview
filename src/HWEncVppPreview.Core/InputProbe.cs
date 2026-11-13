@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -242,12 +243,31 @@ public sealed class InputProbe : IAsyncDisposable
         finally { _durationGate.Release(); }
     }
 
-    /// <summary>入力ログのDuration行を読む。ファイル指定時は対応する最後のInput節に限定する。N/A、欠落、不正な値ならnull。</summary>
+    /// <summary>映像readerのsource行を優先し、なければ対応するInput節のDuration行を読む。不明・不正な値ならnull。</summary>
     public static TimeSpan? ParseDuration(string standardError, string? inputFile = null)
     {
         ArgumentNullException.ThrowIfNull(standardError);
         // ログ色指定が数値の前後へ入っても同じ値として読めるようにする。
         string plain = Regex.Replace(standardError, @"\x1B\[[0-?]*[ -/]*[@-~]", "");
+        // 映像reader自身の正確な総数を優先する。avsの--audio-sourceなどで別のInput節が
+        // 混ざっていても、音声の長さを映像の長さとして採らない。書式が合うものの最後の行だけを使う。
+        // OpenCLの「building OpenCL source: size ...」などは候補にしない。
+        var sources = Regex.Matches(plain,
+            @"^[^\r\n]*?\bsource:[ \t]*(?<frames>[0-9]+)[ \t]+frames,[ \t]*(?<num>[0-9]+)/(?<den>[0-9]+)[ \t]+fps[ \t]*\r?$",
+            RegexOptions.Multiline | RegexOptions.CultureInvariant);
+        if (sources.Count > 0)
+        {
+            var source = sources[^1];
+            if (long.TryParse(source.Groups["frames"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out long frames) && frames > 0
+                && long.TryParse(source.Groups["num"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out long num) && num > 0
+                && long.TryParse(source.Groups["den"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out long den) && den > 0)
+            {
+                // 乗算中の桁あふれや浮動小数の誤差を避け、ticksへの最後の変換で一度だけ丸める。
+                BigInteger ticks = BigInteger.DivRem((BigInteger)frames * den * TimeSpan.TicksPerSecond, num, out var remainder);
+                if (remainder * 2 >= num) ++ticks;
+                if (ticks <= TimeSpan.MaxValue.Ticks) return TimeSpan.FromTicks((long)ticks);
+            }
+        }
         if (inputFile != null)
         {
             // 常駐VCEEncではlibav側のログが遅れて次の要求に届くことがある。
