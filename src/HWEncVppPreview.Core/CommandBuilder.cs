@@ -39,7 +39,7 @@ public sealed record PreviewRequest
     public string EncoderPath { get; init; } = "";
     public string InputFile { get; init; } = "";
     /// <summary>入力の追加引数。</summary>
-    public IReadOnlyList<string> InputArgs { get; init; } = new[] { "--avhw" };
+    public IReadOnlyList<string> InputArgs { get; init; } = Array.Empty<string>();
     /// <summary>目標時刻 T (秒)。</summary>
     public double TargetSeconds { get; init; }
     /// <summary>前マージン Mb (秒)。</summary>

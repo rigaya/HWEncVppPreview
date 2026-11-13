@@ -71,7 +71,7 @@ public sealed class InputProbe : IAsyncDisposable
     internal InputProbe(IPreviewBackend backend, TimeProvider timeProvider)
         : this(timeProvider) => _backend = backend;
 
-    /// <summary>追加引数の既定は--avhw。引数配列を複製し、値が同じ要求にはキャッシュを返す。</summary>
+    /// <summary>追加引数の既定は空。引数配列を複製し、値が同じ要求にはキャッシュを返す。</summary>
     /// <exception cref="InputProbeException">エンコーダがエラー終了した、または有効なヘッダがない。</exception>
     /// <exception cref="InputProbeTimeoutException">検査全体が指定時間内に完了しなかった。</exception>
     public async Task<InputInfo> ProbeAsync(string encoderPath, string inputFile,
@@ -85,7 +85,7 @@ public sealed class InputProbe : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             lifetime = _lifetime.Token;
         }
-        string[] arguments = inputArgs?.ToArray() ?? new[] { "--avhw" };
+        string[] arguments = inputArgs?.ToArray() ?? Array.Empty<string>();
         var key = new ProbeKey(encoderPath, inputFile, JsonSerializer.Serialize(arguments), capabilities ?? new());
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime);
         await _gate.WaitAsync(cancellation.Token).ConfigureAwait(false);
@@ -156,7 +156,7 @@ public sealed class InputProbe : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             lifetime = _lifetime.Token;
         }
-        string[] arguments = inputArgs?.ToArray() ?? new[] { "--avhw" };
+        string[] arguments = inputArgs?.ToArray() ?? Array.Empty<string>();
         var key = DurationKey(new ProbeKey(encoderPath, inputFile, JsonSerializer.Serialize(arguments), capabilities ?? new()));
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime);
         await _durationGate.WaitAsync(cancellation.Token).ConfigureAwait(false);
