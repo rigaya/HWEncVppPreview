@@ -18,7 +18,7 @@ public sealed class WindowRecoveryTests
         Assert.Equal(1003.003,image.Frame.Xts!.Value,6);
     }
     [Fact]
-    public async Task LeadingFramesOnlyShortenTheTailAndExpandOnlyTheTail()
+    public async Task LeadingFramesConfirmTheTailWithoutChangingSeek()
     {
         var backend=new WindowBackend(false);
         await using var controller=new PreviewController(backend,backend,cache:new FrameCache(0),debounce:TimeSpan.Zero);
@@ -29,7 +29,7 @@ public sealed class WindowRecoveryTests
         Assert.Null(failure);Assert.NotNull(image);
         Assert.Equal(2,backend.Requests.Count);
         Assert.Equal(CommandBuilder.Plan(backend.Requests[0]).SeekSeconds,CommandBuilder.Plan(backend.Requests[1]).SeekSeconds);
-        Assert.True(backend.Requests[1].PostMarginSeconds>backend.Requests[0].PostMarginSeconds);
+        Assert.True(backend.Requests[1].Continuous);
         Assert.Equal(Math.Round(1467.667189 + 295 * 1001.0 / 60000, 6), image.Frame.Xts!.Value);
     }
     [Fact]

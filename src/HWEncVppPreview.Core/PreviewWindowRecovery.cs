@@ -15,9 +15,10 @@ public sealed record PreviewWindowShortfall(bool MissingHead, bool MissingTail, 
         double last = segment.Clock.ToInputSeconds(frames[^1], frames.Count - 1, request.Fps);
         int raw = FrameSelector.Select(frames, segment.Clock.ToFrameSeconds(target), request.Fps);
         double candidate = raw < 0 ? first : segment.Clock.ToInputSeconds(frames[raw], raw, request.Fps);
-        bool head = !PreviewSafeRange.Contains(target, segment.SafeStartSeconds, double.PositiveInfinity)
+        bool head = segment.ReachedInputEnd && last < segment.SafeStartSeconds - PreviewSafeRange.ToleranceSeconds
+            || !PreviewSafeRange.Contains(target, segment.SafeStartSeconds, double.PositiveInfinity)
             || raw < 0 && first > target + FrameSelector.Duration(frames[0], request.Fps) / 2;
-        bool tail = !PreviewSafeRange.IsKnownInputEnd(request, segment, target) && (PreviewSafeRange.IsAfter(target, segment.SafeEndSeconds)
+        bool tail = !(segment.ReachedInputEnd && head) && !PreviewSafeRange.IsKnownInputEnd(request, segment, target) && (PreviewSafeRange.IsAfter(target, segment.SafeEndSeconds)
             || PreviewSafeRange.IsAfter(candidate, segment.SafeEndSeconds)
             || !segment.ReachedInputEnd && target > last + FrameSelector.Duration(frames[^1], request.Fps) / 2);
         return !head && !tail ? null : new(head, tail, frames[0].Xts, frames[^1].Xts,
@@ -29,6 +30,24 @@ public sealed record PreviewWindowShortfall(bool MissingHead, bool MissingTail, 
 public static class PreviewWindowRecovery
 {
     public const int MaximumRetries = 2;
+    public const int MaximumEmptyRetries = 5;
+
+    /// <summary>空の正常終了では末尾の位置を断定せず、最大31秒・5回の範囲でseekを前へ戻す。</summary>
+    public static bool TryBacktrackEmpty(PreviewRequest logical, PreviewRequest physical, int attempt, out PreviewRequest expanded)
+    {
+        expanded = logical;
+        double seek = CommandBuilder.Plan(physical).SeekSeconds ?? 0;
+        if (attempt < 0 || attempt >= MaximumEmptyRetries || seek <= 0) return false;
+        double nextSeek = Math.Max(0, Math.Floor((seek - Math.Pow(2, attempt)) * 1000) / 1000);
+        expanded = logical with { RecoveryPhysicalWindow = physical with
+        {
+            TargetSeconds = logical.TargetSeconds, SeekSecondsOverride = nextSeek,
+            PreMarginSeconds = Math.Max(0, logical.TargetSeconds - nextSeek), Continuous = true,
+            DisableOutputStart = true, RecoveryPhysicalWindow = null,
+        } };
+        return true;
+    }
+
     private const double GuardSeconds = 0.5;
     private const double ExtraMarginSeconds = 0.5;
 
