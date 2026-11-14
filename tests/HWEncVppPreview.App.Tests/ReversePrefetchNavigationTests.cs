@@ -214,13 +214,24 @@ public sealed class ReversePrefetchNavigationTests
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
         {
             Requests.Enqueue(request);
-            using var registration = token.Register(() => Cancelled.Enqueue(request));
-            if (IsPrefetch(request))
+            try
             {
-                Started.TrySetResult(request);
-                await Release.Task.WaitAsync(token).ConfigureAwait(false);
+                if (IsPrefetch(request))
+                {
+                    Started.TrySetResult(request);
+                    await Release.Task.WaitAsync(token).ConfigureAwait(false);
+                }
+                var result = await _inner.RunAsync(request, new ObservingSink(this, sink, mismatch && IsPrefetch(request)), token).ConfigureAwait(false);
+                if (result.IsCancelled) Cancelled.Enqueue(request);
+                return result;
             }
-            return await _inner.RunAsync(request, new ObservingSink(this, sink, mismatch && IsPrefetch(request)), token).ConfigureAwait(false);
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // 待機を取り消すコールバックから継続が先に再開すると、記録用の登録は実行前に破棄され得る。
+                // 取消要求の別の登録ではなく、実行が取消で終わった結果を記録して取り逃しを防ぐ。
+                Cancelled.Enqueue(request);
+                throw;
+            }
         }
         public ValueTask AbortAsync() => _inner.AbortAsync();
         public ValueTask DisposeAsync() => _inner.DisposeAsync();

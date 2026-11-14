@@ -182,7 +182,7 @@ public sealed class StreamingBackendTests
             }
         }
         await AdvanceAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        await Assert.ThrowsAsync<TimeoutException>(() => stopping);
+        await AssertCleanupTimedOutAsync(stopping);
         Assert.True((await run).IsCancelled);
         await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
     }
@@ -208,7 +208,7 @@ public sealed class StreamingBackendTests
             await WaitUntilAsync(() => FakeLogFiles.Exists(log) && ReadSharedCommandLog(log).Contains("quit", StringComparison.Ordinal));
             Assert.False(stopping.IsCompleted);
             clock.Advance(TimeSpan.FromSeconds(5));
-            await Assert.ThrowsAsync<TimeoutException>(() => stopping.WaitWithDiagnosticsAsync(SafetyTimeout));
+            await AssertCleanupTimedOutAsync(stopping);
             await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         }
         finally
@@ -228,18 +228,27 @@ public sealed class StreamingBackendTests
         string release = Path.Combine(directory, "release");
         string exited = Path.Combine(directory, "exited");
         var clock = new FakeTimeProvider();
-        var backend = new ServerBackend(timeProvider: clock, configureStartInfo: info =>
+        Process? server = null;
+        var signalClock = new TimerSignalClock(clock, TimeSpan.FromSeconds(5), ServerHasExited);
+        var backend = new ServerBackend(timeProvider: signalClock, configureStartInfo: info =>
         {
             info.Environment["FAKE_ENCODER_HOLD_OUTPUT_READY_FILE"] = ready;
             info.Environment["FAKE_ENCODER_HOLD_OUTPUT_RELEASE_FILE"] = release;
             info.Environment["FAKE_ENCODER_HOLD_OUTPUT_EXIT_FILE"] = exited;
         });
+        bool ServerHasExited()
+        {
+            // 失敗時の後片付けで観測用プロセスが先に破棄されても、時計の登録を妨げない。
+            try { return server?.HasExited == true; }
+            catch (InvalidOperationException) { return false; }
+        }
         Process? child = null;
         try
         {
             var sink = new OpenSink();
             await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(SafetyTimeout);
             using var process = Process.GetProcessById(sink.ProcessId);
+            server = process;
             Task stopping = backend.DisposeAsync().AsTask();
             await WaitUntilAsync(() => File.Exists(ready));
             child = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(ready)));
@@ -247,12 +256,16 @@ public sealed class StreamingBackendTests
             Assert.True(process.HasExited);
             Assert.False(child.HasExited);
             Assert.False(stopping.IsCompleted);
+            // 別のProcessの終了待ちでは、終了処理側の待ち時間の登録までは保証されない。
+            // 親の終了後にタイマーが登録されたことを確認してから時計を進め、登録との競合を防ぐ。
+            await signalClock.TimerArmed.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
             clock.Advance(TimeSpan.FromSeconds(5));
-            await Assert.ThrowsAsync<TimeoutException>(() => stopping.WaitWithDiagnosticsAsync(SafetyTimeout));
+            await AssertCleanupTimedOutAsync(stopping);
             Assert.False(child.HasExited);
         }
         finally
         {
+            server = null;
             // 親が終了した後も保持されるpipeは、このテスト所有のreleaseで必ず閉じる。
             await File.WriteAllTextAsync(release, "release");
             if (child == null && File.Exists(ready))
@@ -266,7 +279,7 @@ public sealed class StreamingBackendTests
                 child.Dispose();
             }
             clock.Advance(TimeSpan.FromSeconds(30));
-            await backend.DisposeAsync();
+            await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
             await WaitUntilAsync(() => File.Exists(exited));
             Directory.Delete(directory, recursive: true);
         }
@@ -314,7 +327,7 @@ public sealed class StreamingBackendTests
                 await signalClock.TimerArmed.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
                 clock.Advance(TimeSpan.FromSeconds(5));
             }
-            await Assert.ThrowsAsync<TimeoutException>(() => incomplete.WaitWithDiagnosticsAsync(SafetyTimeout));
+            await AssertCleanupTimedOutAsync(incomplete);
 
             await File.WriteAllTextAsync(release, "release");
             await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
@@ -344,6 +357,13 @@ public sealed class StreamingBackendTests
     {
         // PID別ログの完了行を集約し、コマンド受信を確認する。
         return string.Join("\n", FakeLogFiles.ReadAllLines(path));
+    }
+
+    private static Task<TimeoutException> AssertCleanupTimedOutAsync(Task cleanup)
+    {
+        // 製品の期限切れだけを期待例外として検査する。監視用の期限切れを内側に置くと、
+        // 終了処理が停止しても期待どおりと誤認するため、試験自身の監視は検査の外側に置く。
+        return Assert.ThrowsAsync<TimeoutException>(() => cleanup).WaitWithDiagnosticsAsync(SafetyTimeout);
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
@@ -391,7 +411,7 @@ public sealed class StreamingBackendTests
         public virtual void OnReadStateChanged(bool reading) { }
     }
 
-    private sealed class TimerSignalClock(FakeTimeProvider inner, TimeSpan observedTimeout) : TimeProvider
+    private sealed class TimerSignalClock(FakeTimeProvider inner, TimeSpan observedTimeout, Func<bool>? observe = null) : TimeProvider
     {
         public TaskCompletionSource TimerArmed { get; private set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void Reset() => TimerArmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -401,7 +421,7 @@ public sealed class StreamingBackendTests
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
             ITimer timer = inner.CreateTimer(callback, state, dueTime, period);
-            if (dueTime == observedTimeout) TimerArmed.TrySetResult();
+            if (dueTime == observedTimeout && (observe == null || observe())) TimerArmed.TrySetResult();
             return timer;
         }
     }
