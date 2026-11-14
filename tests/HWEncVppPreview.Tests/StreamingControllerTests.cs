@@ -464,6 +464,8 @@ public sealed class StreamingControllerTests
         Assert.Equal(2, backend.Calls);
         controller.Submit(request with { TargetSeconds = 30 }, navigation: true);
         await controller.WaitForIdleAsync();
+        // 読み取り停止まで待っても、その通知は残る。前の要求の通知を次の入力の開始と取り違えないよう、ここで受け取る。
+        await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Equal(3, backend.Calls);
         // 区間間の照合が失敗しても、新しい1本のstream内では連続取得を維持する。
         Assert.True(backend.Requests[^1].Continuous);

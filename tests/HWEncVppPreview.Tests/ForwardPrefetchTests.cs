@@ -119,7 +119,7 @@ public sealed class ForwardPrefetchTests
     [Fact]
     public async Task 実逆先読みが枠を要求して初めて順先読みを取消する()
     {
-        var cache = new FrameCache(); Seed(cache, Request()); var backend = new Backend();
+        var cache = new FrameCache(); Seed(cache, Request()); var backend = new Backend(holdFinite: true);
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
         controller.Submit(Request()); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         controller.NotifyNavigation(Request(11.5), 1); await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
@@ -128,6 +128,8 @@ public sealed class ForwardPrefetchTests
         Assert.Equal(0, backend.Cancelled);
         controller.Submit(Request(9.3, 3), navigation: true); controller.NotifyNavigation(Request(9.3, 3), -1);
         var pending = controller.GetPendingReversePrefetch(Request(9.3, 3)); Assert.NotNull(pending);
+        // 完了済みの先読みは取得対象から外れるため、待つ対象を取得するまで有限の先読みを止めておく。
+        backend.Release.TrySetResult();
         await pending!.WaitWithDiagnosticsAsync(Safety); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(1, backend.Cancelled); Assert.Equal(2, backend.Requests.Count);
         Assert.False(backend.Requests.Last().Continuous); Assert.Equal(1, backend.MaxConcurrent);
@@ -333,7 +335,7 @@ public sealed class ForwardPrefetchTests
     [Fact]
     public async Task 別起動の同値markerを古いstreamの取消で消さない()
     {
-        var cache = new FrameCache(240); Seed(cache, Request()); var backend = new Backend();
+        var cache = new FrameCache(240); Seed(cache, Request()); var backend = new Backend(holdFinite: true);
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
         controller.Submit(Request()); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         controller.NotifyNavigation(Request(11.5), 1);
@@ -348,6 +350,8 @@ public sealed class ForwardPrefetchTests
         controller.Submit(Request(10.4, 2), navigation: true); controller.NotifyNavigation(Request(10.4, 2), -1);
         controller.Submit(Request(10.3, 3), navigation: true); controller.NotifyNavigation(Request(10.3, 3), -1);
         var pending = controller.GetPendingReversePrefetch(Request(10.3, 3)); Assert.NotNull(pending);
+        // 完了済みの先読みは取得対象から外れるため、待つ対象を取得するまで有限の先読みを止めておく。
+        backend.Release.TrySetResult();
         await pending!.WaitWithDiagnosticsAsync(Safety); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Same(newer, field.GetValue(controller));
         Assert.Equal(2, backend.Requests.Count); Assert.Equal(1, backend.Cancelled);
