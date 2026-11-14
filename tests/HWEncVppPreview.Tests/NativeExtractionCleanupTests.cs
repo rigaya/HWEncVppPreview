@@ -84,20 +84,80 @@ public sealed class NativeExtractionCleanupTests
         string native = VirtualPath("HWEncVppPreview", "native");
         string same = Path.Combine(native, "..", "native");
         Assert.Equal(native, NativeExtractionCleanup.ResolveCurrentDirectory(true,
-            JoinDirectories(native, native, same)));
+            JoinDirectories(native, native, same), new[] { VirtualPath() }));
     }
 
     [Fact]
     public void Resolveはsinglefileの唯一のRuntime候補だけを返す()
     {
         string current = VirtualPath("HWEncVppPreview", "current");
+        string[] bases = { VirtualPath() };
         string search = JoinDirectories("", VirtualPath("other", "invalid"), current, "");
-        Assert.Equal(current, NativeExtractionCleanup.ResolveCurrentDirectory(true, search));
-        Assert.Null(NativeExtractionCleanup.ResolveCurrentDirectory(false, search));
-        Assert.Null(NativeExtractionCleanup.ResolveCurrentDirectory(true, null));
-        Assert.Null(NativeExtractionCleanup.ResolveCurrentDirectory(true, ""));
+        Assert.Equal(current, NativeExtractionCleanup.ResolveCurrentDirectory(true, search, bases));
+        Assert.Null(NativeExtractionCleanup.ResolveCurrentDirectory(false, search, bases));
+        Assert.Null(NativeExtractionCleanup.ResolveCurrentDirectory(true, null, bases));
+        Assert.Null(NativeExtractionCleanup.ResolveCurrentDirectory(true, "", bases));
         Assert.Null(NativeExtractionCleanup.ResolveCurrentDirectory(true,
-            JoinDirectories(current, VirtualPath("HWEncVppPreview", "another"))));
+            JoinDirectories(current, VirtualPath("HWEncVppPreview", "another")), bases));
+    }
+
+    [Fact]
+    public void Resolveは展開根の外にある実行ファイルの場所を捨てる()
+    {
+        string root = VirtualPath("bundle");
+        string current = Path.Combine(root, "HWEncVppPreview", "current");
+        string application = VirtualPath("HWEncVppPreview", "bin");
+        string[] bases = { root };
+        Assert.Equal(current, NativeExtractionCleanup.ResolveCurrentDirectory(true,
+            JoinDirectories(application, current), bases));
+        Assert.Null(NativeExtractionCleanup.ResolveCurrentDirectory(true, application, bases));
+    }
+
+    [Fact]
+    public void Resolveは既定と指定の展開根の配下だけを受け付ける()
+    {
+        string def = VirtualPath("default-root");
+        string custom = VirtualPath("custom-root");
+        string[] bases = { def, custom };
+        string fromDefault = Path.Combine(def, "HWEncVppPreview", "id");
+        string fromCustom = Path.Combine(custom, "HWEncVppPreview", "id");
+        string lookalike = Path.Combine(def + "-extra", "HWEncVppPreview", "id");
+        Assert.Equal(fromDefault, NativeExtractionCleanup.ResolveCurrentDirectory(true, fromDefault, bases));
+        Assert.Equal(fromCustom, NativeExtractionCleanup.ResolveCurrentDirectory(true, fromCustom, bases));
+        Assert.Null(NativeExtractionCleanup.ResolveCurrentDirectory(true, lookalike, bases));
+        Assert.Null(NativeExtractionCleanup.ResolveCurrentDirectory(true, JoinDirectories(fromDefault, fromCustom), bases));
+    }
+
+    [Fact]
+    public void ExtractionBasesは既定の展開根と完全な指定根だけを返す()
+    {
+        string def = VirtualPath("default-base");
+        string custom = VirtualPath("custom-base");
+        Assert.Equal(new[] { def }, NativeExtractionCleanup.ExtractionBases(null, def));
+        Assert.Equal(new[] { def }, NativeExtractionCleanup.ExtractionBases("relative-base", def));
+        Assert.Equal(new[] { def, custom }, NativeExtractionCleanup.ExtractionBases(custom + Path.DirectorySeparatorChar, def));
+        Assert.Equal(new[] { def }, NativeExtractionCleanup.ExtractionBases(Path.Combine(def, "..", Path.GetFileName(def)), def));
+        Assert.Empty(NativeExtractionCleanup.ExtractionBases(null, null));
+    }
+
+    [Fact]
+    public void 現在の展開根はOSごとのnetと環境変数を含む()
+    {
+        string name = "DOTNET_BUNDLE_EXTRACT_BASE_DIR";
+        string? previous = Environment.GetEnvironmentVariable(name);
+        string custom = VirtualPath("configured-base");
+        string expected = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(
+            OperatingSystem.IsWindows() ? Path.GetTempPath()
+                : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".net")));
+        try
+        {
+            Environment.SetEnvironmentVariable(name, custom);
+            Assert.Equal(new[] { expected, custom }, NativeExtractionCleanup.ExtractionBases());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, previous);
+        }
     }
 
     [Fact]
@@ -148,6 +208,18 @@ public sealed class NativeExtractionCleanupTests
         using var tree = new TestTree();
         string old = tree.Entry("old", Now.AddHours(-1));
         NativeExtractionCleanup.Clean(current, new FixedClock());
+        AssertPayload(old);
+    }
+
+    [Fact]
+    public void Cleanは展開根の外では兄弟を消さない()
+    {
+        string root = VirtualPath("outside-" + Guid.NewGuid().ToString("N"));
+        using var tree = new TestTree(root: root);
+        string current = tree.Entry("current", Now);
+        string old = tree.Entry("old", Now.AddHours(-1));
+        NativeExtractionCleanup.Clean(current, new FixedClock());
+        AssertPayload(current);
         AssertPayload(old);
     }
 
@@ -234,11 +306,13 @@ public sealed class NativeExtractionCleanupTests
     private sealed class TestTree : IDisposable
     {
         private readonly List<string> _links = new();
-        public string Root { get; } = Path.Combine(Path.GetTempPath(), "viewer-native-cleanup-" + Guid.NewGuid().ToString("N"));
+        public string Root { get; }
         public string Parent { get; }
 
-        public TestTree(string parentName = "HWEncVppPreview")
+        public TestTree(string parentName = "HWEncVppPreview", string? root = null)
         {
+            Root = root ?? Path.Combine(NativeExtractionCleanup.DefaultExtractionRoot(),
+                "viewer-native-cleanup-" + Guid.NewGuid().ToString("N"));
             Parent = Path.Combine(Root, parentName);
             Directory.CreateDirectory(Parent);
         }
