@@ -39,12 +39,14 @@ public static class Program
             result.ExitCode = 2;
             result.Rc = 2;
             result.Error = exception.Message;
+            result.ExceptionChain = ExceptionDiagnostics.Lines(exception);
         }
         catch (InputProbeException exception)
         {
             result.ExitCode = 1;
             result.Rc = exception.ExitCode;
             result.Error = exception.Message;
+            result.ExceptionChain = ExceptionDiagnostics.Lines(exception);
             result.StderrTail = Tail(exception.StandardError);
         }
         catch (Exception exception)
@@ -52,6 +54,7 @@ public static class Program
             result.ExitCode = 3;
             result.Rc = 3;
             result.Error = exception.Message;
+            result.ExceptionChain = ExceptionDiagnostics.Lines(exception);
             result.TimedOut = exception is TimeoutException;
             if (exception is PreviewBackendException backendException) result.StderrTail = Tail(backendException.StandardError);
             else if (exception is InputProbeTimeoutException probeTimeout) result.StderrTail = Tail(probeTimeout.StandardError);
@@ -143,6 +146,7 @@ public static class Program
             result.ExitCode = failure.Result == null ? 3 : 1;
             result.Rc = failure.Result?.ExitCode ?? 3;
             result.Error = failure.Reason;
+            result.ExceptionChain = ExceptionDiagnostics.Lines(failure.Exception);
             result.TimedOut = failure.TimedOut || failure.Exception is TimeoutException;
             string log = failure.Diagnostic ?? failure.Result?.StandardError ?? (failure.Exception as PreviewBackendException)?.StandardError
                 ?? recording.Result?.StandardError ?? "";
@@ -338,6 +342,7 @@ public static class Program
         public int? Frames { get; set; }
         public double ElapsedMs { get; set; }
         public string? Error { get; set; }
+        public string[] ExceptionChain { get; set; } = [];
         public string? StderrTail { get; set; }
         public bool TimedOut { get; set; }
         [System.Text.Json.Serialization.JsonIgnore]

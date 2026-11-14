@@ -199,7 +199,7 @@ public sealed partial class MainWindowViewModel
                     if (!IsCurrent(generation) && !_latestIntentNavigation) return;
                     _pendingNeighbor = null;
                     _lastFailedAfter = Volatile.Read(ref _generation);
-                    ShowError(exception.Message, diagnostics);
+                    ShowExceptionError(exception.Message, diagnostics, exception);
                 }).ConfigureAwait(false);
             }
             finally
@@ -343,7 +343,7 @@ public sealed partial class MainWindowViewModel
                         }
                         if (image.Before) { if (IsCurrent(image.Generation) && image.BeforeVersion == _beforeImageGeneration) { IsBeforeBusy = false; BeforeImage = null; BeforeUnavailableForDuration(); } }
                         else if (image.Generation == Volatile.Read(ref _generation))
-                        { _lastFailedAfter = image.Generation; ShowError(AppMessages.ImageDisplayFailed, exception.Message); }
+                        { _lastFailedAfter = image.Generation; ShowExceptionError(AppMessages.ImageDisplayFailed, "", exception); }
                     }).ConfigureAwait(false);
                 }
                 finally

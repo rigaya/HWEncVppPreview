@@ -6,6 +6,7 @@ namespace HWEncVppPreview.Core;
 public static class CoreText
 {
     private static string T(string japanese, string english) => UiLanguage.Current == "ja" ? japanese : english;
+    public static string ExceptionDetails => T("例外の詳細:", "Exception details:");
     public static string OneShotReadFailed => T("都度起動の出力を読み取れませんでした", "Could not read one-shot output.");
     public static string OneShotExitTimedOut => T("都度起動プロセスの終了待機が期限切れになりました", "Timed out waiting for the one-shot process to exit.");
     public static string StandardErrorTimedOut => T("stderrの完了待機が期限切れになりました", "Timed out waiting for stderr to finish.");
