@@ -42,6 +42,10 @@
 DOTNET_BUNDLE_EXTRACT_BASE_DIR="$HOME/.cache/HWEncVppPreview/native" ./HWEncVppPreview
 ```
 
+## 注意事項
+
+raw elementary stream系のファイルには対応しません。
+
 ## ビルド方法
 
 ### Windows
