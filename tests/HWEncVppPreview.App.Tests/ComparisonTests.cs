@@ -377,6 +377,9 @@ public sealed class ComparisonTests
         await backend.NextAsync();
         var before = await backend.NextAsync();
         Assert.True(before.IsBefore);
+        // Beforeの開始はAfterの完了後だが、Afterの区間がVMへ入るのはUIでの反映後。
+        // 反映前に1枚送りすると取り直しになり、CurrentSecondsが同期的に進まない(2コアで再現)。
+        await WaitUntilAsync(vm, () => vm.PreviewImage != null && !vm.IsBusy);
         vm.StepFrameCommand.Execute(1);
         Assert.Equal(10 / 30.0, vm.CurrentSeconds, 7);
         Assert.False(before.Cancelled.Task.IsCompleted);

@@ -237,8 +237,8 @@ public sealed class OwnedProcessLifetimeViewModelTests
         (long FrameId, long RunId, int Pid, double Seek)? blocked = null;
         await session.WaitUntilAsync(() =>
         {
-            blocked = BlockedReader(session, previousOwners, previousRun);
-            return blocked is { } value && File.Exists(gate + "." + value.Pid + ".ready");
+            blocked = BlockedReader(session, gate, previousOwners, previousRun);
+            return blocked != null;
         });
         var reader = blocked!.Value;
         using var ready = JsonDocument.Parse(File.ReadAllText(gate + "." + reader.Pid + ".ready"));
@@ -249,23 +249,39 @@ public sealed class OwnedProcessLifetimeViewModelTests
         Assert.True(OwnedProcessSession.IsRunning(reader.Pid));
         Assert.True(reader.RunId > previousRun);
         Assert.False(File.Exists(gate));
-        Assert.Equal(reader, BlockedReader(session, previousOwners, previousRun));
+        Assert.Equal(reader, BlockedReader(session, gate, previousOwners, previousRun));
         Console.WriteLine($"取消前の実Reader待ち: pid={reader.Pid}, input={input}, seek={reader.Seek}, ordinal=2, frame={reader.FrameId}, run={reader.RunId}, previousRun={previousRun}, readerTokens=1");
     }
 
     private static (long FrameId, long RunId, int Pid, double Seek)? BlockedReader(OwnedProcessSession session,
-        long previousOwners, long previousRun)
+        string gate, long previousOwners, long previousRun)
     {
         // 台帳のlock内でmetadataだけを読み、試験側で画素や追加tokenを保持しない。
+        var candidates = new List<(long FrameId, long RunId, int Pid, double Seek, double? Xts)>();
         lock (OwnedVmCheck.Field(session.Scope, "_gate")!)
         {
             var live = (Dictionary<long, RawFrameOwner>)OwnedVmCheck.Field(session.Scope, "_live")!;
-            var reader = live.Values.SingleOrDefault(owner => owner.FrameId > previousOwners
-                && owner.RawRunId != previousRun && owner.Kinds.GetValueOrDefault("Reader") == 1);
-            if (reader?.Frame is not { } frame) return null;
-            return (reader.FrameId, reader.RawRunId, int.Parse(frame.Header.ExtTags["XPID"]),
-                double.Parse(frame.Header.ExtTags["XSEEK"], System.Globalization.CultureInfo.InvariantCulture));
+            foreach (var owner in live.Values)
+            {
+                if (owner.FrameId <= previousOwners || owner.RawRunId == previousRun
+                    || owner.Kinds.GetValueOrDefault("Reader") != 1 || owner.Frame is not { } frame) continue;
+                candidates.Add((owner.FrameId, owner.RawRunId, int.Parse(frame.Header.ExtTags["XPID"]),
+                    double.Parse(frame.Header.ExtTags["XSEEK"], System.Globalization.CultureInfo.InvariantCulture), frame.Xts));
+            }
         }
+        // readyは2枚目の画素途中で出るが、1枚目の所有はsinkへ渡し終えるまでReader tokenを持つ。
+        // その間に見ると1枚目を止めた枚と取り違え、直後に2枚目へ移って不一致になる(2コアのCIで再現)。
+        // readyに書いた止めた枚の時刻と一致する所有だけを、read待ちの実Readerとみなす。
+        foreach (var candidate in candidates)
+        {
+            string path = gate + "." + candidate.Pid + ".ready";
+            if (!File.Exists(path)) continue;
+            using var ready = JsonDocument.Parse(File.ReadAllText(path));
+            double timestamp = double.Parse(ready.RootElement.GetProperty("timestamp").GetString()!,
+                System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture);
+            if (candidate.Xts == timestamp) return (candidate.FrameId, candidate.RunId, candidate.Pid, candidate.Seek);
+        }
+        return null;
     }
 
     private static byte[] Convert(Y4mFrame frame, double white = 203)
