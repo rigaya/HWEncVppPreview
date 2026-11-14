@@ -480,6 +480,13 @@ public sealed partial class FrameCache
             int required = closed ? 2 : 3;
             if (matches.Count < required)
             {
+                // この区間がclosedでも、相手のstreamはまだ重なりを増やせる。
+                // 相手のCompleteSegment後にValidateAfterChangeが最終判定するまでは接続を保留する。
+                if (_activeSegments.Contains(previous.Id))
+                {
+                    pending = true;
+                    continue;
+                }
                 // 容量整理で二点を残せなかった窓は未接続に留め、残る一点の画素不一致だけは従来どおり拒否する。
                 if (closed && matches.Count < MinimumConnectedSafeFrameCount && (entry.BeforeWindowTrimmed || previous.BeforeWindowTrimmed))
                 {
@@ -544,7 +551,8 @@ public sealed partial class FrameCache
                 entry.SafeStart, entry.SafeEnd, frames = entry.Frames.Count, cacheBytes = _sizeBytes });
         entry.CanStitch = false;
         if (!_stitchDisabled.Any(source => SameContent(source, entry.Request))) _stitchDisabled.Add(entry.Request);
-        // olderのlate overlap検査からでも、最も新しい要求を残す。未挿入の新要求も候補に含める。
+        // IdはBeginSegment/StoreSegmentの生成順で、要求の新しさではない。
+        // 単独区間の代表には従来どおり最大Idを使い、受信中の区間は別に保護する。
         var keeper = _segments.Values.Where(peer => SameContent(peer.Request, entry.Request)).Append(entry).MaxBy(peer => peer.Id)!;
         keeper.CanStitch = false;
         RemoveOtherSourceEntries(keeper);
@@ -553,8 +561,17 @@ public sealed partial class FrameCache
 
     private void RemoveOtherSourceEntries(SegmentEntry entry)
     {
-        foreach (long id in _segments.Values.Where(peer => peer.Id != entry.Id && SameContent(peer.Request, entry.Request)).Select(peer => peer.Id).ToArray())
-            RemoveSegmentCore(id);
+        foreach (var peer in _segments.Values.Where(peer => peer.Id != entry.Id && SameContent(peer.Request, entry.Request)).ToArray())
+        {
+            if (_activeSegments.Contains(peer.Id))
+            {
+                // Append先を消すと容量不足と誤認してサーバまで終了するため、接続だけを止める。
+                // 完了後の再検査で通常の破棄対象へ戻る。未照合の画素は他区間と混ぜない。
+                peer.CanStitch = false;
+                continue;
+            }
+            RemoveSegmentCore(peer.Id);
+        }
         foreach (var node in _entries.Where(pair => pair.Key.MatchesSource(entry.Request)).Select(pair => pair.Value).ToArray()) Remove(node);
     }
 
