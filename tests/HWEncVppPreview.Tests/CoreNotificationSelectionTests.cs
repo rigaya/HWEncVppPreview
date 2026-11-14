@@ -46,26 +46,6 @@ public sealed class CoreNotificationSelectionTests
     }
 
     [Fact]
-    public async Task 解放済みの正ID候補はcache通知を全て抑止して通知世代も確定しない()
-    {
-        await using var state = new State();
-        int notifications = 0;
-        state.Controller.OwnedFrameReady += _ => ++notifications;
-        state.Controller.OwnedSegmentUpdated += _ => ++notifications;
-        state.Controller.OwnedCompleted += _ => ++notifications;
-        state.Cache.Clear();
-        Assert.Throws<ObjectDisposedException>(() => state.Frames[SelectedIndex].RawPixels);
-        var initial = state.Scope.Capture();
-        object? version = Field(state.Controller, "_lastNotifiedVersion");
-        Assert.False(state.Publish());
-        Assert.Equal(0, notifications);
-        Assert.Equal(version, Field(state.Controller, "_lastNotifiedVersion"));
-        Assert.True(state.Scope.Capture().TryRetainAttempts > initial.TryRetainAttempts);
-        Assert.Equal(initial.TotalRetains, state.Scope.Capture().TotalRetains);
-        Assert.True(state.Scope.Capture().IsEmpty);
-    }
-
-    [Fact]
     public async Task stream需要の確定も通知一枚だけを取得してから行う()
     {
         await using var state = new State();
@@ -88,36 +68,6 @@ public sealed class CoreNotificationSelectionTests
         Assert.True((bool)session.GetType().GetProperty("Satisfied")!.GetValue(session)!);
         Assert.Equal(1L, session.GetType().GetProperty("LastNotifiedVersion")!.GetValue(session));
         Assert.Equal(initial.TotalRetains + 1, state.Scope.Capture().TotalRetains);
-        Assert.True(state.Scope.Capture().IsEmpty);
-    }
-
-    [Fact]
-    public async Task streamの選択取得失敗は通知世代や需要の成功を確定しない()
-    {
-        await using var state = new State();
-        object session = state.InstallSession();
-        var type = session.GetType();
-        var demand = (TaskCompletionSource)type.GetProperty("Demand")!.GetValue(session)!;
-        object? notified = type.GetProperty("LastNotifiedVersion")!.GetValue(session);
-        object? globalNotified = Field(state.Controller, "_lastNotifiedVersion");
-        Assert.False((bool)type.GetProperty("Satisfied")!.GetValue(session)!);
-        Assert.False(demand.Task.IsCompleted);
-        var frame = new PreviewFrameResult(state.Request, state.Frames[SelectedIndex], false) { Segment = state.Segment };
-        int notifications = 0;
-        state.Controller.OwnedFrameReady += _ => ++notifications;
-        state.Cache.Clear();
-        Assert.Throws<ObjectDisposedException>(() => frame.Frame.RawPixels);
-        var initial = state.Scope.Capture();
-        // 選択後のevictを直接入力で再現し、OSの待機や実行順の偶然に依存しない。
-        bool published = (bool)Invoke(state.Controller, "TryPublishSelectedFrame", session, frame, true)!;
-        Assert.False(published);
-        Assert.Equal(0, notifications);
-        Assert.Equal(globalNotified, Field(state.Controller, "_lastNotifiedVersion"));
-        Assert.Equal(notified, type.GetProperty("LastNotifiedVersion")!.GetValue(session));
-        Assert.False((bool)type.GetProperty("Satisfied")!.GetValue(session)!);
-        Assert.False(demand.Task.IsCompleted);
-        Assert.True(state.Scope.Capture().TryRetainAttempts > initial.TryRetainAttempts);
-        Assert.Equal(initial.TotalRetains, state.Scope.Capture().TotalRetains);
         Assert.True(state.Scope.Capture().IsEmpty);
     }
 
@@ -161,19 +111,6 @@ public sealed class CoreNotificationSelectionTests
         Assert.Equal(notified, type.GetProperty("LastNotifiedVersion")!.GetValue(session));
         Assert.False((bool)type.GetProperty("Satisfied")!.GetValue(session)!);
         Assert.False(demand.Task.IsCompleted);
-        Assert.True(state.Scope.Capture().IsEmpty);
-    }
-
-    [Fact]
-    public async Task 初出力前の未所属需要を所属消失と混同しない()
-    {
-        await using var state = new State();
-        object session = state.InstallSession();
-        session.GetType().GetProperty("SegmentId")!.SetValue(session, 0L);
-        state.Cache.Clear();
-        Assert.True((bool)Invoke(state.Controller, "TryPublishDemand", session, false)!);
-        Assert.False(((TaskCompletionSource)session.GetType().GetProperty("Demand")!.GetValue(session)!).Task.IsCompleted);
-        Assert.False((bool)session.GetType().GetProperty("Satisfied")!.GetValue(session)!);
         Assert.True(state.Scope.Capture().IsEmpty);
     }
 

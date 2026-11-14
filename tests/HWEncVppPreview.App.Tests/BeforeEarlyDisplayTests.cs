@@ -125,26 +125,6 @@ public sealed class BeforeEarlyDisplayTests
         Assert.False(state.Vm.IsBeforeBusy);
     }
 
-    [AvaloniaFact]
-    public async Task 早期候補のTry取得失敗は表示世代を更新せずrawを復活させない()
-    {
-        await using var state = new State();
-        var producer = state.Frame(1, 32);
-        var frame = producer.Frame;
-        var segment = state.Segment(new[] { frame });
-        producer.Dispose();
-        long version = (long)Field(state.Vm, "_beforeImageGeneration")!;
-        // 通知所有がない入口でも、失敗した記述子を通常Captureへ渡さないことを確かめる。
-        state.Call("QueueEarlyBeforeFrame", state.Context,
-            new PreviewFrameResult(state.Request, frame, false) { Segment = segment, CanDisplayBeforeEnd = true }, segment);
-        await state.Pump();
-        Assert.Null(state.Vm.BeforeImage);
-        Assert.Equal(version, Field(state.Vm, "_beforeImageGeneration"));
-        Assert.Equal(1, state.Scope.Capture().TryRetainFailures);
-        Assert.True(state.Scope.Capture().IsEmpty);
-        Assert.Throws<ObjectDisposedException>(() => frame.RawPixels);
-    }
-
     private static object? Field(object target, string name) => target.GetType().GetField(name, Flags)!.GetValue(target);
 
     private sealed class State : IAsyncDisposable

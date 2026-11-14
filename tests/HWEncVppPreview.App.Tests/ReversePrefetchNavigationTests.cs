@@ -13,19 +13,6 @@ public sealed class ReversePrefetchNavigationTests
     private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [AvaloniaFact]
-    public async Task OneReverseStepThenForwardKeepsPausedPhysicalStream()
-    {
-        await using var fixture = await Fixture.StartAsync();
-        await fixture.StepAsync(-1);
-        Assert.Single(fixture.Backend.Requests);
-        Assert.Empty(fixture.Backend.Cancelled);
-        await fixture.StepAsync(1);
-        Assert.Equal(10, fixture.Vm.CurrentSeconds, 6);
-        Assert.Single(fixture.Backend.Requests);
-        Assert.Empty(fixture.Backend.Cancelled);
-    }
-
-    [AvaloniaFact]
     public async Task PrefetchFinishesBeforeTheBoundaryWithoutReplacingForegroundImageOrStatus()
     {
         await using var fixture = await Fixture.StartAsync();

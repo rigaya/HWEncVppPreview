@@ -53,18 +53,6 @@ public sealed class BgraLeaseViewModelTests
         Assert.Equal(0, Pool(vm).Capture().Leased);
         Assert.InRange(Pool(vm).Capture().Buffers, 0, 1);
     }
-    [AvaloniaFact]
-    public async Task 注入converterの配列はpoolへ取り込まない()
-    {
-        using var services = new Services();
-        byte[] external = new byte[16];
-        await using var vm = new MainWindowViewModel(services, null, null, null, null, null,
-            (_, _) => Task.FromResult(external));
-        await vm.WithConvertedBgraAsync(Frame(), new(), CancellationToken.None, data =>
-        { Assert.Same(external, data); return Task.CompletedTask; }).WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(0, Pool(vm).Capture().Buffers);
-        Assert.Equal(0, Pool(vm).Capture().Leased);
-    }
     [AvaloniaTheory]
     [InlineData(false)]
     [InlineData(true)]

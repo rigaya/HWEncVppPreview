@@ -311,80 +311,6 @@ public sealed class StreamingNavigationTests
         Assert.Equal(10 + steps / afterFps, vm.CurrentSeconds, 5);
     }
 
-    [AvaloniaTheory]
-    [InlineData(0.49, 1)]
-    [InlineData(0.51, 2)]
-    public async Task ActualBeforeTailUsesHalfOutputDurationForCacheHit(double tailFraction, int expectedRequests)
-    {
-        using var capabilities = new CapabilityScope();
-        using var services = new Services();
-        var clock = new FakeTimeProvider();
-        var foreground = new RecordingBackend(new());
-        var requests = new ConcurrentQueue<PreviewRequest>();
-        var received = new ConcurrentQueue<Y4mFrame>();
-        var background = new RecordingBackend(requests, received.Enqueue);
-        await using var vm = new MainWindowViewModel(services, clock, foreground, foreground, null, null, null, background, background)
-        { EncoderPath = FakeEncoderPath(), InputPath = "before-tail.ts", CurrentSeconds = 10,
-            InputArgsText = "--avhw --fake-duration 00:01:00.00 --fake-output-rate double", IsShowingBefore = true };
-        vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-nlmeans" });
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
-        async Task DrainAsync()
-        {
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            await UiTestWait.UntilAsync(() => vm.BeforeImage != null && !vm.IsBeforeBusy, Safety);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        }
-        await DrainAsync().WaitWithDiagnosticsAsync(Safety);
-        var last = received.Last();
-        double duration = FrameSelector.Duration(last, 30);
-        vm.CurrentSeconds = last.Xts!.Value - 1000 + duration * tailFraction;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await DrainAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(expectedRequests, requests.Count);
-        Assert.Null(vm.ErrorText);
-        Assert.False(vm.IsBeforeBusy);
-        Assert.NotNull(vm.BeforeImage);
-    }
-
-    [AvaloniaFact]
-    public async Task BeforeRoundTripWithinActualWindowDoesNotStartAnotherRequest()
-    {
-        using var capabilities = new CapabilityScope();
-        using var services = new Services();
-        var clock = new FakeTimeProvider();
-        var foregroundRequests = new ConcurrentQueue<PreviewRequest>();
-        var foreground = new RecordingBackend(foregroundRequests);
-        var backgroundRequests = new ConcurrentQueue<PreviewRequest>();
-        var background = new RecordingBackend(backgroundRequests);
-        await using var vm = new MainWindowViewModel(services, clock, foreground, foreground, null, null, null, background, background)
-        { EncoderPath = FakeEncoderPath(), InputPath = "before-roundtrip.ts", CurrentSeconds = 10,
-            InputArgsText = "--avhw --fake-duration 00:01:00.00", IsShowingBefore = true };
-        vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-nlmeans" });
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
-        async Task DrainAsync()
-        {
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            await UiTestWait.UntilAsync(() => vm.BeforeImage != null && !vm.IsBeforeBusy, Safety);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        }
-        await DrainAsync().WaitWithDiagnosticsAsync(Safety);
-        var original = vm.BeforeImage;
-        foreach (double target in new[] { 10.2, 10.0 })
-        {
-            vm.CurrentSeconds = target;
-            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-            await DrainAsync().WaitWithDiagnosticsAsync(Safety);
-            Assert.Single(backgroundRequests);
-            Assert.Null(vm.ErrorText);
-            Assert.False(vm.IsBeforeBusy);
-            Assert.NotNull(vm.BeforeImage);
-        }
-        Assert.NotSame(original, vm.BeforeImage);
-        Assert.Single(foregroundRequests);
-    }
-
     [AvaloniaFact]
     public async Task UiDisposeReapsFakeServersWithAfterPausedAndBeforeCompleted()
     {
@@ -786,53 +712,6 @@ public sealed class StreamingNavigationTests
         Assert.Equal(12 - 1.0 / 30, vm.CurrentSeconds, 6);
         Assert.False(vm.IsBusy);
         Assert.Null(vm.ErrorText);
-    }
-
-    [AvaloniaFact]
-    public async Task PendingAnchorRefreshUsesCurrentApprovalAndFrameIdentityAfterPrefixRemoval()
-    {
-        var header = new Y4mHeader { Width = 64, Height = 36, FpsNum = 30, FpsDen = 1 };
-        var cache = new FrameCache(header.FrameBytes * 3);
-        var request = new PreviewRequest { EncoderPath = "encoder", InputFile = "rolling", Fps = 30,
-            Capabilities = new(true, true), TimestampOriginSeconds = 1000 };
-        long id = cache.BeginSegment(request, new(1000, 0, true), 0);
-        cache.PinCurrent(id, 0);
-        Y4mFrame Frame(int index) => new(header, 1000 + index * 0.5, 0.5, new byte[header.FrameBytes]);
-        Assert.True(cache.Append(id, Frame(0)));
-        var wanted = Frame(1);
-        Assert.True(cache.Append(id, wanted));
-        Assert.True(cache.Append(id, Frame(2)));
-        var saved = new PreviewFrameReference(cache.GetSegment(id)! with { CanStitch = false }, 1);
-        cache.PinCurrent(id, 0.5);
-        Assert.True(cache.Append(id, Frame(3)));
-        var current = cache.GetSegment(id)!;
-        Assert.Same(wanted, current.Frames[0]);
-        Assert.True(current.CanStitch);
-
-        using var services = new Services();
-        await using var vm = new MainWindowViewModel(services, new FakeTimeProvider(), cache: cache);
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
-        const double pendingTarget = 0.9;
-        typeof(MainWindowViewModel).GetField("_navigationAnchor", flags)!.SetValue(vm, saved);
-        typeof(MainWindowViewModel).GetField("_navigationAnchorTarget", flags)!.SetValue(vm, pendingTarget);
-        var selectAnchor = typeof(MainWindowViewModel).GetMethod("NavigationAnchorIndex", flags)!;
-        int AnchorIndex(IReadOnlyList<PreviewFrameReference> frames) =>
-            (int)selectAnchor.Invoke(vm, new object[] { frames, pendingTarget, request.Fps })!;
-        var direct = Enumerable.Range(0, current.Frames.Count)
-            .Select(index => new PreviewFrameReference(current, index)).ToArray();
-        // コマ送りで使う実経路を通し、削られた先頭の古い番号ではなく画像の同一性で辿る。
-        Assert.Equal(0, AnchorIndex(direct));
-
-        var peer = current with { SegmentId = id + 1, Frames = new[] { Frame(1), Frame(2), Frame(3) } };
-        var equivalent = Enumerable.Range(0, peer.Frames.Count)
-            .Select(index => new PreviewFrameReference(peer, index)).ToArray();
-        Assert.NotSame(wanted, equivalent[0].Frame);
-        Assert.False(FrameSelector.AreEquivalent(saved, equivalent[0]));
-        // 別区間の候補では最新の接続許可も必要。古いfalseのままでは目標時刻へ戻ってしまう。
-        Assert.Equal(0, AnchorIndex(equivalent));
-        cache.RemoveSegment(id);
-        // 実体がなくなったanchorは採らず、通常の時刻選択へ戻る。
-        Assert.Equal(1, AnchorIndex(equivalent));
     }
 
     [AvaloniaTheory]

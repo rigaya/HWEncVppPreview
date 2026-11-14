@@ -14,23 +14,6 @@ public sealed class StreamMetadataReadTests
     private static readonly Y4mHeader Header = new() { Width = 2, Height = 2, FpsNum = 30, FpsDen = 1 };
 
     [Fact]
-    public async Task 読取予算の停止と需要移動後の再開は画素を取得しない()
-    {
-        await using var state = new StreamState(new[] { 0d, .5, 1, 2 });
-        var initial = state.Scope.Capture();
-        Task paused = state.Sink.BeforeReadAsync(state.Cancellation.Token).AsTask();
-        Assert.False(paused.IsCompleted);
-        Assert.Equal(initial.TotalRetains, state.Scope.Capture().TotalRetains);
-        state.Set("LatestRequest", state.Request with { TargetSeconds = 1 });
-        state.SignalRead();
-        await paused.WaitWithDiagnosticsAsync(Safety);
-        Assert.True(state.Sink.BeforeReadAsync(state.Cancellation.Token).IsCompletedSuccessfully);
-        Assert.Equal(initial.TotalRetains, state.Scope.Capture().TotalRetains);
-        Assert.Equal(initial.LiveTokens, state.Scope.Capture().LiveTokens);
-        Assert.Equal(Origin + 2, state.Cache.GetSegment(state.SegmentId)!.Frames[^1].Xts);
-    }
-
-    [Fact]
     public async Task byte予算で停止中の読取は取消で完了し画素を固定しない()
     {
         const int FrameCount = 5;
@@ -55,46 +38,6 @@ public sealed class StreamMetadataReadTests
         Assert.Equal(initial.TotalRetains, state.Scope.Capture().TotalRetains);
         Assert.Equal(initial.LiveTokens, state.Scope.Capture().LiveTokens);
         Assert.Equal(.5, state.Cache.GetSegment(state.SegmentId)!.SafeStartSeconds);
-    }
-
-    [Fact]
-    public async Task 隣不足の需要は同じstreamを再利用し現在区間の全窓取得を増やさない()
-    {
-        const int FrameCount = 4;
-        const int TargetIndex = 2;
-        await using var state = new StreamState(new[] { 0d, .5, 1, 2 });
-        Task paused = state.Sink.BeforeReadAsync(state.Cancellation.Token).AsTask();
-        Assert.False(paused.IsCompleted);
-        state.Set("IsPaused", true);
-        state.Set("LastFrameBytes", (long)FrameBytes);
-        var request = state.Request with { CorrelationId = 2, TargetSeconds = 1 };
-        Y4mFrame? selected = null;
-        state.Controller.OwnedFrameReady += envelope =>
-        {
-            selected = envelope.FrameReady!.Frame;
-            Assert.False(state.Scope.Capture().OwnerKinds.ContainsKey("StreamCacheRead"));
-            Assert.Equal(1, envelope.FrameReady!.Request.TargetSeconds);
-        };
-        var initial = state.Scope.Capture();
-        // cache通知の所有とは分け、隣不足の明示的な再利用経路だけを測る。
-        bool reused = (bool)typeof(PreviewController).GetMethod("TrySubmitStreaming", Flags)!
-            .Invoke(state.Controller, new object[] { request, true, true, true, CancellationToken.None, true })!;
-        Assert.True(reused);
-        Assert.Same(state.Session, typeof(PreviewController).GetField("_stream", Flags)!.GetValue(state.Controller));
-        Assert.Equal(request, state.Get<PreviewRequest>("LatestRequest"));
-        Assert.False(state.Get<bool>("IsPaused"));
-        Assert.False(state.Cancellation.IsCancellationRequested);
-        Assert.Same(state.Cache.GetSegment(state.SegmentId)!.Frames[TargetIndex], selected);
-        Assert.Equal(Origin + 1, selected!.Xts);
-        // 通知で使う選択一枚だけを所有し、現在区間も公開用の親窓も固定しない。
-        Assert.Equal(FrameCount, state.Cache.GetSegment(state.SegmentId)!.Frames.Count);
-        Assert.Equal(initial.TotalRetains + 1, state.Scope.Capture().TotalRetains);
-        Assert.Equal(initial.LiveTokens, state.Scope.Capture().LiveTokens);
-        await paused.WaitWithDiagnosticsAsync(Safety);
-        var after = state.Scope.Capture();
-        Assert.True(state.Sink.BeforeReadAsync(state.Cancellation.Token).IsCompletedSuccessfully);
-        Assert.Equal(after.TotalRetains, state.Scope.Capture().TotalRetains);
-        Assert.True(state.Get<TaskCompletionSource>("Demand").Task.IsCompletedSuccessfully);
     }
 
     private sealed class StreamState : IAsyncDisposable

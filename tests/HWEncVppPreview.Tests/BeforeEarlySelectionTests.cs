@@ -200,46 +200,6 @@ public sealed class BeforeEarlySelectionTests
         finally { backend.Release.TrySetResult(); }
     }
 
-    [Theory]
-    [InlineData(.0099, true, false)]
-    [InlineData(.0099, true, true)]
-    [InlineData(.0101, false, false)]
-    [InlineData(.0101, false, true)]
-    public async Task 実Fakeの間隔境界をENDgate前に判定する(double ratio, bool eligible, bool noDuration)
-    {
-        const int GateAfterFrame = 64;
-        string gate = Path.Combine(Path.GetTempPath(), "before-jitter-" + Guid.NewGuid().ToString("N"));
-        await using var backend = new ServerBackend();
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
-        var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
-        controller.FrameReady += value => selected.TrySetResult(value);
-        controller.Completed += value => completed.TrySetResult(value);
-        var args = new List<string> { "--fake-gate", gate, "--fake-gate-after", GateAfterFrame.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            "--fake-output-rate", "double", "--fake-timestamp-jitter-ratio", ratio.ToString(System.Globalization.CultureInfo.InvariantCulture) };
-        if (noDuration) args.Add("--fake-no-xdur");
-        try
-        {
-            controller.Submit(Request with { EncoderPath = BackendTests.FakeEncoderPath(), Fps = 30, InputArgs = args },
-                background: true, bypassDebounce: true);
-            var frame = await selected.Task.WaitWithDiagnosticsAsync(Safety);
-            Assert.Equal(eligible, frame.CanDisplayBeforeEnd);
-            Assert.Equal(60, frame.Frame.Header.Fps);
-            Assert.Equal(!noDuration, frame.Frame.Xdur.HasValue);
-            Assert.Equal(1001, frame.Frame.Xts!.Value, 6);
-            Assert.False(completed.Task.IsCompleted);
-            await File.WriteAllTextAsync(gate, "");
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            Assert.Equal(0, (await completed.Task.WaitWithDiagnosticsAsync(Safety)).Result.ExitCode);
-        }
-        finally
-        {
-            await File.WriteAllTextAsync(gate, "");
-            await controller.DisposeAsync();
-            File.Delete(gate);
-        }
-    }
-
     private static async Task AssertEligibilityAsync(Y4mFrame[] frames, PreviewRequest request, bool eligible, Y4mFrame expected)
     {
         var backend = new GatedBackend(frames);

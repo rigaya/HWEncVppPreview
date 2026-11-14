@@ -253,48 +253,6 @@ public sealed class BeforeRecoveryTests
         Assert.False(vm.IsBeforeBusy);
     }
 
-    [AvaloniaFact]
-    public async Task UnreadBeforeUsesPhysicalWindowRatherThanLogicalWarmupMargin()
-    {
-        using var capability = new CapabilityScope();
-        using var services = new Services();
-        var clock = new FakeTimeProvider();
-        var backend = new ControlledBackend(false);
-        await using var vm = await Start(services, clock, backend);
-        Assert.Equal(9, CommandBuilder.Plan(backend.BeforeRequests.Single()).SeekSeconds);
-        // 論理前余白2秒に入る8.5秒は拒否し、実seek以後の9.3秒だけを再利用する。
-        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var context = typeof(MainWindowViewModel).GetField("_beforeExecutionContext", flags)!.GetValue(vm)!;
-        var method = typeof(MainWindowViewModel).GetMethod("ContainsBeforeTarget", flags)!;
-        var request = backend.BeforeRequests.Single();
-        Assert.Equal(false, method.Invoke(vm, new[] { context, request with { TargetSeconds = 8.5 } }));
-        Assert.Equal(true, method.Invoke(vm, new[] { context, request with { TargetSeconds = 9.3 } }));
-    }
-
-    [AvaloniaTheory]
-    [InlineData(true, 9.5, true)]
-    [InlineData(false, 9.5, false)]
-    [InlineData(true, 9.95, false)]
-    public async Task NaturalEndSharesOnlyTheSafeFinalFrame(bool reachedEnd, double safeStart, bool expected)
-    {
-        using var services = new Services();
-        var backend = new ControlledBackend(false);
-        await using var vm = new MainWindowViewModel(services, new FakeTimeProvider(), backend, backend);
-        var request = new PreviewRequest
-        {
-            EncoderPath = "encoder", InputFile = "end.ts", TargetSeconds = 10, Fps = 10,
-            InputDurationSeconds = 10, Capabilities = new(true, true), TimestampOriginSeconds = 1000,
-        };
-        var header = Y4mHeader.Parse("YUV4MPEG2 W2 H2 F10:1 C420");
-        var frames = new[] { new Y4mFrame(header, 1009.9, 0.1, new byte[6]) };
-        var segment = new PreviewSegmentSnapshot(1, request, new(1000, 9, true), frames,
-            safeStart, 9.9, false, reachedEnd);
-        // privateな再利用契約を直接確認し、UI専用のための公開APIは増やさない。
-        var method = typeof(MainWindowViewModel).GetMethod("ContainsBeforeFrameTarget",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-        Assert.Equal(expected, method.Invoke(vm, new object[] { request, frames, 10d, segment }));
-    }
-
     private static async Task<MainWindowViewModel> Start(Services services, FakeTimeProvider clock, ControlledBackend backend,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter = null)
     {

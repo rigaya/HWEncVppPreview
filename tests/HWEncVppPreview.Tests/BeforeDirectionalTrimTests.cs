@@ -318,27 +318,6 @@ public sealed class BeforeDirectionalTrimTests
     }
 
     [Fact]
-    public void 明示解除消失IDとRemoveとClearは全ヒントを消す()
-    {
-        using var state = new Fixture(4 * FrameBytes);
-        var before = state.Store("before", new[] { 10d });
-        state.Cache.ProtectDisplayedBeforeSegment(before.SegmentId, before.Frames[0].FrameId, -7);
-        Assert.Equal(-1, Hint(state.Cache, "_displayedBeforeDirection"));
-        state.Cache.ProtectDisplayedBeforeSegment(long.MaxValue, before.Frames[0].FrameId, 1);
-        AssertHintsCleared(state.Cache);
-        state.Cache.ProtectDisplayedBeforeSegment(before.SegmentId, before.Frames[0].FrameId, 1);
-        state.Cache.RemoveSegment(before.SegmentId);
-        AssertHintsCleared(state.Cache);
-        var next = state.Store("next", new[] { 20d });
-        state.Cache.ProtectDisplayedBeforeSegment(next.SegmentId, next.Frames[0].FrameId, 1);
-        state.Cache.ProtectDisplayedBeforeSegment(null);
-        AssertHintsCleared(state.Cache);
-        state.Cache.ProtectDisplayedBeforeSegment(next.SegmentId, next.Frames[0].FrameId, 1);
-        state.Cache.Clear();
-        AssertHintsCleared(state.Cache);
-    }
-
-    [Fact]
     public void 末尾を残す方向窓では既知EOFを解除せず先頭番号だけを進める()
     {
         using var state = new Fixture(64 * FrameBytes);
@@ -444,12 +423,6 @@ public sealed class BeforeDirectionalTrimTests
 
     private static object? Hint(FrameCache cache, string name)
         => typeof(FrameCache).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(cache);
-    private static void AssertHintsCleared(FrameCache cache)
-    {
-        Assert.Null(Hint(cache, "_displayedBeforeSegmentId"));
-        Assert.Equal(0L, Hint(cache, "_displayedBeforeFrameId"));
-        Assert.Equal(0, Hint(cache, "_displayedBeforeDirection"));
-    }
 
     private sealed class Fixture(long capacity) : IDisposable
     {

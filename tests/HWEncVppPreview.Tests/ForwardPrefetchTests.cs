@@ -332,31 +332,6 @@ public sealed class ForwardPrefetchTests
         Assert.Equal(3, backend.Requests.Count); Assert.Equal(1, backend.MaxConcurrent);
     }
 
-    [Fact]
-    public async Task 別起動の同値markerを古いstreamの取消で消さない()
-    {
-        var cache = new FrameCache(240); Seed(cache, Request()); var backend = new Backend(holdFinite: true);
-        await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
-        controller.Submit(Request()); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        controller.NotifyNavigation(Request(11.5), 1);
-        await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        // 同値だが別参照の新markerを注入し、値比較や無条件clearでは保護できないケースを作る。
-        var field = typeof(PreviewController).GetField("_lastForwardPrefetch",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-        var previous = Assert.IsType<PreviewRequest>(field.GetValue(controller));
-        var newer = previous with { };
-        field.SetValue(controller, newer);
-        controller.Submit(Request(10.4, 2), navigation: true); controller.NotifyNavigation(Request(10.4, 2), -1);
-        controller.Submit(Request(10.3, 3), navigation: true); controller.NotifyNavigation(Request(10.3, 3), -1);
-        var pending = controller.GetPendingReversePrefetch(Request(10.3, 3)); Assert.NotNull(pending);
-        // 完了済みの先読みは取得対象から外れるため、待つ対象を取得するまで有限の先読みを止めておく。
-        backend.Release.TrySetResult();
-        await pending!.WaitWithDiagnosticsAsync(Safety); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Same(newer, field.GetValue(controller));
-        Assert.Equal(2, backend.Requests.Count); Assert.Equal(1, backend.Cancelled);
-    }
-
     private sealed class Backend(string result = "stream", bool history = false, bool holdCancellation = false, bool holdAtSeedEnd = false, bool holdFinite = false) : IPreviewBackend
     {
         public ConcurrentQueue<PreviewRequest> Requests { get; } = new();

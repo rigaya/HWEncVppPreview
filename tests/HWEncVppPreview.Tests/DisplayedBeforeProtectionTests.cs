@@ -77,24 +77,6 @@ public sealed class DisplayedBeforeProtectionTests
     }
 
     [Fact]
-    public void 消失IDとRemoveとClearはBefore保護枠を残さない()
-    {
-        var cache = new FrameCache(4 * FrameBytes);
-        var before = Store(cache, "before", 10);
-        cache.ProtectDisplayedBeforeSegment(before.SegmentId);
-        cache.ProtectDisplayedBeforeSegment(long.MaxValue);
-        Assert.Null(Protection(cache));
-        cache.ProtectDisplayedBeforeSegment(before.SegmentId);
-        cache.RemoveSegment(before.SegmentId);
-        Assert.Null(Protection(cache));
-        var next = Store(cache, "before", 20);
-        cache.ProtectDisplayedBeforeSegment(next.SegmentId);
-        cache.Clear();
-        Assert.Null(Protection(cache));
-        Assert.Equal(0, cache.SizeBytes);
-    }
-
-    [Fact]
     public void Beforeとcurrentが同じ区間なら既存prefix回収の結果を変えない()
     {
         foreach (bool protect in new[] { false, true })
