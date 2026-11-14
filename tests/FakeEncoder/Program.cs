@@ -436,9 +436,10 @@ internal static class Program
                     await Output.FlushAsync();
                     string ready = bodyGate + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + ".ready";
                     string temporary = ready + ".tmp";
+                    // timestampはFRAME行のXtsと同じ文字列。試験は止めた枚の所有をこれで特定する。
                     await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(new
                     {
-                        pid = Environment.ProcessId, input = Value(args, "-i"), seek, outputOrdinal, index = i,
+                        pid = Environment.ProcessId, input = Value(args, "-i"), seek, outputOrdinal, index = i, timestamp,
                     }));
                     File.Move(temporary, ready, overwrite: true);
                     try { await WaitForFileAsync(bodyGate, effectiveToken); }
