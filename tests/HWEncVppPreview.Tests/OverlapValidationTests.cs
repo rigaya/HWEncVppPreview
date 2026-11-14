@@ -134,7 +134,7 @@ public sealed class OverlapValidationTests
     }
 
     [Fact]
-    public void OlderLateMismatchKeepsLatestRequestInsteadOfInspectedMiddleRequest()
+    public void OlderLateMismatchKeepsLiveSegmentsUntilCompletionAndDoesNotMixThem()
     {
         var cache = new FrameCache();
         long older = cache.BeginSegment(Request(), new(1000, 7, true), 10);
@@ -143,10 +143,17 @@ public sealed class OverlapValidationTests
         foreach (var frame in Frames(20)) cache.Append(middle, frame);
         var latest = cache.StoreSegment(Request(), Frames(30), new(1000, 27, true), 30, 31)!;
         cache.PinCurrent(latest.SegmentId, 30);
-        // olderが伸びて中間区間との3点の画素不一致が判明しても、disjointな最新要求を残す。
+        // 画素不一致でも受信中の区間は保持し、pinしたclosed区間との混在は防ぐ。
         Assert.True(cache.Append(older, Frame(20 + Offset, 99)));
         Assert.True(cache.Append(older, Frame(20 + Offset + Step, 99)));
-        Assert.False(cache.Append(older, Frame(20 + Offset + 2 * Step, 99)));
+        Assert.True(cache.Append(older, Frame(20 + Offset + 2 * Step, 99)));
+        Assert.True(cache.GetSegment(older)!.IsActive);
+        Assert.True(cache.GetSegment(middle)!.IsActive);
+        Assert.False(cache.GetSegment(older)!.CanStitch);
+        Assert.False(cache.GetSegment(middle)!.CanStitch);
+        Assert.All(cache.GetNavigationFrames(Request()), frame => Assert.Equal(latest.SegmentId, frame.SegmentId));
+        cache.CompleteSegment(older, false);
+        cache.CompleteSegment(middle, false);
         Assert.Null(cache.GetSegment(older));
         Assert.Null(cache.GetSegment(middle));
         var kept = cache.GetSegment(latest.SegmentId)!;
