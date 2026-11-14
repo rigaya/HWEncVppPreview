@@ -147,7 +147,7 @@ public sealed class SafeRangeQuantizationTests
     }
 
     [Fact]
-    public async Task TailShortfallBeyondToleranceStillFails()
+    public async Task TailShortfallBeyondToleranceRequiresNaturalEndConfirmation()
     {
         var frames = new QuantizedBackend().Frames.ToArray();
         var last = frames[^1];
@@ -160,8 +160,13 @@ public sealed class SafeRangeQuantizationTests
         controller.Failed += value => failed = value;
         controller.Submit(Request());
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        Assert.Null(selected);
-        Assert.NotNull(failed);
+        Assert.NotNull(selected);
+        Assert.Null(failed);
+        Assert.True(selected.Segment!.ReachedInputEnd);
+        // 許容幅は広げない。有限窓のままなら従来どおり不足と判定する。
+        var finite = selected.Segment with { ReachedInputEnd = false,
+            SafeEndSeconds = selected.Segment.SafeEndSeconds - PreviewByteWindow.TailGuardSeconds };
+        Assert.True(PreviewWindowShortfall.FromSegment(Request(), finite)!.MissingTail);
     }
 
     [Fact]

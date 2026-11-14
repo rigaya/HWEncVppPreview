@@ -2,6 +2,27 @@
 
 public sealed partial class PreviewController
 {
+    private Task? QueueEmptyReplay(StreamingSession session)
+    {
+        lock (_sync)
+        {
+            if (_disposed || session.ExternalToken.IsCancellationRequested || session.Version != _version
+                || !PreviewWindowRecovery.TryBacktrackEmpty(session.LatestRequest, session.PhysicalRequest, 0, out var expanded)) return null;
+            _cache.RemoveSegment(session.SegmentId);
+            if (ReferenceEquals(_stream, session)) _stream = null;
+            PulseStreamState();
+            var scheduled = CancellationTokenSource.CreateLinkedTokenSource(session.ExternalToken);
+            _scheduled = scheduled;
+            if (_foregroundPending++ == 0) _foregroundIdle = NewSignal();
+            var completion = NewSignal();
+            _tasks.Add(completion.Task);
+            _ = TrackAsync(ScheduleAsync(expanded with { Continuous = false }, session.Version, scheduled,
+                bypassCache: true, bypassDebounce: true, session.Navigation, background: false, _lastEditVersion,
+                session.ExternalToken, emptyRecoveryAttempt: 1), completion);
+            return completion.Task;
+        }
+    }
+
     // streamの窓が目標より後ろへ着地したときは、backendの終了を待ってから同じ所有世代の有限窓へ戻す。
     private Task? QueueWindowReplay(StreamingSession session, bool withoutOutputStart = false)
     {

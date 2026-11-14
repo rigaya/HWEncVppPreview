@@ -590,7 +590,7 @@ public sealed class StreamingNavigationTests
         Assert.NotNull(vm.PreviewImage);
         Assert.Null(vm.ErrorText);
         Assert.False(vm.IsBusy);
-        Assert.Equal(target, vm.CurrentSeconds);
+        Assert.Equal(target == 0 ? 0 : 3 - 1.0 / 30, vm.CurrentSeconds, 5);
         Assert.Equal(3, requests.Single().InputDurationSeconds);
     }
 

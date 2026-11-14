@@ -276,7 +276,7 @@ public sealed class StreamingControllerTests
     }
 
     [Fact]
-    public async Task UnknownDurationUnsafeFiniteEndFailsInsteadOfLeavingDemandUnanswered()
+    public async Task UnknownDurationFiniteEndConfirmsEofAndReleasesTheGuard()
     {
         var backend = new StreamingBackend { InputEndSeconds = 10.2, StepSeconds = 0.1 };
         await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
@@ -286,13 +286,13 @@ public sealed class StreamingControllerTests
         controller.FrameReady += _ => ++images;
         controller.Submit(Request() with { Continuous = false, Fps = 10 });
         await controller.WaitForIdleAsync();
-        Assert.NotNull(failure);
-        Assert.Contains("目標時刻", failure.Reason);
-        Assert.Equal(0, images);
+        Assert.Null(failure);
+        Assert.Equal(1, images);
+        Assert.Equal(2, backend.Calls);
     }
 
     [Fact]
-    public async Task UnsafeWarmupAtNaturalEndFailsExplicitly()
+    public async Task UnsafeWarmupAtNaturalEndBacktracksBeforeDisplaying()
     {
         var backend = new StreamingBackend { InputEndSeconds = 7.5, StepSeconds = 0.1 };
         await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
@@ -305,10 +305,10 @@ public sealed class StreamingControllerTests
         // 実際の入力が目標より大幅に短い場合、計画seek+2の暖機境界まで画像が届かない。
         controller.Submit(Request(10.2) with { Fps = 10 });
         await controller.WaitForIdleAsync();
-        Assert.NotNull(failure);
-        Assert.Contains("目標時刻", failure.Reason);
-        Assert.Equal(0, images);
-        Assert.Equal(0, completed);
+        Assert.Null(failure);
+        Assert.Equal(1, images);
+        Assert.Equal(1, completed);
+        Assert.InRange(backend.Calls, 2, 3);
     }
 
     [Fact]
@@ -336,9 +336,9 @@ public sealed class StreamingControllerTests
     [InlineData(false, 0.003, true)]
     [InlineData(true, 0.005, true)]
     [InlineData(false, 0.005, true)]
-    [InlineData(true, 0.006, false)]
-    [InlineData(false, 0.006, false)]
-    public async Task KnownEndAllowsOnlyDurationLogRounding(bool continuous, double gap, bool accepted)
+    [InlineData(true, 0.006, true)]
+    [InlineData(false, 0.006, true)]
+    public async Task NaturalEndUsesLastFrameWithoutRequiringContainerDurationAgreement(bool continuous, double gap, bool accepted)
     {
         var backend = new StreamingBackend
         {
@@ -353,15 +353,15 @@ public sealed class StreamingControllerTests
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Equal(accepted, image != null);
         Assert.Equal(!accepted, failure != null);
-        Assert.Single(backend.Requests);
+        Assert.Equal(continuous ? 1 : 2, backend.Requests.Count);
         if (image != null)
         {
             Assert.Equal(1010.1, image.Frame.Xts!.Value, 6);
             Assert.True(image.Segment!.ReachedInputEnd);
-            // 生の表示終了時刻を延ばさず、既知の終端にだけ丸め差を適用する。
+            // 生の表示終了時刻を延ばさず、EOF以降の要求に最終画像を使う。
             Assert.Equal(10.2 - gap, image.Segment.SafeEndSeconds, 6);
             var segment = image.Segment;
-            Assert.False(PreviewSafeRange.IsKnownInputEnd(segment.PhysicalRequest, segment, 10.21));
+            Assert.True(PreviewSafeRange.IsKnownInputEnd(segment.PhysicalRequest, segment, 10.21));
             Assert.False(PreviewSafeRange.IsKnownInputEnd(segment.PhysicalRequest, segment with { ReachedInputEnd = false }, 10.2));
         }
     }

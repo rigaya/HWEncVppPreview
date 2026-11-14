@@ -134,7 +134,8 @@ public sealed partial class FrameCache
                 && SameContent(current.Request, request) && !current.CanStitch)
             { segment = null!; return false; }
             var entry = _segments.Values.Where(x => x.Clock.TrustedAbsolute && x.CanStitch && SameContent(x.Request, request)
-                && x.Frames.Count > 0 && PreviewSafeRange.Contains(targetSeconds, x.SafeStart, x.SafeEnd)
+                && x.Frames.Count > 0 && (PreviewSafeRange.Contains(targetSeconds, x.SafeStart, x.SafeEnd)
+                    || PreviewSafeRange.IsKnownInputEnd(request, Snapshot(x), targetSeconds))
                 && FrameSelector.Select(Snapshot(x), targetSeconds, request.Fps) >= 0)
                 .OrderByDescending(x => x.LastUse).FirstOrDefault();
             if (entry == null) { segment = null!; return false; }

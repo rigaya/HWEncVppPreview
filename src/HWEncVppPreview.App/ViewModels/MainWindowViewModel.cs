@@ -659,6 +659,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         var afterRequest = context.NeighborDirection != 0 ? CompleteNeighbor(context, frames) : value.Request;
         if (frames.Count == 0 && context.Generation == Volatile.Read(ref _generation) && _lastQueuedAfter < context.Generation)
         { _lastFailedAfter = context.Generation; ShowError(AppMessages.NoDisplayableFrames, value.Result.StandardError); return; }
+        if (ApplyReachedInputEnd(context, value, segment))
+        {
+            afterRequest = RetargetInterval(afterRequest ?? value.Request, CurrentSeconds);
+            _intervalLogicalRequest = afterRequest;
+        }
         ErrorText = null;
         LogText = AppendBeforeFallbackDiagnostic(value.Result.StandardError);
         if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = AppMessages.BackendMode(context.Mode);

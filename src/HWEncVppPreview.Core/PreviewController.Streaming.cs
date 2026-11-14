@@ -381,9 +381,24 @@ public sealed partial class PreviewController
                 return;
             }
             bool naturalEnd = result.ExitCode == 0 && !result.IsCancelled && !session.Cancellation.IsCancellationRequested;
+            if (naturalEnd && _cache.GetSegment(session.SegmentId)?.Frames.Count is not > 0 && !session.IsForwardPrefetch)
+            {
+                Task? recovery = QueueEmptyReplay(session);
+                if (entered) { _execution.Release(); entered = false; }
+                if (recovery != null) { await recovery.ConfigureAwait(false); return; }
+            }
             if (naturalEnd)
             {
                 _cache.CompleteSegment(session.SegmentId, naturalEnd);
+                if (!session.IsForwardPrefetch && PreviewWindowShortfall.FromSegment(session.LatestRequest,
+                    _cache.GetSegment(session.SegmentId)) is { MissingHead: true } shortage)
+                {
+                    session.WindowShortfall = shortage;
+                    Task? recovery = QueueWindowReplay(session);
+                    if (entered) { _execution.Release(); entered = false; }
+                    if (recovery != null) await recovery.ConfigureAwait(false);
+                    return;
+                }
                 lock (_sync)
                 {
                     session.Ended = naturalEnd;

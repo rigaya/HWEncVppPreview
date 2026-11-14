@@ -12,16 +12,16 @@ public static class PreviewSafeRange
 
     public static bool IsAfter(double seconds, double end) => seconds > end + ToleranceSeconds;
 
-    /// <summary>ログのDurationは小数2桁へ丸められるため、自然EOFの表示時間との最大5msの差だけを許す。</summary>
+    /// <summary>自然EOFで安全な最終フレームを得た場合、申告長との一致を要求せず末尾以降をその画像へ寄せる。</summary>
     public static bool IsKnownInputEnd(PreviewRequest request, PreviewSegmentSnapshot segment, double target)
     {
-        if (!segment.ReachedInputEnd || segment.Frames.Count == 0
-            || request.InputDurationSeconds is not double end || !double.IsFinite(end)
-            || Math.Abs(target - end) > 1e-8) return false;
+        if (!segment.ReachedInputEnd || segment.Frames.Count == 0) return false;
         var last = segment.Frames[^1];
         double start = segment.Clock.ToInputSeconds(last, segment.Frames.Count - 1, request.Fps);
+        double end = start + FrameSelector.Duration(last, request.Fps);
+        // 1枚だけの救済snapshotはEOFフラグを引き継ぐが、元区間の真の末尾を保持しているとは限らない。
         return Contains(start, segment.SafeStartSeconds, segment.SafeEndSeconds)
-            && start <= end + ToleranceSeconds
-            && start + FrameSelector.Duration(last, request.Fps) >= end - 0.005 - ToleranceSeconds;
+            && end >= segment.SafeEndSeconds - ToleranceSeconds
+            && target >= end - ToleranceSeconds;
     }
 }

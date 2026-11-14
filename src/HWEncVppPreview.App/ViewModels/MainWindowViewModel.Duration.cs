@@ -8,6 +8,7 @@ public sealed partial class MainWindowViewModel
     private CancellationTokenSource? _durationCancellation;
     private DurationIdentity? _durationAttempt;
     private long _durationGeneration;
+    private double? _reachedInputEndSeconds;
 
     // 長さの寿命は入力単位とし、フィルタ編集や移動の要求世代とは分ける。
     private void CancelDuration()
@@ -17,6 +18,7 @@ public sealed partial class MainWindowViewModel
             _durationAfterSeen = _durationBeforeSeen = _durationBeforeUnavailable = false;
             ++_durationGeneration;
             _durationAttempt = null;
+            _reachedInputEndSeconds = null;
             _durationCancellation?.Cancel();
             _durationCancellation = null;
         }
@@ -25,10 +27,35 @@ public sealed partial class MainWindowViewModel
     private void ApplyInputInfo(InputInfo info)
     {
         if (info.Duration == null && HasDuration) info = info with { Duration = TimeSpan.FromSeconds(DurationSeconds) };
+        if (_reachedInputEndSeconds is double actualEnd)
+            info = info with { Duration = TimeSpan.FromSeconds(Math.Min(info.Duration?.TotalSeconds ?? actualEnd, actualEnd)) };
         _inputInfo = info;
         HasDuration = info.Duration.HasValue;
         DurationSeconds = info.Duration?.TotalSeconds ?? 0;
         DurationText = info.Duration is { } duration ? FormatTime(duration.TotalSeconds, milliseconds: false) : "";
+    }
+
+    // 申告長とは分けて、成功したAfterの自然EOFだけを入力単位で記憶する。
+    private bool ApplyReachedInputEnd(RequestContext context, PreviewCompletion completion, PreviewSegmentSnapshot? segment)
+    {
+        if (context.Kind != RequestKind.After || completion.Result.ExitCode != 0 || completion.Result.IsCancelled
+            || completion.Segment?.ReachedInputEnd != true || segment is not { Frames.Count: > 0 }) return false;
+        var last = segment.Frames[^1];
+        double start = segment.Clock.ToInputSeconds(last, segment.Frames.Count - 1, context.Request.Fps);
+        double end = start + FrameSelector.Duration(last, context.Request.Fps);
+        if (!double.IsFinite(start) || !double.IsFinite(end) || start < 0
+            || !PreviewSafeRange.IsKnownInputEnd(context.Request, segment, end)) return false;
+        _reachedInputEndSeconds = Math.Min(_reachedInputEndSeconds ?? end, end);
+        double duration = Math.Min(HasDuration ? DurationSeconds : end, _reachedInputEndSeconds.Value);
+        HasDuration = true;
+        DurationSeconds = duration;
+        DurationText = FormatTime(duration, milliseconds: false);
+        if (_inputInfo != null) _inputInfo = _inputInfo with { Duration = TimeSpan.FromSeconds(duration) };
+        if (CurrentSeconds < end - PreviewSafeRange.ToleranceSeconds) return false;
+        // 通常の時刻setterは新しいシークになるため、確定した同じ世代の表示位置だけを直す。
+        SetTimeOnly(start);
+        _lastIntentTarget = start;
+        return true;
     }
 
     private bool _durationAfterSeen, _durationBeforeSeen, _durationBeforeUnavailable;
@@ -79,9 +106,9 @@ public sealed partial class MainWindowViewModel
                     if (_disposed || generation != _durationGeneration || identity != _durationAttempt || duration == null || HasDuration) return;
                     // 画像や目標時刻には触れず、後から得られた長さだけを反映する。
                     HasDuration = true;
-                    DurationSeconds = duration.Value.TotalSeconds;
+                    DurationSeconds = Math.Min(duration.Value.TotalSeconds, _reachedInputEndSeconds ?? double.MaxValue);
                     DurationText = FormatTime(DurationSeconds, milliseconds: false);
-                    if (_inputInfo != null) _inputInfo = _inputInfo with { Duration = duration };
+                    if (_inputInfo != null) _inputInfo = _inputInfo with { Duration = TimeSpan.FromSeconds(DurationSeconds) };
                 }).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
