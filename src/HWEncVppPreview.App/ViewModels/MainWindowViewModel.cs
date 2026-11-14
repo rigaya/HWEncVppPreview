@@ -199,7 +199,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             WindowWidth = width, WindowHeight = height, CurrentSeconds = CurrentSeconds, IsTextListMode = IsTextListMode, Language = Language, HdrReferenceWhiteNits = HdrReferenceWhiteNits,
         };
         try { await Task.Run(() => settings.Save(_services.SettingsPath)).ConfigureAwait(false); }
-        catch (Exception exception) { await PostAsync(() => ShowError(AppMessages.SaveSettingsFailed, exception.Message)).ConfigureAwait(false); }
+        catch (Exception exception) { await PostAsync(() => ShowExceptionError(AppMessages.SaveSettingsFailed, "", exception)).ConfigureAwait(false); }
     }
 
     public string EncoderPath { get => _encoderPath; set => SetEncoderPath(value ?? "", automatic: false); }
@@ -685,7 +685,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (context.Kind == RequestKind.Before)
             {
                 BeforeUnavailableForDuration();
-                CaptureBeforeFallbackDiagnostic(diagnostics);
+                CaptureBeforeFallbackDiagnostic(AppendExceptionDetails(diagnostics, value.Exception));
                 _beforeFinished = true;
                 IsBeforeBusy = false;
                 Interlocked.Increment(ref _beforeImageGeneration);
@@ -698,7 +698,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             _lastFailedAfter = context.Generation;
             if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = AppMessages.BackendMode(context.Mode);
             ElapsedText = AppMessages.Elapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
-            ShowError(value.Reason, diagnostics);
+            ShowExceptionError(value.Reason, diagnostics, value.Exception);
         });
     }
     private void DisplayFrame(Y4mFrame frame, RequestContext context)
@@ -714,12 +714,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             SegmentId: context.Segment?.SegmentId, TrustedAbsolute: clock.TrustedAbsolute,
             RevisionContext: context, DisplayRevision: revision));
     }
-    private void ShowError(string message, string diagnostics)
+    private void ShowError(string message, string diagnostics) => ShowErrorCore(message, diagnostics, null);
+
+    private void ShowExceptionError(string message, string diagnostics, Exception? exception) => ShowErrorCore(message, diagnostics, exception);
+
+    private static string AppendExceptionDetails(string diagnostics, Exception? exception)
     {
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.error", new { message, diagnostics });
+        string[] lines = ExceptionDiagnostics.Lines(exception);
+        if (lines.Length == 0) return diagnostics;
+        string details = AppMessages.ExceptionDetails + Environment.NewLine + string.Join(Environment.NewLine, lines);
+        return string.IsNullOrWhiteSpace(diagnostics) ? details : diagnostics + Environment.NewLine + details;
+    }
+
+    private void ShowErrorCore(string message, string diagnostics, Exception? exception)
+    {
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.error", new { message, diagnostics, exception = exception?.ToString() });
         IsBusy = false;
         StatusText = AppMessages.Error;
-        LogText = AppendBeforeFallbackDiagnostic(diagnostics);
+        LogText = AppendBeforeFallbackDiagnostic(AppendExceptionDetails(diagnostics, exception));
         string[] lines = diagnostics.Split('\n');
         string tail = string.Join(Environment.NewLine, lines.TakeLast(6));
         // readerの後片付けで末尾が埋まっても、長いkey間隔による窓の保持上限や探索上限の理由を隠さない。
@@ -728,6 +740,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             || line.Contains("preview window keyframe not found within ", StringComparison.Ordinal));
         if (windowError != null && !tail.Contains(windowError, StringComparison.Ordinal))
             tail = windowError.TrimEnd('\r') + Environment.NewLine + tail;
+        // stderrの末尾選択とは分けて、深い原因チェーンも全段を表示する。
+        tail = AppendExceptionDetails(tail, exception);
         ErrorText = string.IsNullOrWhiteSpace(tail) ? message : message + Environment.NewLine + tail;
     }
 
@@ -918,7 +932,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         async Task ExecuteAsync()
         {
             try { await command(); }
-            catch (Exception exception) { await PostAsync(() => { if (!_disposed) ShowError(AppMessages.OperationFailed, exception.Message); }); }
+            catch (Exception exception) { await PostAsync(() => { if (!_disposed) ShowExceptionError(AppMessages.OperationFailed, "", exception); }); }
         }
     }
 
