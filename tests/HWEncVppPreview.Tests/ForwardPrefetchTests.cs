@@ -34,6 +34,7 @@ public sealed class ForwardPrefetchTests
         Assert.Equal(12, CommandBuilder.Plan(backend.Requests.Single()).SeekSeconds);
         Assert.Equal(1, images); Assert.Equal(1, completed); Assert.Equal(0, failed);
         for (int i = 0; i < 3; i++) controller.NotifyNavigation(Request(11.6 + i / 10d), 1);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Single(backend.Requests);
         // 現表示区間は先読み開始ではなく、実際のcache移動でのみ切り替わる。
         Assert.NotNull(cache.GetSegment(current));
@@ -47,12 +48,16 @@ public sealed class ForwardPrefetchTests
     {
         var cache = new FrameCache(); Seed(cache, Request()); var backend = new Backend();
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
+        var images = new ConcurrentQueue<PreviewFrameResult>();
+        controller.FrameReady += images.Enqueue;
         controller.Submit(Request()); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         controller.NotifyNavigation(Request(11.5), 1); await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         var logical = Request(11.5 + direction * 0.1, 2);
         controller.Submit(logical, navigation: true); controller.NotifyNavigation(logical, direction);
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Contains(images, value => value.Request.CorrelationId == 2 && Math.Abs(value.Frame.Xts!.Value - (1011.5 + direction * 0.1)) < 1e-6);
+
         Assert.Single(backend.Requests); Assert.Equal(0, backend.Cancelled);
     }
 
@@ -69,12 +74,16 @@ public sealed class ForwardPrefetchTests
         if (reason == "eof") request = request with { InputDurationSeconds = 13 };
         var cache = new FrameCache(); Seed(cache, request); var backend = new Backend();
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
+        var images = new ConcurrentQueue<PreviewFrameResult>();
+        controller.FrameReady += images.Enqueue;
         // legacyは通常Submitすると既存の有限取り直しへ進むため、foregroundには正常sourceを登録する。
         controller.Submit(Request()); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         if (reason == "unstitch") cache.InvalidateSource(request);
         var move = reason switch { "outside" => request with { TargetSeconds = 11.4 },
             "content" => request with { TargetSeconds = 11.5, InputFile = "other" }, _ => request with { TargetSeconds = 11.5 } };
         controller.NotifyNavigation(move, reason == "reverse" ? -1 : 1);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Contains(images, value => value.Request.CorrelationId == 1 && Math.Abs(value.Frame.Xts!.Value - 1010) < 1e-6);
         Assert.Empty(backend.Requests);
     }
 
@@ -88,6 +97,8 @@ public sealed class ForwardPrefetchTests
     {
         var cache = new FrameCache(); Seed(cache, Request()); var backend = new Backend();
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
+        var images = new ConcurrentQueue<PreviewFrameResult>();
+        controller.FrameReady += images.Enqueue;
         controller.Submit(Request()); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         controller.NotifyNavigation(Request(11.5), 1); await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
@@ -96,6 +107,8 @@ public sealed class ForwardPrefetchTests
             "jump" => Request(30, 2), "near_jump" => Request(16, 2), "island" => Request(17, 2), _ => Request(11.6, 2) };
         controller.Submit(request, bypassCache: reason == "refresh", navigation: true);
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Contains(images, value => value.Request.CorrelationId == 2 && Math.Abs(value.Frame.Xts!.Value - (1000 + request.TargetSeconds)) < 1e-6);
+
         Assert.Equal(1, backend.Cancelled);
         Assert.Equal(reason == "island" ? 1 : 2, backend.Requests.Count);
         Assert.Equal(1, backend.MaxConcurrent);
@@ -113,22 +126,30 @@ public sealed class ForwardPrefetchTests
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         controller.Submit(Request(13.1, 2), navigation: true);
         var frame = await image.Task.WaitWithDiagnosticsAsync(Safety); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Equal(1013.1, frame.Frame.Xts);
         Assert.Equal(1013.1, frame.Frame.Xts); Assert.Single(backend.Requests); Assert.Equal(0, backend.Cancelled);
     }
 
     [Fact]
     public async Task 実逆先読みが枠を要求して初めて順先読みを取消する()
     {
-        var cache = new FrameCache(); Seed(cache, Request()); var backend = new Backend();
+        var cache = new FrameCache(); Seed(cache, Request()); var backend = new Backend(holdFinite: true);
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
+        var images = new ConcurrentQueue<PreviewFrameResult>();
+        controller.FrameReady += images.Enqueue;
         controller.Submit(Request()); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         controller.NotifyNavigation(Request(11.5), 1); await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         controller.Submit(Request(9.4, 2), navigation: true); controller.NotifyNavigation(Request(9.4, 2), -1);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, backend.Cancelled);
         controller.Submit(Request(9.3, 3), navigation: true); controller.NotifyNavigation(Request(9.3, 3), -1);
         var pending = controller.GetPendingReversePrefetch(Request(9.3, 3)); Assert.NotNull(pending);
+        // 完了済みの先読みは取得対象から外れるため、待つ対象を取得するまで有限の先読みを止めておく。
+        backend.Release.TrySetResult();
         await pending!.WaitWithDiagnosticsAsync(Safety); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Contains(images, value => value.Request.CorrelationId == 3 && Math.Abs(value.Frame.Xts!.Value - 1009.3) < 1e-6);
+
         Assert.Equal(1, backend.Cancelled); Assert.Equal(2, backend.Requests.Count);
         Assert.False(backend.Requests.Last().Continuous); Assert.Equal(1, backend.MaxConcurrent);
     }
@@ -189,12 +210,14 @@ public sealed class ForwardPrefetchTests
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
         // 有限の逆方向窓を実行・保存してから、同じ窓内を順方向へ戻る。
         controller.Submit(request, navigation: true); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.False(backend.Requests.Last().Continuous);
         Assert.False(Assert.Single(backend.Requests).Continuous);
         var range = cache.GetConnectedSafeRange(request); Assert.NotNull(range);
         double boundary = range!.Value.End;
         controller.NotifyNavigation(request with { TargetSeconds = boundary - 1 }, 1);
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(2, backend.Requests.Count); var physical = backend.Requests.Last();
+        var physical = backend.Requests.Last();
+        Assert.Equal(2, backend.Requests.Count);
         Assert.True(physical.Continuous); Assert.Equal(boundary, physical.TargetSeconds);
         Assert.Equal(boundary - (history ? 3 : 1), CommandBuilder.Plan(physical).SeekSeconds!.Value, 7);
         Assert.Equal(0.5, physical.PostMarginSeconds);
@@ -211,8 +234,12 @@ public sealed class ForwardPrefetchTests
     {
         var backend = new Backend();
         await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        var images = new ConcurrentQueue<PreviewFrameResult>();
+        controller.FrameReady += images.Enqueue;
         controller.Submit(Request()); await backend.Started.Task.WaitWithDiagnosticsAsync(Safety); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         controller.NotifyNavigation(Request(11.5), 1);
+        Assert.Contains(images, value => Math.Abs(value.Frame.Xts!.Value - 1010) < 1e-6);
+
         Assert.Single(backend.Requests); Assert.Equal(0, backend.Cancelled);
     }
 
@@ -244,11 +271,15 @@ public sealed class ForwardPrefetchTests
     {
         var cache = new FrameCache(); Seed(cache, Request()); var backend = new Backend("hold");
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
+        var images = new ConcurrentQueue<PreviewFrameResult>();
+        controller.FrameReady += images.Enqueue;
         controller.Submit(Request() with { Continuous = false }, bypassCache: true, navigation: true);
         await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
         controller.NotifyNavigation(Request(11.5), 1);
         Assert.Single(backend.Requests); Assert.False(backend.Requests.Single().Continuous);
         backend.Release.TrySetResult(); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Contains(images, value => Math.Abs(value.Frame.Xts!.Value - 1010) < 1e-6);
+
         Assert.Single(backend.Requests);
     }
 
@@ -297,6 +328,7 @@ public sealed class ForwardPrefetchTests
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         for (int i = 0; i < 3; i++) controller.NotifyNavigation(Request(11.6 + i / 10d), 1);
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Equal(13, cache.GetConnectedSafeRange(Request(11.5))!.Value.End);
         Assert.Single(backend.Requests); Assert.Equal(13, cache.GetConnectedSafeRange(Request(11.5))!.Value.End);
     }
 
@@ -328,29 +360,6 @@ public sealed class ForwardPrefetchTests
         await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(3, backend.Requests.Count); Assert.Equal(1, backend.MaxConcurrent);
-    }
-
-    [Fact]
-    public async Task 別起動の同値markerを古いstreamの取消で消さない()
-    {
-        var cache = new FrameCache(240); Seed(cache, Request()); var backend = new Backend();
-        await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
-        controller.Submit(Request()); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        controller.NotifyNavigation(Request(11.5), 1);
-        await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        // 同値だが別参照の新markerを注入し、値比較や無条件clearでは保護できないケースを作る。
-        var field = typeof(PreviewController).GetField("_lastForwardPrefetch",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-        var previous = Assert.IsType<PreviewRequest>(field.GetValue(controller));
-        var newer = previous with { };
-        field.SetValue(controller, newer);
-        controller.Submit(Request(10.4, 2), navigation: true); controller.NotifyNavigation(Request(10.4, 2), -1);
-        controller.Submit(Request(10.3, 3), navigation: true); controller.NotifyNavigation(Request(10.3, 3), -1);
-        var pending = controller.GetPendingReversePrefetch(Request(10.3, 3)); Assert.NotNull(pending);
-        await pending!.WaitWithDiagnosticsAsync(Safety); await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Same(newer, field.GetValue(controller));
-        Assert.Equal(2, backend.Requests.Count); Assert.Equal(1, backend.Cancelled);
     }
 
     private sealed class Backend(string result = "stream", bool history = false, bool holdCancellation = false, bool holdAtSeedEnd = false, bool holdFinite = false) : IPreviewBackend

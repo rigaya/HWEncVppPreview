@@ -10,7 +10,7 @@ public sealed partial class PreviewController
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            Task[] initialization = new[] { _preferred, _backgroundPreferred }.Distinct().Select(InitializeAsync).ToArray();
+            Task[] initialization = new[] { _backend, _backgroundBackend }.Distinct().Select(InitializeAsync).ToArray();
             return Task.WhenAll(initialization);
         }
 
@@ -65,20 +65,8 @@ public sealed partial class PreviewController
         {
             await ExecutionFor(true).WaitAsync(cancellation.Token).ConfigureAwait(false);
             entered = true;
-            IPreviewBackend backend;
-            lock (_sync) backend = _unsupported.Contains(encoder) ? _backgroundFallback : _backgroundPreferred;
-            try
-            {
-                return await probe.ProbeAsync(encoder, input, inputArgs, cancellation.Token, capabilities,
-                    new ProbeBackendLease(this, backend)).ConfigureAwait(false);
-            }
-            catch (PreviewServerNotSupportedException) when (_enableFallback && ReferenceEquals(backend, _backgroundPreferred))
-            {
-                lock (_sync) _unsupported.Add(encoder);
-                cancellation.Token.ThrowIfCancellationRequested();
-                return await probe.ProbeAsync(encoder, input, inputArgs, cancellation.Token, capabilities,
-                    new ProbeBackendLease(this, _backgroundFallback)).ConfigureAwait(false);
-            }
+            return await probe.ProbeAsync(encoder, input, inputArgs, cancellation.Token, capabilities,
+                new ProbeBackendLease(this, _backgroundBackend)).ConfigureAwait(false);
         }
         finally
         {

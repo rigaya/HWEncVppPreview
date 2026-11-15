@@ -24,42 +24,19 @@ public sealed class UiLanguageTests
     [Theory]
     [InlineData("ja")]
     [InlineData("en")]
-    public async Task CLIのwatchdog判定は表示言語に依存しない(string language)
+    public void CLIのwatchdog判定は表示言語に依存しない(string language)
     {
         string previous = UiLanguage.Preference;
         try
         {
             UiLanguage.Set(language);
-            var clock = new WatchdogClock();
-            using var output = new StringWriter(CultureInfo.InvariantCulture);
-            var run = HWEncVppPreview.Cli.Program.RunAsync([
-                "--enc", BackendTests.FakeEncoderPath(), "--input", "fake.ts", "--time", "0.3",
-                "--mode", "oneshot", "--watchdog-seconds", "2", "--vpp", "--fake-hang-after 0"], output, clock);
-            await clock.Registered.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            clock.Advance();
-            Assert.Equal(3, await run.WaitWithDiagnosticsAsync(TestTimeouts.Hang));
-            using var json = System.Text.Json.JsonDocument.Parse(output.ToString());
-            Assert.True(json.RootElement.GetProperty("timedOut").GetBoolean());
-            Assert.Equal(CoreText.OutputTimedOut, json.RootElement.GetProperty("error").GetString());
+            var result = new HWEncVppPreview.Cli.Program.CliResult();
+            HWEncVppPreview.Cli.Program.ApplyUnexpectedFailure(result, new TimeoutException(CoreText.OutputTimedOut));
+            Assert.True(result.TimedOut);
+            Assert.Equal(CoreText.OutputTimedOut, result.Error);
+            Assert.Equal(3, result.ExitCode);
         }
         finally { UiLanguage.Set(previous); }
-    }
-
-    private sealed class WatchdogClock : TimeProvider
-    {
-        private readonly HWEncVppPreview.Tests.Testing.FakeTimeProvider _inner = new();
-        public TaskCompletionSource Registered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public override long TimestampFrequency => _inner.TimestampFrequency;
-        public override long GetTimestamp() => _inner.GetTimestamp();
-        public override DateTimeOffset GetUtcNow() => _inner.GetUtcNow();
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            var timer = _inner.CreateTimer(callback, state, dueTime, period);
-            // InputProbeのWaitAsync用タイマーを進めず、出力監視の登録だけを合図にする。
-            if (dueTime == TimeSpan.FromSeconds(2) && state is null) Registered.TrySetResult();
-            return timer;
-        }
-        public void Advance() => _inner.Advance(TimeSpan.FromSeconds(2));
     }
 
     [Fact]

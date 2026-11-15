@@ -1,8 +1,8 @@
 ﻿using System.Diagnostics;
+using System.IO.Pipes;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Channels;
 using System.Text.RegularExpressions;
 using HWEncVppPreview.Cli;
 using HWEncVppPreview.Core;
@@ -115,7 +115,7 @@ public sealed class CliHelpCheckTests
         yield return new object[] { new[] { "--check-help", "--help-file", "" } };
         yield return new object[] { new[] { "--check-help", "--check-help", "--help-file", "b" } };
         yield return new object[] { new[] { "--check-help", "--help-file", "a", "--help-file", "b" } };
-        yield return new object[] { new[] { "--check-help", "--help-file", "a", "--mode", "oneshot" } };
+        yield return new object[] { new[] { "--check-help", "--help-file", "a", "--mode", "server" } };
         foreach (string value in new[] { "0", "-1", "NaN", "Infinity", "1e100" })
             yield return new object[] { new[] { "--check-help", "--help-file", "a", "--watchdog-seconds", value } };
     }
@@ -168,56 +168,78 @@ public sealed class CliHelpCheckTests
     [InlineData(true)]
     public async Task CaptureDrainsBothStreamsIncludingStderrOnlyHelp(bool stderrOnly)
     {
-        await using var child = new ShellChild(stderrOnly ? "stderr" : "stdout");
-        var result = await HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TestTimeouts.Hang).WaitWithDiagnosticsAsync(Safety);
+        await using var child = new FakeCapture(stderrOnly ? "stderr" : "stdout");
+        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TestTimeouts.Hang);
+        int pid = await child.ReadPidAsync(capture);
+        var result = await capture.WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(Valid, stderrOnly ? result.StandardError : result.StandardOutput);
         if (!stderrOnly) Assert.Equal(131072, result.StandardError.Length);
-        AssertStopped(child.Pid);
+        AssertStopped(pid);
     }
 
     [Fact]
     public async Task CaptureRetainsNonzeroExitAndDiagnostics()
     {
-        await using var child = new ShellChild("error");
-        var result = await HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TestTimeouts.Hang).WaitWithDiagnosticsAsync(Safety);
+        await using var child = new FakeCapture("error");
+        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TestTimeouts.Hang);
+        int pid = await child.ReadPidAsync(capture);
+        var result = await capture.WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(23, result.ExitCode);
         Assert.Contains("child failed", result.StandardError);
-        AssertStopped(child.Pid);
+        AssertStopped(pid);
     }
 
     [Fact]
-    public async Task CaptureTimeoutUsesInjectedClockAndReapsItsParent()
+    public async Task CaptureTimeoutReapsTheChild()
     {
-        await using var child = new ShellChild("hang");
-        var clock = new CaptureClock();
-        var running = HelpProcessCapture.CaptureAsync(child.StartInfo(), clock, TimeSpan.FromSeconds(3));
-        await clock.WaitForTimerAsync(TimeSpan.FromSeconds(3));
-        await child.WaitUntilReadyAsync();
-        clock.Advance(TimeSpan.FromSeconds(3));
-        var error = await Assert.ThrowsAsync<HelpCaptureException>(() => running.WaitWithDiagnosticsAsync(Safety));
+        await using var child = new FakeCapture("hang");
+        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TimeSpan.FromSeconds(2));
+        int pid = await child.ReadPidAsync(capture);
+        var error = await Assert.ThrowsAsync<HelpCaptureException>(() => capture.WaitWithDiagnosticsAsync(Safety));
         Assert.True(error.TimedOut);
-        AssertStopped(child.Pid);
+        Assert.IsType<TimeoutException>(error.InnerException);
+        Assert.Contains("help", error.Message, StringComparison.Ordinal);
+        AssertStopped(pid);
+        await using var next = new FakeCapture("stdout");
+        Task<HelpProcessResult> recovery = HelpProcessCapture.CaptureAsync(next.StartInfo(), TimeProvider.System, Safety);
+        int nextPid = await next.ReadPidAsync(recovery);
+        Assert.Equal(0, (await recovery.WaitWithDiagnosticsAsync(Safety)).ExitCode);
+        AssertStopped(nextPid);
     }
 
     [Fact]
-    public async Task ExitedParentWithInheritedPipesCannotWaitForever()
+    public async Task CancelledCaptureReapsItsParent()
     {
-        await using var child = new ShellChild("inherited");
-        var clock = new CaptureClock();
-        var running = HelpProcessCapture.CaptureAsync(child.StartInfo(), clock, TimeSpan.FromSeconds(3));
-        await clock.WaitForTimerAsync(TimeSpan.FromSeconds(3));
-        await child.WaitUntilReadyAsync();
-        // Readyはexit直前なので、親の実終了を確認してからpipeだけが残る期限を進める。
-        await child.WaitForParentExitAsync();
-        clock.Advance(TimeSpan.FromSeconds(3));
-        await clock.WaitForTimerAsync(TimeSpan.FromSeconds(5));
-        clock.Advance(TimeSpan.FromSeconds(5));
-        var error = await Assert.ThrowsAsync<HelpCaptureException>(() => running.WaitWithDiagnosticsAsync(Safety));
-        Assert.True(error.TimedOut);
-        Assert.Equal(0, error.EncoderExitCode);
-        Assert.NotNull(error.CleanupError);
-        // 孫のPIDはこの検査だけが所有し、helperへ新しいPID探索の製品機構は入れない。
+        await using var child = new FakeCapture("hang");
+        using var cancellation = new CancellationTokenSource();
+        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TestTimeouts.Hang, cancellation.Token);
+        int pid = await child.ReadPidAsync(capture);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => capture.WaitWithDiagnosticsAsync(Safety));
+        AssertStopped(pid);
+    }
+
+    [Fact]
+    public async Task CaptureCompletesAfterInheritedPipesAreReleased()
+    {
+        string name = "help-child-" + Guid.NewGuid().ToString("N");
+        using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        await using var parent = new FakeCapture("inherited");
+        ProcessStartInfo info = parent.StartInfo();
+        info.Environment["FAKE_ENCODER_HOLD_OUTPUT_PIPE"] = name;
+        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(info, TimeProvider.System, TestTimeouts.Hang);
+        int parentPid = await parent.ReadPidAsync(capture);
+        await PipeWait.UntilConnectedAsync(pipe, name, capture, Safety);
+        using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+        using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+        int pid = int.Parse(await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Safety) ?? throw new EndOfStreamException(), CultureInfo.InvariantCulture);
+        using var child = Process.GetProcessById(pid);
+        await writer.WriteLineAsync("release");
+        Assert.Equal("0", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Safety));
+        await child.WaitForExitAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Equal(0, (await capture.WaitWithDiagnosticsAsync(Safety)).ExitCode);
+        AssertStopped(parentPid);
     }
 
     [Fact]
@@ -254,123 +276,43 @@ public sealed class CliHelpCheckTests
         public void Dispose() => File.Delete(Path);
     }
 
-    private sealed class CaptureClock : TimeProvider
+    private sealed class FakeCapture : IAsyncDisposable
     {
-        private readonly FakeTimeProvider _inner = new();
-        private readonly Channel<TimeSpan> _armed = Channel.CreateUnbounded<TimeSpan>();
-        public override long TimestampFrequency => _inner.TimestampFrequency;
-        public override long GetTimestamp() => _inner.GetTimestamp();
-        public override DateTimeOffset GetUtcNow() => _inner.GetUtcNow();
-        public void Advance(TimeSpan delta) => _inner.Advance(delta);
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        private readonly string _name = "help-pid-" + Guid.NewGuid().ToString("N");
+        private readonly string _path = Path.Combine(Path.GetTempPath(), "help-input-" + Guid.NewGuid().ToString("N"));
+        private readonly string _mode;
+        private readonly NamedPipeServerStream _pipe;
+
+        public FakeCapture(string mode)
         {
-            var timer = _inner.CreateTimer(callback, state, dueTime, period);
-            _armed.Writer.TryWrite(dueTime);
-            return timer;
+            _mode = mode;
+            _pipe = new NamedPipeServerStream(_name, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+            File.WriteAllText(_path, Valid);
         }
-        public async Task WaitForTimerAsync(TimeSpan expected)
+
+        public ProcessStartInfo StartInfo()
         {
-            TimeSpan actual = await _armed.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
-            Assert.Equal(expected, actual);
+            var info = HelpProcessCapture.StartInfo(BackendTests.FakeEncoderPath());
+            info.Environment["FAKE_ENCODER_PID_PIPE"] = _name;
+            info.Environment["FAKE_ENCODER_HELP_MODE"] = _mode;
+            info.Environment["FAKE_ENCODER_HELP_FILE"] = _path;
+            return info;
+        }
+
+        public async Task<int> ReadPidAsync(Task capture)
+        {
+            await PipeWait.UntilConnectedAsync(_pipe, _name, capture, Safety);
+            using var reader = new StreamReader(_pipe, Encoding.UTF8, leaveOpen: true);
+            string value = await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Safety) ?? throw new EndOfStreamException();
+            return int.Parse(value, CultureInfo.InvariantCulture);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            _pipe.Dispose();
+            File.Delete(_path);
+            return ValueTask.CompletedTask;
         }
     }
 
-    private sealed class ShellChild : IAsyncDisposable
-    {
-        private readonly string _directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "viewer help child " + Guid.NewGuid().ToString("N"));
-        private readonly string _script, _ready, _help, _pid;
-        private int _parentPid;
-        public int Pid => int.Parse(File.ReadAllText(_pid), CultureInfo.InvariantCulture);
-        public ShellChild(string mode)
-        {
-            Directory.CreateDirectory(_directory);
-            _script = System.IO.Path.Combine(_directory, OperatingSystem.IsWindows() ? "child.ps1" : "child.sh");
-            _ready = System.IO.Path.Combine(_directory, "ready");
-            _help = System.IO.Path.Combine(_directory, "help.txt");
-            _pid = System.IO.Path.Combine(_directory, "pid");
-            File.WriteAllText(_help, Valid);
-            string script;
-            if (OperatingSystem.IsWindows())
-            {
-                string body = mode switch
-                {
-                    "stdout" => "[Console]::Out.Write([IO.File]::ReadAllText($Help)); [Console]::Error.Write(('x' * 131072))",
-                    "stderr" => "[Console]::Error.Write([IO.File]::ReadAllText($Help))",
-                    "error" => "[Console]::Error.Write('child failed'); exit 23",
-                    "hang" => "Start-Sleep -Seconds 600",
-                    "inherited" => "$start = New-Object Diagnostics.ProcessStartInfo; $start.FileName = (Join-Path $PSHOME 'powershell.exe'); $start.UseShellExecute = $false; $start.CreateNoWindow = $true; $start.Arguments = '-NoLogo -NoProfile -Command Start-Sleep -Seconds 600'; $owned = [Diagnostics.Process]::Start($start); [IO.File]::WriteAllText($PidPath, [string]$owned.Id)",
-                    _ => throw new ArgumentOutOfRangeException(nameof(mode)),
-                };
-                script = "param([string]$Ready, [string]$Help, [string]$PidPath)\n[IO.File]::WriteAllText($PidPath, [string]$PID)\n"
-                    + (mode == "inherited" ? body + "\n[IO.File]::WriteAllText($Ready, [string]$PID)\nexit 0\n"
-                        : "[IO.File]::WriteAllText($Ready, [string]$PID)\n" + body + "\n");
-            }
-            else
-            {
-                string body = mode switch
-                {
-                    "stdout" => "cat \"$2\"; head -c 131072 /dev/zero | tr '\\0' x >&2",
-                    "stderr" => "cat \"$2\" >&2",
-                    "error" => "printf 'child failed' >&2; exit 23",
-                    "hang" => "exec sleep 600",
-                    "inherited" => "sleep 600 &\nprintf '%s' \"$!\" > \"$3\"\nprintf '%s' \"$$\" > \"$1\"\nexit 0",
-                    _ => throw new ArgumentOutOfRangeException(nameof(mode)),
-                };
-                script = "printf '%s' \"$$\" > \"$3\"\n"
-                    + (mode == "inherited" ? body + "\n" : "printf '%s' \"$$\" > \"$1\"\n" + body + "\n");
-            }
-            File.WriteAllText(_script, script, new UTF8Encoding(OperatingSystem.IsWindows()));
-        }
-        public ProcessStartInfo StartInfo()
-        {
-            var start = new ProcessStartInfo(OperatingSystem.IsWindows()
-                ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe")
-                : "/bin/sh");
-            if (OperatingSystem.IsWindows())
-                foreach (string argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File" }) start.ArgumentList.Add(argument);
-            foreach (string argument in new[] { _script, _ready, _help, _pid }) start.ArgumentList.Add(argument);
-            return start;
-        }
-        public async Task WaitUntilReadyAsync()
-        {
-            using var stop = new CancellationTokenSource(Safety);
-            while (true)
-            {
-                stop.Token.ThrowIfCancellationRequested();
-                try
-                {
-                    if (File.Exists(_ready) && int.TryParse(File.ReadAllText(_ready), NumberStyles.Integer,
-                        CultureInfo.InvariantCulture, out _parentPid) && _parentPid > 0) return;
-                }
-                catch (IOException) { }
-                await Task.Yield();
-            }
-        }
-        public async Task WaitForParentExitAsync()
-        {
-            try
-            {
-                using var process = Process.GetProcessById(_parentPid);
-                await process.WaitForExitAsync().WaitWithDiagnosticsAsync(Safety);
-            }
-            catch (ArgumentException) { }
-        }
-        public async ValueTask DisposeAsync()
-        {
-            try
-            {
-                if (File.Exists(_pid))
-                {
-                    try
-                    {
-                        using var process = Process.GetProcessById(Pid);
-                        if (!process.HasExited) process.Kill(entireProcessTree: true);
-                        await process.WaitForExitAsync().WaitWithDiagnosticsAsync(Safety);
-                    }
-                    catch (ArgumentException) { }
-                }
-            }
-            finally { Directory.Delete(_directory, recursive: true); }
-        }
-    }
 }

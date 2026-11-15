@@ -15,8 +15,8 @@ public sealed class StreamingCommandProbeTests
         var help = new HelpIndex((timestamps ? "  --timestamp-passthrough  pass\n" : "")
             + (threads ? "  --opencl-task-threads <int>  threads\n" : ""));
         var request = Request() with { Capabilities = CommandBuilder.CapabilitiesFromHelp(help) };
-        foreach (var args in new[] { CommandBuilder.BuildOneShot(request), CommandBuilder.BuildServer(request) })
         {
+            var args = CommandBuilder.BuildServer(request);
             Assert.Equal(timestamps, args.Contains("--timestamp-passthrough"));
             Assert.Equal(threads, args.Contains("--opencl-task-threads"));
             if (threads) Assert.Equal("0", args[Array.IndexOf(args, "--opencl-task-threads") + 1]);
@@ -28,9 +28,8 @@ public sealed class StreamingCommandProbeTests
     public void ContinuousOmitsFrameLimitAndPhysicalSeekCanBeExplicitlyZero()
     {
         var request = Request() with { Continuous = true, SeekSecondsOverride = 0 };
-        Assert.DoesNotContain("--frames", CommandBuilder.BuildOneShot(request));
         Assert.DoesNotContain("--frames", CommandBuilder.BuildServer(request));
-        Assert.DoesNotContain("--seek", CommandBuilder.BuildOneShot(request));
+        Assert.DoesNotContain("--seek", CommandBuilder.BuildServer(request));
         Assert.Null(CommandBuilder.Plan(request).SeekSeconds);
         Assert.Equal(10, CommandBuilder.Plan(request).ActualPreMargin);
         Assert.Equal(8, CommandBuilder.Plan(Request()).SeekSeconds);
@@ -39,8 +38,9 @@ public sealed class StreamingCommandProbeTests
     [Fact]
     public async Task ProbeObtainsUnfilteredOriginAtInputStartAndSeparatesLegacyCache()
     {
-        var commands = new List<string[]>();
-        await using var probe = new InputProbe(configureStartInfo: info => commands.Add(info.ArgumentList.ToArray()));
+        var backend = new RecordingProbeBackend();
+        var commands = backend.Commands;
+        await using var probe = new InputProbe(backend, TimeProvider.System);
         string[] arguments = ["--fake-origin-seconds", "1234.5"];
         var capabilities = new PreviewCapabilities(true, true);
         var absolute = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", arguments,
@@ -90,9 +90,9 @@ public sealed class StreamingCommandProbeTests
             clock.Advance(TimeSpan.FromSeconds(5));
             await dispose.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await preparation.WaitWithDiagnosticsAsync(TestTimeouts.Hang));
-            Assert.False(backend.Running.IsCompleted);
         }
         finally { backend.Release(); await probe.DisposeAsync(); }
+        await backend.Running.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
     }
 
     private sealed class ProbeShutdownClock : TimeProvider

@@ -29,8 +29,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private string _currentTimeText = "0:00:00.000";
     private double _currentSeconds, _durationSeconds;
     private bool _hasDuration, _isBusy, _isLogOpen;
-    private string _durationText = "", _statusText = "", _logText = "", _backendModeText = "", _elapsedText = "", _inputInfoText = "";
+    private string _durationText = "", _statusText = "", _logText = "", _elapsedText = "", _inputInfoText = "";
     private string? _errorText;
+    private readonly Action<Action> _postToUi;
     private readonly IViewModelServices _services;
     private readonly TimeProvider _clock;
     private readonly InputProbe _probe;
@@ -38,6 +39,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private readonly FrameCache _cache;
     private readonly bool _usesOwnedRaw;
     private readonly RawOwnershipScope? _rawOwnershipScope;
+    private readonly TimeSpan _inputEditDelay;
+    private readonly Func<string, string, CancellationToken, Task<string>>? _readTextOverride;
     private readonly PreviewController _controller;
     private readonly Func<Y4mFrame, HdrDisplaySettings, CancellationToken, Task<byte[]>>? _imageConverter;
     private readonly CancellationTokenSource _lifetime = new();
@@ -60,40 +63,50 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private readonly HashSet<FilterLineViewModel> _observedLines = new();
 
     public MainWindowViewModel(IViewModelServices? services = null, TimeProvider? timeProvider = null,
-        IPreviewBackend? preferred = null, IPreviewBackend? fallback = null, InputProbe? probe = null, FrameCache? cache = null)
-        : this(services, timeProvider, preferred, fallback, probe, cache, null) { }
+        IPreviewBackend? backend = null, InputProbe? probe = null, FrameCache? cache = null)
+        : this(services, timeProvider, backend, probe, cache, null) { }
 
     /// <summary>偽時計による描画待ちの再現用に、画像変換だけを差し替える内部入口。</summary>
     internal MainWindowViewModel(IViewModelServices? services, TimeProvider? timeProvider,
-        IPreviewBackend? preferred, IPreviewBackend? fallback, InputProbe? probe, FrameCache? cache,
+        IPreviewBackend? backend, InputProbe? probe, FrameCache? cache,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter,
-        IPreviewBackend? backgroundPreferred = null, IPreviewBackend? backgroundFallback = null, bool beforeEnabled = true)
+        IPreviewBackend? backgroundBackend = null, bool beforeEnabled = true,
+        OwnedPreviewDependencies? owned = null, TimeSpan? debounceOverride = null,
+        Func<string, string, CancellationToken, Task<string>>? readTextOverride = null)
     {
+        if (owned != null)
+        {
+            ArgumentNullException.ThrowIfNull(backend);
+            if (backend is not IRawOwnedBackend
+                || (backgroundBackend != null && backgroundBackend is not IRawOwnedBackend))
+                throw new ArgumentException("所有権付きの画像を扱えるバックエンドが必要です。", nameof(owned));
+            if (cache != null && !ReferenceEquals(cache.OwnershipScope, owned.Scope))
+                throw new ArgumentException("キャッシュと画像の所有範囲が一致しません。", nameof(cache));
+        }
+        _postToUi = owned?.PostToUi ?? (action => Dispatcher.UIThread.Post(action));
+        _bgraPool = owned?.BgraPool ?? new BgraBufferPool();
         // rawを外へ渡し得る注入が1つでもあれば、VM全体を通常配列の経路へ固定する。
-        _usesOwnedRaw = preferred == null && fallback == null && backgroundPreferred == null
-            && backgroundFallback == null && cache == null && converter == null && probe == null;
+        _usesOwnedRaw = owned != null || (backend == null && backgroundBackend == null
+            && cache == null && converter == null && probe == null);
         _imageConverter = converter != null ? (frame, settings, token) => converter(frame, token) : null;
         _beforeEnabled = beforeEnabled;
         _services = services ?? new AvaloniaViewModelServices();
         _clock = timeProvider ?? TimeProvider.System;
+        _inputEditDelay = debounceOverride ?? TimeSpan.FromMilliseconds(150);
+        _readTextOverride = readTextOverride;
         _probe = probe ?? new InputProbe(_clock);
-        _borrowInputProbe = probe == null && preferred == null;
+        _borrowInputProbe = probe == null && backend == null;
         // 同じ長さなら読取が全体を上書きし、所有権が貸出中の画素を守るため、入力世代や形式では分けない。
-        _rawOwnershipScope = _usesOwnedRaw ? new RawOwnershipScope(new RawBufferPool()) : null;
+        _rawOwnershipScope = owned?.Scope ?? (_usesOwnedRaw ? new RawOwnershipScope(new RawBufferPool()) : null);
         _cache = cache ?? (_rawOwnershipScope != null ? new FrameCache(_rawOwnershipScope) : new FrameCache());
-        var first = preferred ?? new ServerBackend(_clock);
-        var second = fallback ?? new OneShotBackend(timeProvider: _clock);
-        var observedFirst = new ObservedBackend(first, first is OneShotBackend ? "oneshot" : "server", this);
-        var observedSecond = ReferenceEquals(first, second) ? observedFirst : new ObservedBackend(second, "oneshot", this);
-        var beforeFirst = backgroundPreferred != null ? new ObservedBackend(backgroundPreferred, "server", this) :
-            preferred == null ? new ObservedBackend(new ServerBackend(_clock), "server", this) : observedFirst;
-        var beforeSecond = backgroundFallback != null ? new ObservedBackend(backgroundFallback, "oneshot", this) :
-            preferred == null ? new ObservedBackend(new OneShotBackend(timeProvider: _clock), "oneshot", this) : observedSecond;
+        var observed = new ObservedBackend(backend ?? new ServerBackend(_clock), this);
+        var before = backgroundBackend != null ? new ObservedBackend(backgroundBackend, this) :
+            backend == null ? new ObservedBackend(new ServerBackend(_clock), this) : observed;
         _controller = _rawOwnershipScope != null
-            ? new PreviewController(_rawOwnershipScope, observedFirst, observedSecond, _cache, _clock,
-                backgroundBackend: beforeFirst, backgroundFallback: beforeSecond)
-            : new PreviewController(observedFirst, observedSecond, _cache, _clock,
-                backgroundBackend: beforeFirst, backgroundFallback: beforeSecond);
+            ? new PreviewController(_rawOwnershipScope, observed, _cache, _clock,
+                debounce: debounceOverride, backgroundBackend: before)
+            : new PreviewController(observed, _cache, _clock,
+                debounce: debounceOverride, backgroundBackend: before);
         _controller.ReplayStarted += OnReplayStarted;
         if (_usesOwnedRaw)
         {
@@ -136,6 +149,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (parameter is PreviewCompareMode mode) CompareMode = mode;
         });
     }
+
+    // 画素の所有経路を保ったまま、試験で実行と画面配送の境界を制御する。
+    internal sealed record OwnedPreviewDependencies(RawOwnershipScope Scope, Action<Action> PostToUi,
+        BgraBufferPool? BgraPool = null);
 
     public double WindowWidth { get; set; } = 1440;
     public double WindowHeight { get; set; } = 900;
@@ -199,7 +216,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             WindowWidth = width, WindowHeight = height, CurrentSeconds = CurrentSeconds, IsTextListMode = IsTextListMode, Language = Language, HdrReferenceWhiteNits = HdrReferenceWhiteNits,
         };
         try { await Task.Run(() => settings.Save(_services.SettingsPath)).ConfigureAwait(false); }
-        catch (Exception exception) { await PostAsync(() => ShowError(AppMessages.SaveSettingsFailed, exception.Message)).ConfigureAwait(false); }
+        catch (Exception exception) { await PostAsync(() => ShowExceptionError(AppMessages.SaveSettingsFailed, "", exception)).ConfigureAwait(false); }
     }
 
     public string EncoderPath { get => _encoderPath; set => SetEncoderPath(value ?? "", automatic: false); }
@@ -308,8 +325,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     public string? ErrorText { get => _errorText; set => SetProperty(ref _errorText, value); }
     public string LogText { get => _logText; set => SetProperty(ref _logText, value); }
     public bool IsLogOpen { get => _isLogOpen; set => SetProperty(ref _isLogOpen, value); }
-    /// <summary>例: "常駐" / "都度起動"。</summary>
-    public string BackendModeText { get => _backendModeText; set => SetProperty(ref _backendModeText, value); }
     /// <summary>例: "0.48秒"。</summary>
     public string ElapsedText { get => _elapsedText; set => SetProperty(ref _elapsedText, value); }
     /// <summary>例: "1440x1080 (SAR 4:3) 29.97fps"。</summary>
@@ -477,7 +492,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         DropRawPosts(candidate => ReferenceEquals(candidate, context));
         BeginReplay(context);
         long revision = Volatile.Read(ref context.DisplayRevision);
-        Dispatcher.UIThread.Post(() =>
+        Action apply = () =>
         {
             if (!IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)) return;
             if (context.Kind == RequestKind.Before) { IsBeforeBusy = true; return; }
@@ -486,7 +501,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             _lastCompletedAfter = Math.Min(_lastCompletedAfter, context.Generation - 1);
             IsBusy = true;
             StatusText = AppMessages.Processing;
-        });
+        };
+        if (context.Kind == RequestKind.Before) Track(PostAsync(apply));
+        else _postToUi(apply);
     }
     private static void BeginReplay(RequestContext context)
     {
@@ -659,9 +676,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         var afterRequest = context.NeighborDirection != 0 ? CompleteNeighbor(context, frames) : value.Request;
         if (frames.Count == 0 && context.Generation == Volatile.Read(ref _generation) && _lastQueuedAfter < context.Generation)
         { _lastFailedAfter = context.Generation; ShowError(AppMessages.NoDisplayableFrames, value.Result.StandardError); return; }
+        if (ApplyReachedInputEnd(context, value, segment))
+        {
+            afterRequest = RetargetInterval(afterRequest ?? value.Request, CurrentSeconds);
+            _intervalLogicalRequest = afterRequest;
+        }
         ErrorText = null;
         LogText = AppendBeforeFallbackDiagnostic(value.Result.StandardError);
-        if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = AppMessages.BackendMode(context.Mode);
         ElapsedText = AppMessages.Elapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
         if (context.Generation == Volatile.Read(ref _generation))
         {
@@ -678,14 +699,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         context.Segment = null;
         string diagnostics = value.Diagnostic ?? value.Result?.StandardError ?? (value.Exception as PreviewBackendException)?.StandardError ?? context.Diagnostics;
         if (context.Kind == RequestKind.After) _afterRequests.TryRemove(context.Generation, out _);
-        Dispatcher.UIThread.Post(() =>
+        Action apply = () =>
         {
             if (!IsCurrent(context)) return;
             context.Segment = null;
             if (context.Kind == RequestKind.Before)
             {
                 BeforeUnavailableForDuration();
-                CaptureBeforeFallbackDiagnostic(diagnostics);
+                CaptureBeforeFallbackDiagnostic(AppendExceptionDetails(diagnostics, value.Exception));
                 _beforeFinished = true;
                 IsBeforeBusy = false;
                 Interlocked.Increment(ref _beforeImageGeneration);
@@ -696,10 +717,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (context.Generation != Volatile.Read(ref _generation)) return;
             if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
             _lastFailedAfter = context.Generation;
-            if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = AppMessages.BackendMode(context.Mode);
             ElapsedText = AppMessages.Elapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
-            ShowError(value.Reason, diagnostics);
-        });
+            ShowExceptionError(value.Reason, diagnostics, value.Exception);
+        };
+        if (context.Kind == RequestKind.Before) Track(PostAsync(apply));
+        else _postToUi(apply);
     }
     private void DisplayFrame(Y4mFrame frame, RequestContext context)
     {
@@ -714,12 +736,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             SegmentId: context.Segment?.SegmentId, TrustedAbsolute: clock.TrustedAbsolute,
             RevisionContext: context, DisplayRevision: revision));
     }
-    private void ShowError(string message, string diagnostics)
+    private void ShowError(string message, string diagnostics) => ShowErrorCore(message, diagnostics, null);
+
+    private void ShowExceptionError(string message, string diagnostics, Exception? exception) => ShowErrorCore(message, diagnostics, exception);
+
+    private static string AppendExceptionDetails(string diagnostics, Exception? exception)
     {
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.error", new { message, diagnostics });
+        string[] lines = ExceptionDiagnostics.Lines(exception);
+        if (lines.Length == 0) return diagnostics;
+        string details = AppMessages.ExceptionDetails + Environment.NewLine + string.Join(Environment.NewLine, lines);
+        return string.IsNullOrWhiteSpace(diagnostics) ? details : diagnostics + Environment.NewLine + details;
+    }
+
+    private void ShowErrorCore(string message, string diagnostics, Exception? exception)
+    {
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.error", new { message, diagnostics, exception = exception?.ToString() });
         IsBusy = false;
         StatusText = AppMessages.Error;
-        LogText = AppendBeforeFallbackDiagnostic(diagnostics);
+        LogText = AppendBeforeFallbackDiagnostic(AppendExceptionDetails(diagnostics, exception));
         string[] lines = diagnostics.Split('\n');
         string tail = string.Join(Environment.NewLine, lines.TakeLast(6));
         // readerの後片付けで末尾が埋まっても、長いkey間隔による窓の保持上限や探索上限の理由を隠さない。
@@ -728,6 +762,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             || line.Contains("preview window keyframe not found within ", StringComparison.Ordinal));
         if (windowError != null && !tail.Contains(windowError, StringComparison.Ordinal))
             tail = windowError.TrimEnd('\r') + Environment.NewLine + tail;
+        // stderrの末尾選択とは分けて、深い原因チェーンも全段を表示する。
+        tail = AppendExceptionDetails(tail, exception);
         ErrorText = string.IsNullOrWhiteSpace(tail) ? message : message + Environment.NewLine + tail;
     }
 
@@ -918,7 +954,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         async Task ExecuteAsync()
         {
             try { await command(); }
-            catch (Exception exception) { await PostAsync(() => { if (!_disposed) ShowError(AppMessages.OperationFailed, exception.Message); }); }
+            catch (Exception exception) { await PostAsync(() => { if (!_disposed) ShowExceptionError(AppMessages.OperationFailed, "", exception); }); }
         }
     }
 
@@ -968,6 +1004,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     private async Task<string> ReadTextAsync(string encoder, string argument, CancellationToken token)
     {
+        // 実プロセスを使わない試験でも、受け取った文字列の処理は通常経路を通す。
+        if (_readTextOverride != null) return await _readTextOverride(encoder, argument, token).ConfigureAwait(false);
         using var process = new Process { StartInfo = new ProcessStartInfo(encoder)
         { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true } };
         process.StartInfo.ArgumentList.Add(argument);
@@ -992,10 +1030,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _ = task.ContinueWith(completed => { lock (_taskLock) _tasks.Remove(completed); }, CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
-    private static Task PostAsync(Action action)
+    private Task PostAsync(Action action)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Dispatcher.UIThread.Post(() => { try { action(); completion.TrySetResult(); } catch (Exception exception) { completion.TrySetException(exception); } });
+        _postToUi(() => { try { action(); completion.TrySetResult(); } catch (Exception exception) { completion.TrySetException(exception); } });
         return completion.Task;
     }
     public ValueTask DisposeAsync()
@@ -1186,10 +1224,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             lock (_segmentSync) return AcquireRawSegment(segment, frames, current, _segmentRaw, kind);
         }
-        public string Mode { get; set; } = "";
         public string Diagnostics { get; set; } = "";
     }
-    private sealed class ObservedBackend(IPreviewBackend inner, string mode, MainWindowViewModel owner) : IPreviewBackend, IRawOwnedBackend
+    private sealed class ObservedBackend(IPreviewBackend inner, MainWindowViewModel owner) : IPreviewBackend, IRawOwnedBackend
     {
         public Task InitializeEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
             => inner.InitializeEncoderAsync(encoderPath, cancellationToken);
@@ -1208,7 +1245,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             Func<CancellationToken, Task<PreviewRunResult>> run, CancellationToken cancellationToken)
         {
             var context = owner.ContextForPhysical(request);
-            if (context != null) context.Mode = mode;
             if (context?.Kind == RequestKind.Before) owner.ObserveBeforePhysical(context, request);
             using var cancellation = context?.BeforeCancellation == null ? null
                 : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, context.BeforeCancellation.Token);

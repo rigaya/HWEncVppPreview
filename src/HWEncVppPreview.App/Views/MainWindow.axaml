@@ -454,8 +454,6 @@
             BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,1,0,0" Padding="10,4">
       <Grid ColumnDefinitions="Auto,*,Auto">
         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
-          <TextBlock Classes="subtle" Text="{Binding BackendModeText}" />
-          <TextBlock Classes="subtle" Text="│" />
           <TextBlock Classes="subtle" Text="{Binding ElapsedText}" />
           <TextBlock Classes="subtle" Text="│" />
           <TextBlock Classes="subtle" Text="{Binding InputInfoText}" />

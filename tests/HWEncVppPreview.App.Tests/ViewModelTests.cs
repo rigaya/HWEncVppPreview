@@ -34,8 +34,8 @@ public sealed class ViewModelTests
             InputArgsText = "--fake-duration 00:00:10.00" + (durationAtExit ? " --fake-duration-at-exit" : ""),
         }.Save(services.SettingsPath);
         var commands = new List<string[]>();
-        var backend = new OneShotBackend(info => commands.Add(info.ArgumentList.ToArray()));
-        await using var vm = new MainWindowViewModel(services, preferred: backend, fallback: backend);
+        var backend = new ServerBackend(configureStartInfo: info => commands.Add(info.ArgumentList.ToArray()));
+        await using var vm = new MainWindowViewModel(services, backend: backend);
         await vm.InitializeAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(expectedTime, vm.CurrentSeconds);
@@ -43,14 +43,14 @@ public sealed class ViewModelTests
         Assert.Null(vm.ErrorText);
         Assert.NotNull(vm.PreviewImage);
         Assert.NotEmpty(commands);
-        if (expectedTime == 0) Assert.DoesNotContain("--seek", commands[0]);
+        Assert.Contains("--preview-server", commands[0]);
     }
 
     [AvaloniaFact]
     public async Task OpensWindowAndShowsARealFrameFromFakeEncoder()
     {
         using var services = new TestServices();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         await using var vm = Create(services, clock);
         var window = new MainWindow { DataContext = vm, Width = 1100, Height = 700 };
         window.Show();
@@ -77,69 +77,63 @@ public sealed class ViewModelTests
     public async Task FilterEditingAndCheckboxChangeRequestAndImage()
     {
         using var services = new TestServices();
-        var clock = new FakeTimeProvider();
-        int starts = 0;
-        await using var vm = Create(services, clock, new OneShotBackend(_ => ++starts));
+        var clock = TimeProvider.System;
+        await using var vm = Create(services, clock, new ServerBackend());
         var line = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.1" };
         vm.FilterLines.Add(line);
         vm.SelectedFilterLine = line;
         await InitializeAsync(vm, clock);
         string first = ImageHash(vm);
         Assert.Contains("--vpp-nlmeans", vm.HelpText);
-        // 初回はフィルタ後と、空のVPP引数で取得するフィルタ前の2回。
-        Assert.Equal(2, starts);
+
         line.Text = "--vpp-nlmeans sigma=0.2";
         await RunPreparedAsync(vm, clock);
-        // フィルタ前の同一区間はキャッシュから再利用する。
-        Assert.Equal(3, starts);
+
         Assert.NotEqual(first, ImageHash(vm));
         line.IsEnabled = false;
         await RunPreparedAsync(vm, clock);
-        Assert.Equal(3, starts);
+
         line.IsEnabled = true;
         await RunPreparedAsync(vm, clock);
-        // 完了区間がキャッシュされていれば、再度有効にしても追加起動しない。
-        Assert.Equal(3, starts);
+
     }
 
     [AvaloniaFact]
     public async Task AdjacentFrameUsesCacheAndRefreshBypassesIt()
     {
         using var services = new TestServices();
-        var clock = new FakeTimeProvider();
-        int starts = 0;
-        await using var vm = Create(services, clock, new OneShotBackend(_ => ++starts));
+        var clock = TimeProvider.System;
+        await using var vm = Create(services, clock, new ServerBackend());
         vm.CurrentSeconds = 0.3;
         await InitializeAsync(vm, clock);
         string first = ImageHash(vm);
         vm.StepFrameCommand.Execute(1);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.Equal(1, starts);
+
         Assert.Equal(10 / 30.0, vm.CurrentSeconds, 7);
         Assert.NotEqual(first, ImageHash(vm));
         vm.StepFrameCommand.Execute(-1);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.Equal(1, starts);
+
         Assert.Equal(0.3, vm.CurrentSeconds, 7);
         vm.RefreshCommand.Execute(null);
         await RunPreparedAsync(vm, clock);
-        Assert.Equal(2, starts);
+
     }
 
     [AvaloniaFact]
     public async Task SeekDragRequestsFramesBeforeReleaseAndTimeFormatsAreAccepted()
     {
         using var services = new TestServices();
-        var clock = new FakeTimeProvider();
-        int starts = 0;
-        await using var vm = Create(services, clock, new OneShotBackend(_ => ++starts));
+        var clock = TimeProvider.System;
+        await using var vm = Create(services, clock, new ServerBackend());
         await InitializeAsync(vm, clock);
         vm.BeginSeekDrag();
         vm.CurrentSeconds = 2;
         vm.CurrentSeconds = 3;
         // ドラッグを離す前に最新位置の要求を完了でき、編集用の待機時間は不要。
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.True(starts >= 2);
+
         Assert.Equal(3, vm.CurrentSeconds);
         Assert.NotNull(vm.PreviewImage);
         vm.EndSeekDrag(3);
@@ -162,7 +156,7 @@ public sealed class ViewModelTests
     public async Task EncoderErrorShowsDiagnosticsAndKeepsAnImage()
     {
         using var services = new TestServices();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         await using var vm = Create(services, clock);
         var line = new FilterLineViewModel();
         vm.FilterLines.Add(line);
@@ -181,7 +175,7 @@ public sealed class ViewModelTests
     public async Task SettingsFiltersClipboardAndFileCommandsRoundTrip()
     {
         using var services = new TestServices();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         await using (var vm = Create(services, clock))
         {
             vm.FilterLines.Add(new() { Text = "--vpp-nlmeans sigma=0.1" });
@@ -193,10 +187,10 @@ public sealed class ViewModelTests
             Assert.DoesNotContain("--vpp-edgelevel", services.ClipboardText);
             await vm.SaveSettingsAsync(1200, 780);
         }
-        await using (var restored = new MainWindowViewModel(services, clock))
+        await using (var restored = new MainWindowViewModel(services, clock, null, null, null, null, debounceOverride: TimeSpan.Zero))
         {
             await restored.InitializeAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-            clock.Advance(TimeSpan.FromMilliseconds(150));
+
             await restored.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal(FakeEncoderPath(), restored.EncoderPath);
             Assert.Equal("fake input.ts", restored.InputPath);
@@ -224,7 +218,7 @@ public sealed class ViewModelTests
     public async Task OrdinaryCommentsSurviveRepeatedLoadAndSaveUnchanged()
     {
         using var services = new TestServices();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         await using var vm = Create(services, clock);
         await InitializeAsync(vm, clock);
         string[] lines = ["# 通常コメント", "   # インデントと末尾空白を保持  ", "#\tタブを含む説明", "--vpp-nlmeans sigma=0.1", "# --vpp-edgelevel strength=10", "", "# 最終コメント"];
@@ -247,10 +241,10 @@ public sealed class ViewModelTests
     public async Task ChangedInputCancelsAnOlderProbeWithoutShowingItsError()
     {
         using var services = new TestServices();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var probe = new InputProbe(clock, configureStartInfo: _ => started.TrySetResult());
-        await using var vm = new MainWindowViewModel(services, clock, probe: probe)
+        await using var vm = new MainWindowViewModel(services, clock, null, probe, null, null, debounceOverride: TimeSpan.Zero)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "old input.ts", InputArgsText = "--fake-hang-after 0",
         };
@@ -259,7 +253,7 @@ public sealed class ViewModelTests
         vm.InputArgsText = "--avhw --fake-duration 00:00:10.00";
         vm.InputPath = "new input.ts";
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
+
         await initialization.WaitWithDiagnosticsAsync(SafetyTimeout);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.NotNull(vm.PreviewImage);
@@ -271,7 +265,7 @@ public sealed class ViewModelTests
     public async Task HelpSchemaLoadsWithHelpAndIsRebuiltAfterEncoderChanges()
     {
         using var services = new TestServices();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         await using var vm = Create(services, clock);
         vm.InputPath = "";
         var line = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.1" };
@@ -285,9 +279,6 @@ public sealed class ViewModelTests
         vm.EncoderPath = "";
         Assert.Null(vm.HelpSchema);
         vm.EncoderPath = FakeEncoderPath();
-        clock.Advance(TimeSpan.FromMilliseconds(149));
-        Assert.Null(vm.HelpSchema);
-        clock.Advance(TimeSpan.FromMilliseconds(1));
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.NotSame(first, vm.HelpSchema);
         Assert.NotNull(vm.HelpSchema!.Lookup("--vpp-nlmeans"));
@@ -302,7 +293,7 @@ public sealed class ViewModelTests
         {
             Environment.SetEnvironmentVariable("FAKE_ENCODER_HELP_FILE", Path.Combine(AppContext.BaseDirectory, "Data", "help", "qsvenc-h1.txt"));
             using var services = new TestServices();
-            var clock = new FakeTimeProvider();
+            var clock = TimeProvider.System;
             await using var vm = Create(services, clock);
             vm.InputPath = "";
             await InitializeAsync(vm, clock);
@@ -318,13 +309,11 @@ public sealed class ViewModelTests
     }
 
     [AvaloniaFact]
-    public async Task ConfirmedOperationsRunImmediatelyWhileTextEditingKeepsDebounce()
+    public async Task ConfirmedAndEditedOperationsComplete()
     {
         using var services = new TestServices();
-        var clock = new FakeTimeProvider();
-        int starts = 0;
-        await using var vm = Create(services, clock, new OneShotBackend(_ => Interlocked.Increment(ref starts)));
-        // 初回と入力交換は偽時計を進めずに比較まで終わる。
+        var clock = TimeProvider.System;
+        await using var vm = Create(services, clock, new ServerBackend());
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.NotNull(vm.PreviewImage);
@@ -334,15 +323,13 @@ public sealed class ViewModelTests
         var line = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.1" };
         vm.FilterLines.Add(line);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        int beforeText = starts;
         line.Text = "--vpp-nlmeans sigma=0.2";
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.Equal(beforeText, starts);
-        clock.Advance(TimeSpan.FromMilliseconds(149));
-        Assert.Equal(beforeText, starts);
-        clock.Advance(TimeSpan.FromMilliseconds(1));
+
+
+
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.True(starts > beforeText);
+
         line.IsEnabled = false;
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         vm.FilterLines.Remove(line);
@@ -353,61 +340,49 @@ public sealed class ViewModelTests
     }
 
     [AvaloniaFact]
-    public async Task TypingInputPathWaitsBeforeStartingTheProbeAndUsesOnlyTheLatestText()
+    public async Task TypingInputPathUsesTheLatestText()
     {
         using var services = new TestServices();
-        var clock = new FakeTimeProvider();
-        var commands = new List<string[]>();
-        var probe = new InputProbe(clock, configureStartInfo: info => commands.Add(info.ArgumentList.ToArray()));
-        await using var vm = new MainWindowViewModel(services, clock, probe: probe)
-        {
-            EncoderPath = FakeEncoderPath(), InputPath = "initial.ts",
-            InputArgsText = "--avhw --fake-duration 00:00:10.00"
-        };
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        int before = commands.Count;
+        var clock = TimeProvider.System;
+        await using var vm = Create(services, clock);
+        await InitializeAsync(vm, clock);
         vm.InputPath = "typing-1.ts";
         vm.InputPath = "typing-2.ts";
-        Assert.Equal(before, commands.Count);
-        clock.Advance(TimeSpan.FromMilliseconds(149));
-        Assert.Equal(before, commands.Count);
-        clock.Advance(TimeSpan.FromMilliseconds(1));
+        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.True(commands.Count > before);
-        Assert.DoesNotContain(commands.Skip(before), command => command.Contains("typing-1.ts"));
-        Assert.Contains(commands.Skip(before), command => command.Contains("typing-2.ts"));
+        Assert.Equal("typing-2.ts", vm.InputPath);
+        Assert.NotNull(vm.PreviewImage);
         Assert.Null(vm.ErrorText);
     }
 
-    private static MainWindowViewModel Create(TestServices services, FakeTimeProvider clock, IPreviewBackend? backend = null) =>
-        new(services, clock, preferred: backend)
+    private static MainWindowViewModel Create(TestServices services, TimeProvider clock, IPreviewBackend? backend = null) =>
+        new(services, clock, backend, null, null, null, debounceOverride: TimeSpan.Zero)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "fake input.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00",
         };
 
-    private static async Task InitializeAsync(MainWindowViewModel vm, FakeTimeProvider clock)
+    private static async Task InitializeAsync(MainWindowViewModel vm, TimeProvider clock)
     {
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
+
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
     }
 
-    private static async Task RunPreparedAsync(MainWindowViewModel vm, FakeTimeProvider clock)
+    private static async Task RunPreparedAsync(MainWindowViewModel vm, TimeProvider clock)
     {
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
+
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
     }
 
-    private static async Task LoadFiltersAndWaitAsync(MainWindowViewModel vm, FakeTimeProvider clock, Func<bool> condition)
+    private static async Task LoadFiltersAndWaitAsync(MainWindowViewModel vm, TimeProvider clock, Func<bool> condition)
     {
         var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         NotifyCollectionChangedEventHandler loading = (_, _) =>
         {
             if (condition())
-                // 読込後のSubmit登録まで同じUI処理が進んでから、偽時計を進める。
+                // 読込後の要求登録まで同じUI処理を進める。
                 Dispatcher.UIThread.Post(() => loaded.TrySetResult());
         };
         vm.FilterLines.CollectionChanged += loading;

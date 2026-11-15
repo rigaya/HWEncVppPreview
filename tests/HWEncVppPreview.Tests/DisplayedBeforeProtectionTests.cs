@@ -1,5 +1,4 @@
-﻿using System.Reflection;
-using HWEncVppPreview.Core;
+﻿using HWEncVppPreview.Core;
 
 namespace HWEncVppPreview.Tests;
 
@@ -17,8 +16,6 @@ public sealed class DisplayedBeforeProtectionTests
         => Store(cache, Request(source), seconds.Select(Frame).ToArray());
     private static PreviewSegmentSnapshot Store(FrameCache cache, PreviewRequest request, params Y4mFrame[] frames)
         => cache.StoreSegment(request, frames, new(0, 0, true), frames[0].Xts!.Value, frames[^1].Xts!.Value + 1d / 60)!;
-    private static object? Protection(FrameCache cache) => typeof(FrameCache)
-        .GetField("_displayedBeforeSegmentId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(cache);
 
     [Fact]
     public void 通常候補を先に捨て次にcurrentの古いprefixを削ってBeforeを守る()
@@ -36,7 +33,6 @@ public sealed class DisplayedBeforeProtectionTests
         // 選択画像と未来は削れないため、さらに大きい要求でだけ元画像の区間全体を最後に回収する。
         Assert.True(cache.CanAppend(current.SegmentId, 5 * FrameBytes));
         Assert.Null(cache.GetSegment(before.SegmentId));
-        Assert.Null(Protection(cache));
         Assert.Equal(current.Frames.Skip(2), cache.GetSegment(current.SegmentId)!.Frames);
     }
 
@@ -73,25 +69,9 @@ public sealed class DisplayedBeforeProtectionTests
         Assert.Null(cache.GetSegment(first.SegmentId));
         Assert.NotNull(cache.GetSegment(second.SegmentId));
         cache.ProtectDisplayedBeforeSegment(null);
-        Assert.Null(Protection(cache));
-    }
-
-    [Fact]
-    public void 消失IDとRemoveとClearはBefore保護枠を残さない()
-    {
-        var cache = new FrameCache(4 * FrameBytes);
-        var before = Store(cache, "before", 10);
-        cache.ProtectDisplayedBeforeSegment(before.SegmentId);
-        cache.ProtectDisplayedBeforeSegment(long.MaxValue);
-        Assert.Null(Protection(cache));
-        cache.ProtectDisplayedBeforeSegment(before.SegmentId);
-        cache.RemoveSegment(before.SegmentId);
-        Assert.Null(Protection(cache));
-        var next = Store(cache, "before", 20);
-        cache.ProtectDisplayedBeforeSegment(next.SegmentId);
-        cache.Clear();
-        Assert.Null(Protection(cache));
-        Assert.Equal(0, cache.SizeBytes);
+        Assert.True(cache.Append(current.SegmentId, Frame(2)));
+        Assert.Null(cache.GetSegment(second.SegmentId));
+        Assert.Equal(new[] { 0d, 1d, 2d }, cache.GetSegment(current.SegmentId)!.Frames.Select(frame => frame.Xts!.Value));
     }
 
     [Fact]

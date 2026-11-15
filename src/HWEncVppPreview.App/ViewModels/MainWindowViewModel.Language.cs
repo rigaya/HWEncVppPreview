@@ -25,6 +25,6 @@ public sealed partial class MainWindowViewModel
         }
         // UIの完了を同期的に待たず、言語の変更元が別スレッドでも安全に反映する。
         if (Dispatcher.UIThread.CheckAccess()) Refresh();
-        else Dispatcher.UIThread.Post(Refresh);
+        else _postToUi(Refresh);
     }
 }

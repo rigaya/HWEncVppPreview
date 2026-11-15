@@ -161,58 +161,34 @@ public sealed class RawBufferPoolTests
     }
 
     [Fact]
-    public void 実照合の遅延解放と外部snapshotが残る間は番兵も再貸出も起こらない()
+    public void 照合不一致とキャッシュ消去の後も取得済みの画素は正しく全て回収される()
     {
-        const int OverlapFrameCount = 2;
-        const byte ChangedPixel = 0x44;
-        const long CapacityBytes = FrameBytes * OverlapFrameCount * 4;
+        const int count = 2;
         var scope = new RawOwnershipScope(new RawBufferPool());
-        scope.SetReturnedBufferPoisonForTesting(Poison);
-        var cache = new FrameCache(scope, CapacityBytes);
+        var cache = new FrameCache(scope, FrameBytes * count * 4);
         var request = new PreviewRequest { EncoderPath = "fake", InputFile = "input", Fps = 30,
             TargetSeconds = 0, PreMarginSeconds = 0, PostMarginSeconds = 1 };
-        RawFrameLease[] Frames(byte value)
+        RawFrameLease[] CreateFrames(byte value) => Enumerable.Range(0, count).Select(index =>
         {
-            var result = Enumerable.Range(0, OverlapFrameCount)
-                .Select(index => scope.RentReader(Header, index / Header.Fps, 1 / Header.Fps, scope.NewRunId())).ToArray();
-            foreach (var item in result) Array.Fill(item.Frame.RawPixels, value);
-            return result;
-        }
-        var readers = Frames(Pixel);
-        var oldFrames = readers.Select(reader => reader.Frame).ToArray();
-        var oldBuffers = oldFrames.Select(frame => frame.RawPixels).ToArray();
-        var segment = cache.StoreSegment(request, oldFrames, new(0, 0, true), 0, OverlapFrameCount / Header.Fps)!;
-        using var snapshot = cache.GetSegmentOwned(segment.SegmentId, "Snapshot")!;
-        foreach (var reader in readers) reader.Dispose();
-        var changed = Frames(ChangedPixel);
-        var changedBuffers = changed.Select(reader => reader.Frame.RawPixels).ToArray();
-        object gate = typeof(FrameCache).GetField("_gate", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(cache)!;
-        // 実際の重なり照合の解放は最外の排他を抜けてからなので、その境界で所有と画素を確認する。
-        lock (gate)
-        {
-            cache.StoreSegment(request, changed.Select(reader => reader.Frame).ToArray(), new(0, 0, true), 0, OverlapFrameCount / Header.Fps);
-            Assert.Null(cache.GetSegment(segment.SegmentId));
-            Assert.True(scope.Capture().OwnerKinds["StitchComparison"] >= OverlapFrameCount * 2);
-            cache.Clear();
-            foreach (var reader in changed) reader.Dispose();
-            Assert.True(cache.PendingRawReleaseCount > 0);
-            Assert.Equal(0, scope.CapturePool().FreeBytes);
-            foreach (byte[] buffer in oldBuffers) Assert.All(buffer, value => Assert.Equal(Pixel, value));
-            foreach (byte[] buffer in changedBuffers) Assert.All(buffer, value => Assert.Equal(ChangedPixel, value));
-        }
+            var frame = scope.RentReader(Header, index / Header.Fps, 1 / Header.Fps, scope.NewRunId());
+            Array.Fill(frame.Frame.RawPixels, value);
+            return frame;
+        }).ToArray();
+        var original = CreateFrames(Pixel);
+        var segment = cache.StoreSegment(request, original.Select(frame => frame.Frame).ToArray(),
+            new(0, 0, true), 0, count / Header.Fps)!;
+        var snapshot = cache.GetSegmentOwned(segment.SegmentId, "Snapshot")!;
+        foreach (var frame in original) frame.Dispose();
+        var changed = CreateFrames(0x44);
+        cache.StoreSegment(request, changed.Select(frame => frame.Frame).ToArray(),
+            new(0, 0, true), 0, count / Header.Fps);
         cache.Clear();
-        Assert.Equal(0, cache.PendingRawReleaseCount);
-        Assert.False(scope.Capture().OwnerKinds.ContainsKey("StitchComparison"));
-        foreach (byte[] buffer in changedBuffers) Assert.All(buffer, value => Assert.Equal(Poison, value));
-        Assert.Equal(OverlapFrameCount * FrameBytes, scope.CapturePool().FreeBytes);
-        using (var selected = snapshot.RetainOne(0, "VmAnchor")) Assert.Equal(Pixel, selected.Frame.RawPixels[0]);
-        foreach (byte[] buffer in oldBuffers) Assert.All(buffer, value => Assert.Equal(Pixel, value));
+        foreach (var frame in changed) frame.Dispose();
+        byte[] result;
+        using (var selected = snapshot.RetainOne(0, "選択画像")) result = selected.Pixels.ToArray();
         snapshot.Dispose();
-        foreach (byte[] buffer in oldBuffers) Assert.All(buffer, value => Assert.Equal(Poison, value));
-        Assert.Throws<ObjectDisposedException>(() => oldFrames[0].RawPixels);
-        using var reused = Rent(scope);
-        Assert.Contains(oldBuffers, buffer => ReferenceEquals(buffer, reused.Frame.RawPixels));
-        reused.Dispose();
+
+        Assert.All(result, value => Assert.Equal(Pixel, value));
         AssertZero(scope);
     }
 

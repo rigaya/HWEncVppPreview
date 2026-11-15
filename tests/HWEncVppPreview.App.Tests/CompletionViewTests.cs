@@ -4,7 +4,6 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
-using Avalonia.Threading;
 using Avalonia.VisualTree;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.ViewModels;
@@ -27,29 +26,23 @@ public sealed class CompletionViewTests
         Assert.True(session.Popup.IsOpen);
 
         session.Window.KeyTextInput("--vpp-kf");
-        await Flush();
         Assert.True(session.Popup.IsOpen);
         Assert.Equal("--vpp-kfm", session.SelectedText);
 
         session.Window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
-        await Flush();
         Assert.Equal("--vpp-kfm ", box.Text);
         // 続けてパラメータ名の候補が開く
         Assert.True(session.Popup.IsOpen);
         Assert.Contains("mode", session.EntryTexts);
 
         session.Window.KeyTextInput("mo");
-        await Flush();
         session.Window.KeyPress(Key.Tab, RawInputModifiers.None, PhysicalKey.Tab, null);
-        await Flush();
         Assert.Equal("--vpp-kfm mode=", box.Text);
         // 選択式なので値の候補が開く
         Assert.Contains("24", session.EntryTexts);
 
         session.Window.KeyTextInput("2");
-        await Flush();
         session.Window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
-        await Flush();
         Assert.Equal("--vpp-kfm mode=24", box.Text);
         Assert.False(session.Popup.IsOpen);
         Assert.Equal("--vpp-kfm mode=24", session.ViewModel.FilterLines[0].Text);
@@ -61,22 +54,22 @@ public sealed class CompletionViewTests
         await using var session = await Session.StartAsync();
         var box = await session.AddLineAsync();
         session.Window.KeyTextInput("--vpp-kfm ");
-        await Flush();
+
         session.Window.KeyTextInput("thsw");
-        await Flush();
+
         session.Window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
-        await Flush();
+
         Assert.Equal("--vpp-kfm thswitch=0.5", box.Text);
         Assert.Equal(box.Text!.Length, box.CaretIndex);
 
         session.Window.KeyPress(Key.Space, RawInputModifiers.Control, PhysicalKey.Space, null);
-        await Flush();
+
         session.Window.KeyTextInput(",");
-        await Flush();
+
         Assert.True(session.Popup.IsOpen);
         Assert.DoesNotContain("thswitch", session.EntryTexts);
         session.Window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
-        await Flush();
+
         Assert.False(session.Popup.IsOpen);
     }
 
@@ -87,7 +80,7 @@ public sealed class CompletionViewTests
         await session.AddLineAsync();
         session.Window.FindControl<Button>("OrderCategoryButton")!.Command?.Execute(null);
         session.Window.FindControl<Button>("OrderCategoryButton")!.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
-        await Flush();
+
         var entries = session.Entries;
         Assert.True(entries[0].IsHeader);
         Assert.Equal("インターレース解除", entries[0].Text);
@@ -95,7 +88,7 @@ public sealed class CompletionViewTests
         Assert.False(session.SelectedEntry!.IsHeader);
         // 見出しは ↑↓ で飛ばす
         session.Window.KeyPress(Key.Up, RawInputModifiers.None, PhysicalKey.ArrowUp, null);
-        await Flush();
+
         Assert.False(session.SelectedEntry!.IsHeader);
     }
 
@@ -105,23 +98,23 @@ public sealed class CompletionViewTests
         await using var session = await Session.StartAsync();
         var box = await session.AddLineAsync();
         session.SetText(box, "--vpp-kfm thswitch=0.5");
-        await Flush();
+
 
         var start = session.PointAtChar(box, "--vpp-kfm thswitch=0.".Length);
         session.Window.MouseDown(start, MouseButton.Left);
         session.Window.MouseMove(start - new Vector(0, 16));
-        await Flush();
+
         Assert.Equal("--vpp-kfm thswitch=0.7", box.Text);
         // 押した時点から計算し直すので、戻せば元の値
         session.Window.MouseMove(start);
-        await Flush();
+
         Assert.Equal("--vpp-kfm thswitch=0.5", box.Text);
         // 範囲 (0.0..1.0) の端で止まる
         session.Window.MouseMove(start - new Vector(0, 8 * 20));
-        await Flush();
+
         Assert.Equal("--vpp-kfm thswitch=1.0", box.Text);
         session.Window.MouseUp(start - new Vector(0, 8 * 20), MouseButton.Left);
-        await Flush();
+
         Assert.Equal("--vpp-kfm thswitch=1.0", session.ViewModel.FilterLines[0].Text);
     }
 
@@ -131,26 +124,32 @@ public sealed class CompletionViewTests
         await using var session = await Session.StartAsync();
         var box = await session.AddLineAsync();
         session.SetText(box, "--vpp-kfm mode=vfr,thswitch=0.5");
-        await Flush();
+
         var point = session.PointAtChar(box, "--vpp-kfm mode=v".Length);
         session.Window.MouseDown(point, MouseButton.Left);
         session.Window.MouseUp(point, MouseButton.Left);
-        await Flush();
+
         Assert.True(session.Popup.IsOpen);
         Assert.Equal(new[] { "vfr", "60", "24" }.OrderBy(v => v), session.EntryTexts.OrderBy(v => v));
 
         // 一覧から選ぶと、値全体が置き換わる
         session.SelectEntry("60");
         session.Window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
-        await Flush();
+
         Assert.Equal("--vpp-kfm mode=60,thswitch=0.5", box.Text);
     }
 
-    internal static async Task Flush()
+    internal static async Task WaitForLayoutAsync(Control root, Func<bool> condition)
     {
-        // TextChanged 後の Post と、レイアウト・描画の更新を待つ
-        for (int i = 0; i < 3; i++) await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
-        Dispatcher.UIThread.RunJobs();
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Changed(object? sender, EventArgs args) { if (condition()) done.TrySetResult(); }
+        root.LayoutUpdated += Changed;
+        try
+        {
+            if (condition()) done.TrySetResult();
+            await done.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+        }
+        finally { root.LayoutUpdated -= Changed; }
     }
 
     /// <summary>偽エンコーダの help を読んだ画面。V8 のフォームのテスト (FormViewTests) でも使う。</summary>
@@ -180,9 +179,8 @@ public sealed class CompletionViewTests
             string? previous = Environment.GetEnvironmentVariable("FAKE_ENCODER_HELP_FILE");
             Environment.SetEnvironmentVariable("FAKE_ENCODER_HELP_FILE", Path.Combine(AppContext.BaseDirectory, "Data", "help", "qsvenc-h1.txt"));
             var services = new TestServices();
-            var clock = new FakeTimeProvider();
-            // 入力ファイルなしでプレビューは要求せず、--help の読み込みだけを行う
-            var vm = new MainWindowViewModel(services, clock) { EncoderPath = FakeEncoderPath(), InputPath = "" };
+            // 入力ファイルなしでプレビューは要求せず、ヘルプの読み込みだけを行う。
+            var vm = new MainWindowViewModel(services, TimeProvider.System) { EncoderPath = FakeEncoderPath(), InputPath = "" };
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.NotNull(vm.HelpSchema);
@@ -190,19 +188,24 @@ public sealed class CompletionViewTests
             vm.IsTextListMode = textListMode;
             var window = new MainWindow { DataContext = vm, Width = 1300, Height = 800 };
             window.Show();
-            await Flush();
+            await WaitForLayoutAsync(window, () => window.Bounds.Width > 0 && window.GetVisualDescendants().OfType<Button>().Any());
             return new Session(previous, services, vm, window);
         }
 
         public async Task<TextBox> AddLineAsync()
         {
+            var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnOpened(object? sender, EventArgs args) => opened.TrySetResult();
+            Popup.Opened += OnOpened;
             var button = Window.GetVisualDescendants().OfType<Button>().First(b => b.Content as string == "＋ 行を追加");
             button.Command!.Execute(null);
             button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
-            await Flush();
             var line = ViewModel.FilterLines[^1];
+            await WaitForLayoutAsync(Window, () => Window.GetVisualDescendants().OfType<TextBox>().Any(t => t.Classes.Contains("filterLine") && ReferenceEquals(t.DataContext, line) && t.IsFocused));
             var box = Window.GetVisualDescendants().OfType<TextBox>().First(t => t.Classes.Contains("filterLine") && ReferenceEquals(t.DataContext, line));
             Assert.True(box.IsFocused);
+            try { await opened.Task.WaitWithDiagnosticsAsync(SafetyTimeout); }
+            finally { Popup.Opened -= OnOpened; }
             return box;
         }
 

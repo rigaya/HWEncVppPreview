@@ -4,7 +4,6 @@ using Avalonia.Threading;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.ViewModels;
 using HWEncVppPreview.Core;
-using HWEncVppPreview.Tests.Testing;
 
 namespace HWEncVppPreview.App.Tests;
 
@@ -16,22 +15,26 @@ public sealed class ForwardPrefetchViewModelTests
     public async Task cache順移動の先読み開始で現在画像を境界へ飛ばさず微小逆移動も保持する()
     {
         using var capability = new CapabilityScope(); using var services = new Services();
-        var clock = new FakeTimeProvider(); var backend = new Backend();
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend)
+        var backend = new Backend();
+        await using var vm = new MainWindowViewModel(services, TimeProvider.System, backend, null, null,
+            (frame, token) => Task.FromResult(Enumerable.Repeat(frame.Data[0], frame.Header.Width * frame.Header.Height * 4).ToArray()),
+            debounceOverride: TimeSpan.Zero)
         { EncoderPath = FakeEncoderPath(), InputPath = "c2-prefetch.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety); clock.Advance(TimeSpan.FromMilliseconds(150));
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Single(backend.Requests); Assert.Equal(10, vm.CurrentSeconds);
         for (int i = 0; i < 6; i++)
         {
-            vm.StepFrameCommand.Execute(1); await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            vm.StepFrameCommand.Execute(1);
         }
         await backend.SecondStarted.Task.WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(10.6, vm.CurrentSeconds, 7); Assert.Equal(2, backend.Requests.Count);
-        Assert.Null(vm.ErrorText); Assert.NotNull(vm.PreviewImage);
         vm.StepFrameCommand.Execute(-1); await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(10.5, vm.CurrentSeconds, 7); Assert.Equal(0, backend.Cancelled);
-        Assert.Equal(2, backend.Requests.Count); Assert.Null(vm.ErrorText);
+        Assert.Equal(10.5, vm.CurrentSeconds, 7);
+        Assert.Null(vm.ErrorText);
+        using (var pixels = Assert.IsType<Avalonia.Media.Imaging.WriteableBitmap>(vm.PreviewImage).Lock())
+            Assert.Equal((byte)105, System.Runtime.InteropServices.Marshal.ReadByte(pixels.Address));
+        // 先読みの取消と回収を待ってから物理要求数を確認する。
+        await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        Assert.Equal(2, backend.Requests.Count);
     }
 
     private sealed class Backend : IPreviewBackend

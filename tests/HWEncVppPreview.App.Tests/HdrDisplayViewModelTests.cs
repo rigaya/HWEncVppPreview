@@ -5,7 +5,6 @@ using Avalonia.Media.Imaging;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.ViewModels;
 using HWEncVppPreview.Core;
-using HWEncVppPreview.Tests.Testing;
 
 namespace HWEncVppPreview.App.Tests;
 
@@ -18,7 +17,7 @@ public sealed class HdrDisplayViewModelTests
     {
         using var services = new Services();
         var backend = new FramesBackend(afterHdr: true, beforeHdr: true);
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         await using var vm = Create(services, backend, clock);
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
@@ -34,12 +33,11 @@ public sealed class HdrDisplayViewModelTests
         Assert.Equal(seconds, vm.CurrentSeconds);
         Assert.Equal(status, vm.StatusText);
         Assert.Contains("PQ→SDR 400nit", vm.ColorInfoText);
+        string recolored = Hash(vm.PreviewImage!);
         vm.StepFrameCommand.Execute(1);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(runs, backend.Runs);
-        var raw = Assert.IsType<Y4mFrame>(typeof(MainWindowViewModel)
-            .GetField("_displayedFrame", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(vm));
-        Assert.Equal(Convert.ToHexString(SHA256.HashData(YuvToBgra.Convert(raw, new() { ReferenceWhiteNits = 400 }))), Hash(vm.PreviewImage!));
+        Assert.NotEqual(recolored, Hash(vm.PreviewImage!));
         await vm.SaveSettingsAsync();
         Assert.Equal(400, AppSettings.Load(services.SettingsPath).HdrReferenceWhiteNits);
     }
@@ -49,7 +47,7 @@ public sealed class HdrDisplayViewModelTests
     {
         using var services = new Services();
         var backend = new FramesBackend(afterHdr: false, beforeHdr: true);
-        await using var vm = Create(services, backend, new FakeTimeProvider());
+        await using var vm = Create(services, backend, TimeProvider.System);
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         // AfterがSDRでも、Beforeを変換しているので基準白は出す。
@@ -86,7 +84,7 @@ public sealed class HdrDisplayViewModelTests
             for (int i = 3; i < data.Length; i += 4) data[i] = 255;
             return data;
         }
-        await using var vm = Create(services, backend, new FakeTimeProvider(), ConvertAsync);
+        await using var vm = Create(services, backend, TimeProvider.System, ConvertAsync);
         var shown = new List<byte>();
         vm.PropertyChanged += (_, e) =>
         {
@@ -111,10 +109,10 @@ public sealed class HdrDisplayViewModelTests
         Assert.Equal(2, backend.Runs);
     }
 
-    private static MainWindowViewModel Create(Services services, FramesBackend backend, FakeTimeProvider clock,
+    private static MainWindowViewModel Create(Services services, FramesBackend backend, TimeProvider clock,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter = null)
     {
-        var vm = new MainWindowViewModel(services, clock, backend, backend, null, null, converter)
+        var vm = new MainWindowViewModel(services, clock, backend, null, null, converter)
         { EncoderPath = FakeEncoderPath(), InputPath = "hdr.ts", InputArgsText = "--avhw --fake-duration 00:00:10.00" };
         vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
         return vm;

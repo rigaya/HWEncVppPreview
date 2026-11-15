@@ -39,7 +39,7 @@ public sealed record PreviewRequest
     public string EncoderPath { get; init; } = "";
     public string InputFile { get; init; } = "";
     /// <summary>入力の追加引数。</summary>
-    public IReadOnlyList<string> InputArgs { get; init; } = new[] { "--avhw" };
+    public IReadOnlyList<string> InputArgs { get; init; } = Array.Empty<string>();
     /// <summary>目標時刻 T (秒)。</summary>
     public double TargetSeconds { get; init; }
     /// <summary>前マージン Mb (秒)。</summary>
@@ -70,7 +70,8 @@ public static class CommandBuilder
         help.OptionNames.Contains("--colorprim", StringComparer.Ordinal),
         help.OptionNames.Contains("--transfer", StringComparer.Ordinal),
         help.OptionNames.Contains("--colorrange", StringComparer.Ordinal),
-        help.OptionNames.Contains("--chromaloc", StringComparer.Ordinal));
+        help.OptionNames.Contains("--chromaloc", StringComparer.Ordinal),
+        help.OptionNames.Contains("--vpy-assume-script-dir", StringComparer.Ordinal));
     public static PreviewPlan Plan(PreviewRequest req)
     {
         if (req.Fps <= 0) throw new ArgumentException(CoreText.FpsPositive, nameof(req));
@@ -94,22 +95,12 @@ public static class CommandBuilder
         return new PreviewPlan(seek, actualMb, frames);
     }
 
-    /// <summary>都度起動用の引数。出力関係 (-c raw --y4m-timestamp -o -) を含む。</summary>
-    public static string[] BuildOneShot(PreviewRequest req) => Build(req, includeOutput: true);
-
-    /// <summary>常駐サーバ用の引数。出力関係はサーバが付けるので含めない (含めるとサーバがエラーにする)。</summary>
-    public static string[] BuildServer(PreviewRequest req) => Build(req, includeOutput: false);
-
-    private static string[] Build(PreviewRequest req, bool includeOutput)
+    /// <summary>常駐サーバ用の引数。出力関係はサーバが付ける。</summary>
+    public static string[] BuildServer(PreviewRequest req)
     {
         var plan = Plan(req);
         var args = new List<string>();
-        // 入力の色情報を既定で引き継ぎ、後続の利用者の明示指定は上書きしない。
-        if (req.Capabilities.ColorMatrix) args.AddRange(new[] { "--colormatrix", "auto" });
-        if (req.Capabilities.ColorPrimaries) args.AddRange(new[] { "--colorprim", "auto" });
-        if (req.Capabilities.Transfer) args.AddRange(new[] { "--transfer", "auto" });
-        if (req.Capabilities.ColorRange) args.AddRange(new[] { "--colorrange", "auto" });
-        if (req.Capabilities.ChromaLocation) args.AddRange(new[] { "--chromaloc", "auto" });
+        args.AddRange(BuildReaderArguments(req.InputFile, req.InputArgs, req.Capabilities));
         args.AddRange(req.InputArgs);
         args.Add("-i");
         args.Add(req.InputFile);
@@ -123,10 +114,6 @@ public static class CommandBuilder
             args.Add("--frames");
             args.Add(plan.FrameCount.ToString(CultureInfo.InvariantCulture));
         }
-        if (includeOutput)
-        {
-            args.AddRange(new[] { "-c", "raw", "--y4m-timestamp", "-o", "-" });
-        }
         args.AddRange(req.VppArgs);
         // --y4m-timestamp(2026-08)を前提にしているため、color(2025-05)も必ず使える。
         // ログ末尾の色リセットが常駐サーバの制御行へ混ざらないよう、最後に色を無効化する。
@@ -135,6 +122,53 @@ public static class CommandBuilder
         if (req.Capabilities.TimestampPassthrough) args.Add("--timestamp-passthrough");
         if (req.Capabilities.OpenClTaskThreads) args.AddRange(new[] { "--opencl-task-threads", "0" });
         return args.ToArray();
+    }
+
+    // 画像検査・長さ検査・プレビューで、readerに応じた入力補助の条件をそろえる。
+    internal static string[] BuildReaderArguments(string inputFile, IReadOnlyList<string> inputArgs,
+        PreviewCapabilities capabilities, bool includeColorAuto = true)
+    {
+        var args = new List<string>();
+        var reader = ResolveInputReader(inputFile, inputArgs);
+        // avhw/avsw以外のreaderはautoを受け付けないため、実際に使うreaderで絞る。
+        // 入力の色情報を既定で引き継ぎ、後続の利用者の明示指定は上書きしない。
+        if (includeColorAuto && reader == InputReader.AvFormat)
+        {
+            if (capabilities.ColorMatrix) args.AddRange(new[] { "--colormatrix", "auto" });
+            if (capabilities.ColorPrimaries) args.AddRange(new[] { "--colorprim", "auto" });
+            if (capabilities.Transfer) args.AddRange(new[] { "--transfer", "auto" });
+            if (capabilities.ColorRange) args.AddRange(new[] { "--colorrange", "auto" });
+            if (capabilities.ChromaLocation) args.AddRange(new[] { "--chromaloc", "auto" });
+        }
+        // 相対パスを含むvpyも、GUIを起動したディレクトリに依存せず読めるようにする。
+        if (reader == InputReader.VapourSynth && capabilities.VpyAssumeScriptDir)
+            args.Add("--vpy-assume-script-dir");
+        return args.ToArray();
+    }
+
+    private enum InputReader { AvFormat, VapourSynth, Other }
+
+    private static InputReader ResolveInputReader(string inputFile, IReadOnlyList<string> inputArgs)
+    {
+        // rgy_input.cppの自動判定に合わせる。AVIはLinuxでも安全側でautoを省略する。
+        InputReader reader = Path.GetExtension(inputFile).ToLowerInvariant() switch
+        {
+            ".vpy" => InputReader.VapourSynth,
+            ".avs" or ".avi" or ".y4m" or ".yuv" => InputReader.Other,
+            _ => InputReader.AvFormat,
+        };
+        // rgy_cmd.cppと同じく、明示したreaderを優先し、複数なら最後の指定を使う。
+        foreach (string argument in inputArgs)
+        {
+            reader = argument switch
+            {
+                "--avhw" or "--avsw" or "--avcuvid" or "--avqsv" or "--avvce" => InputReader.AvFormat,
+                "--vpy" or "--vpy-mt" => InputReader.VapourSynth,
+                "--avs" or "--avi" or "--y4m" or "--raw" or "--sm" => InputReader.Other,
+                _ => reader,
+            };
+        }
+        return reader;
     }
 
     /// <summary>秒を h:mm:ss.fff に整形する。1時間以上でも時は桁を増やすだけ (例: 100:00:00.000)。</summary>

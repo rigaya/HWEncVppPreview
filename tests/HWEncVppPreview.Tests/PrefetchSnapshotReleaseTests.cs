@@ -48,11 +48,17 @@ public sealed class PrefetchSnapshotReleaseTests
             await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
             var weak = backend.PrefetchedRaw;
             Assert.NotNull(weak);
-            Assert.True(IsAlive(weak));
-            cache.Clear();
-            if (dispose) await controller.DisposeAsync();
-            // 経過時間を待たず、TrackAsyncのfinallyが完了する機会だけを与える。
-            await Task.Yield();
+            // 順序の違う両経路とも、全操作の終了後に保持が残らないことを確かめる。
+            if (dispose)
+            {
+                await controller.DisposeAsync();
+                cache.Clear();
+            }
+            else
+            {
+                cache.Clear();
+                await controller.DisposeAsync();
+            }
             return (controller, weak);
         }
         catch { await controller.DisposeAsync(); throw; }

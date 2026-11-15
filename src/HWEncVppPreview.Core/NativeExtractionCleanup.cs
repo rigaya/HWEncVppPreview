@@ -10,14 +10,25 @@ internal static class NativeExtractionCleanup
     private static readonly TimeSpan GracePeriod = TimeSpan.FromMinutes(10);
     private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+    private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-    internal static string? ResolveCurrentDirectory(bool isSingleFile, string? nativeSearchDirectories)
+    internal static string? ResolveCurrentDirectory(bool isSingleFile, string? nativeSearchDirectories,
+        IReadOnlyList<string>? extractionBases = null)
     {
         if (!isSingleFile) return null;
+        // 検索一覧には実行ファイルの場所も入る。親名が一致しても、既定の .net の外は展開先ではないので捨てる。
+        IReadOnlyList<string> bases = extractionBases ?? ExtractionBases();
         var candidates = (nativeSearchDirectories ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Select(NormalizeDirectory).Where(path => CacheParent(path) != null).Cast<string>()
+            .Select(NormalizeDirectory).Where(path => IsUnderBase(path, bases) && CacheParent(path) != null).Cast<string>()
             .Distinct(PathComparer).Take(2).ToArray();
         return candidates.Length == 1 ? candidates[0] : null;
+    }
+
+    internal static IReadOnlyList<string> ExtractionBases()
+    {
+        string? root = NormalizeDirectory(DefaultExtractionRoot());
+        return root == null ? Array.Empty<string>() : new[] { root };
     }
 
     internal static IReadOnlyList<string> SelectDirectories(string? currentDirectory,
@@ -39,10 +50,17 @@ internal static class NativeExtractionCleanup
     }
 
     internal static void Clean(string? currentDirectory, TimeProvider? timeProvider = null)
+        => Clean(currentDirectory, Environment.GetEnvironmentVariable("DOTNET_BUNDLE_EXTRACT_BASE_DIR"), timeProvider);
+
+    internal static void Clean(string? currentDirectory, string? configuredBase, TimeProvider? timeProvider)
     {
+        // 展開先を利用者が指定した場合、その中に何があるかは利用者の管理なので一切削除しない。
+        if (!string.IsNullOrEmpty(configuredBase)) return;
         try
         {
             string? current = NormalizeDirectory(currentDirectory);
+            // 展開根の外は、親名が一致しても利用者のディレクトリなので触らない。
+            if (!IsUnderBase(current, ExtractionBases())) return;
             string? parent = CacheParent(current);
             if (parent == null || !Directory.Exists(current)) return;
             DateTimeOffset now = (timeProvider ?? TimeProvider.System).GetUtcNow();
@@ -68,6 +86,25 @@ internal static class NativeExtractionCleanup
                 : Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
         }
         catch { return null; }
+    }
+
+    internal static string DefaultExtractionRoot()
+    {
+        string root = OperatingSystem.IsWindows()
+            ? Path.GetTempPath()
+            : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(root, ".net");
+    }
+
+    private static bool IsUnderBase(string? path, IReadOnlyList<string> bases)
+    {
+        if (path == null) return false;
+        foreach (string root in bases)
+        {
+            if (PathComparer.Equals(path, root)
+                || path.StartsWith(root + Path.DirectorySeparatorChar, PathComparison)) return true;
+        }
+        return false;
     }
 
     private static string? CacheParent(string? directory)

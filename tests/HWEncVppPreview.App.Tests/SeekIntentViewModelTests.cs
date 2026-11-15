@@ -22,7 +22,7 @@ public sealed class SeekIntentViewModelTests
     [InlineData("end")]
     public async Task BackwardSeekUsesForwardPhysicalPlan(string operation)
     {
-        using var fixture = new Fixture();
+        await using var fixture = new Fixture();
         await using var vm = fixture.Create();
         await fixture.Start(vm);
         switch (operation)
@@ -37,12 +37,13 @@ public sealed class SeekIntentViewModelTests
         }
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        var request = fixture.Backend.Requests.Last(value => value.CorrelationId >= 0);
         double target = operation == "home" ? 0 : operation == "end" ? 180 : 20;
+        var request = fixture.Backend.Requests.Last(value => value.CorrelationId >= 0);
         Assert.Equal(target, request.TargetSeconds);
         Assert.True(request.Continuous);
         Assert.Equal(0, request.WarmupSeconds);
         Assert.Equal(target == 0 ? null : target - 1, CommandBuilder.Plan(request).SeekSeconds);
+        Assert.Equal(target, vm.CurrentSeconds, 6);
         Assert.Null(vm.ErrorText);
         Assert.NotNull(vm.PreviewImage);
     }
@@ -50,7 +51,7 @@ public sealed class SeekIntentViewModelTests
     [AvaloniaFact]
     public async Task PageWithinConnectedCacheReusesThePhysicalStream()
     {
-        using var fixture = new Fixture();
+        await using var fixture = new Fixture();
         await using var vm = fixture.Create();
         await fixture.Start(vm);
         vm.StepSecondsCommand.Execute(-0.1);
@@ -64,7 +65,7 @@ public sealed class SeekIntentViewModelTests
     [AvaloniaFact]
     public async Task BackwardFramesAfterSeekStartReversePrefetchOnlyWhenNeeded()
     {
-        using var fixture = new Fixture();
+        await using var fixture = new Fixture();
         await using var vm = fixture.Create();
         await fixture.Start(vm);
         vm.BeginSeekDrag(); vm.CurrentSeconds = 20; vm.EndSeekDrag(20);
@@ -77,7 +78,8 @@ public sealed class SeekIntentViewModelTests
             vm.StepFrameCommand.Execute(-1);
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         }
-        await Until(() => fixture.Backend.Requests.Any(request => request.CorrelationId < 0));
+        await fixture.Backend.PrefetchStarted.Task.WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         var prefetch = Assert.Single(fixture.Backend.Requests, request => request.CorrelationId < 0);
         Assert.False(prefetch.Continuous);
         Assert.Equal(5, prefetch.PreMarginSeconds);
@@ -86,20 +88,20 @@ public sealed class SeekIntentViewModelTests
         Assert.True(vm.CurrentSeconds < 20);
     }
 
-    private static async Task Until(Func<bool> predicate)
-    {
-        using var timeout = new CancellationTokenSource(Safety);
-        while (!predicate()) await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(timeout.Token);
-    }
-
-    private sealed class Fixture : IDisposable
+    private sealed class Fixture : IAsyncDisposable
     {
         private readonly string? _oldCapabilities = Environment.GetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES");
         public FakeTimeProvider Clock { get; } = new();
         public RecordingBackend Backend { get; } = new();
         private readonly Services _services = new();
-        public Fixture() => Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", "1");
-        public MainWindowViewModel Create() => new(_services, Clock, Backend, Backend)
+        private readonly SyntheticInputProbe _input;
+        public Fixture()
+        {
+            Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", "1");
+            _input = new SyntheticInputProbe(Clock);
+        }
+        public MainWindowViewModel Create() => new(_services, Clock, Backend, _input.Probe, null, null,
+            readTextOverride: SyntheticInputProbe.ReadTextAsync)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "seek-intent.ts", CurrentSeconds = 100,
             InputArgsText = "--avhw --fake-duration 00:03:00.00",
@@ -112,8 +114,9 @@ public sealed class SeekIntentViewModelTests
             Assert.Single(Backend.Requests);
             Assert.Null(vm.ErrorText);
         }
-        public void Dispose()
+        public async ValueTask DisposeAsync()
         {
+            await _input.DisposeAsync();
             Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", _oldCapabilities);
             _services.Dispose();
         }
@@ -122,11 +125,13 @@ public sealed class SeekIntentViewModelTests
     private sealed class RecordingBackend : IPreviewBackend
     {
         public ConcurrentQueue<PreviewRequest> Requests { get; } = new();
+        public TaskCompletionSource PrefetchStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult<bool?>(false);
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
         {
             Requests.Enqueue(request);
+            if (request.CorrelationId < 0) PrefetchStarted.TrySetResult();
             var header = Y4mHeader.Parse("YUV4MPEG2 W64 H36 F30:1 Ip A1:1 C420");
             sink.OnHeader(header);
             var plan = CommandBuilder.Plan(request);

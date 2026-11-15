@@ -4,7 +4,7 @@ namespace HWEncVppPreview.App.ViewModels;
 
 public sealed partial class MainWindowViewModel
 {
-    private readonly BgraBufferPool _bgraPool = new();
+    private readonly BgraBufferPool _bgraPool;
 
     // callbackの完了は実UIコピー/世代棄却の完了。Postを投げただけで貸出を返さない。
     internal async Task WithConvertedBgraAsync(Y4mFrame frame, HdrDisplaySettings settings,

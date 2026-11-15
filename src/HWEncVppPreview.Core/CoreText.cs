@@ -6,10 +6,8 @@ namespace HWEncVppPreview.Core;
 public static class CoreText
 {
     private static string T(string japanese, string english) => UiLanguage.Current == "ja" ? japanese : english;
-    public static string OneShotReadFailed => T("都度起動の出力を読み取れませんでした", "Could not read one-shot output.");
-    public static string OneShotExitTimedOut => T("都度起動プロセスの終了待機が期限切れになりました", "Timed out waiting for the one-shot process to exit.");
+    public static string ExceptionDetails => T("例外の詳細:", "Exception details:");
     public static string StandardErrorTimedOut => T("stderrの完了待機が期限切れになりました", "Timed out waiting for stderr to finish.");
-    public static string OneShotCleanupTimedOut => T("都度起動プロセスの回収が期限内に完了しませんでした", "Timed out cleaning up the one-shot process.");
     public static string ImageSizePositive => T("幅と高さは正の値が必要です", "Width and height must be positive.");
     public static string BitDepthUnsupported => T("ビット深度は8〜16が必要です", "Bit depth must be between 8 and 16.");
     public static string ChromaUnsupported => T("未対応のクロマ形式です", "Unsupported chroma format.");

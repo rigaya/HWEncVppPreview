@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -63,15 +64,15 @@ public sealed class InputProbe : IAsyncDisposable
         _clock = timeProvider ?? TimeProvider.System;
         _timeout = timeout ?? TimeSpan.FromSeconds(30);
         if (_timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
-        _backend = new OneShotBackend(configureStartInfo, _clock, StopTimeout);
+        _backend = new ServerBackend(_clock, configureStartInfo: configureStartInfo, stopTimeout: StopTimeout);
         _configureStartInfo = configureStartInfo;
     }
 
     // 終了要求を無視する検査backendの回帰を、GPUやOSの異常終了に頼らず再現する。
-    internal InputProbe(IPreviewBackend backend, TimeProvider timeProvider)
-        : this(timeProvider) => _backend = backend;
+    internal InputProbe(IPreviewBackend backend, TimeProvider timeProvider, Action<ProcessStartInfo>? configureStartInfo = null)
+        : this(timeProvider, configureStartInfo: configureStartInfo) => _backend = backend;
 
-    /// <summary>追加引数の既定は--avhw。引数配列を複製し、値が同じ要求にはキャッシュを返す。</summary>
+    /// <summary>追加引数の既定は空。引数配列を複製し、値が同じ要求にはキャッシュを返す。</summary>
     /// <exception cref="InputProbeException">エンコーダがエラー終了した、または有効なヘッダがない。</exception>
     /// <exception cref="InputProbeTimeoutException">検査全体が指定時間内に完了しなかった。</exception>
     public async Task<InputInfo> ProbeAsync(string encoderPath, string inputFile,
@@ -85,7 +86,7 @@ public sealed class InputProbe : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             lifetime = _lifetime.Token;
         }
-        string[] arguments = inputArgs?.ToArray() ?? new[] { "--avhw" };
+        string[] arguments = inputArgs?.ToArray() ?? Array.Empty<string>();
         var key = new ProbeKey(encoderPath, inputFile, JsonSerializer.Serialize(arguments), capabilities ?? new());
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime);
         await _gate.WaitAsync(cancellation.Token).ConfigureAwait(false);
@@ -122,6 +123,8 @@ public sealed class InputProbe : IAsyncDisposable
                 throw;
             }
             cancellation.Token.ThrowIfCancellationRequested();
+            // 破棄側の取消がリンク先へ伝わる前にbackendが終了しても、破棄を優先する。
+            lifetime.ThrowIfCancellationRequested();
             // 自己中断と外部のキャンセルは区別する。最初のフレーム取得後の自己中断だけを成功扱いにする。
             if (!sink.HasFrame && result.ExitCode != 0)
                 throw new InputProbeException(CoreText.InputProbeEncoderExited(result.ExitCode), result.ExitCode, result.StandardError);
@@ -133,7 +136,7 @@ public sealed class InputProbe : IAsyncDisposable
                 origin, origin.HasValue && !PreviewClockMap.IsNearTimestampWrap(origin.Value));
             lock (_sync)
             {
-                if (info.Duration == null && _durationCache.TryGetValue(key with { Capabilities = new() }, out var knownDuration))
+                if (info.Duration == null && _durationCache.TryGetValue(DurationKey(key), out var knownDuration))
                     info = info with { Duration = knownDuration };
                 _cache.Add(key, info);
             }
@@ -146,7 +149,7 @@ public sealed class InputProbe : IAsyncDisposable
     /// <remarks>長さ不明の結果もキャッシュする。画像検査で長さが取得済みなら追加のプロセスは起動しない。総時間の上限は画像検査と同じ。</remarks>
     /// <exception cref="InputProbeTimeoutException">自然終了までの長さ検査が指定時間内に終わらなかった。</exception>
     public async Task<TimeSpan?> ProbeDurationAsync(string encoderPath, string inputFile,
-        IReadOnlyList<string>? inputArgs = null, CancellationToken cancellationToken = default)
+        IReadOnlyList<string>? inputArgs = null, CancellationToken cancellationToken = default, PreviewCapabilities? capabilities = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(encoderPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(inputFile);
@@ -156,8 +159,8 @@ public sealed class InputProbe : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             lifetime = _lifetime.Token;
         }
-        string[] arguments = inputArgs?.ToArray() ?? new[] { "--avhw" };
-        var key = new ProbeKey(encoderPath, inputFile, JsonSerializer.Serialize(arguments), new());
+        string[] arguments = inputArgs?.ToArray() ?? Array.Empty<string>();
+        var key = DurationKey(new ProbeKey(encoderPath, inputFile, JsonSerializer.Serialize(arguments), capabilities ?? new()));
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime);
         await _durationGate.WaitAsync(cancellation.Token).ConfigureAwait(false);
         try
@@ -169,7 +172,8 @@ public sealed class InputProbe : IAsyncDisposable
                 if (known != null) return known.Duration;
                 if (_durationCache.TryGetValue(key, out var cached)) return cached;
             }
-            var command = arguments.Concat(new[]
+            var command = CommandBuilder.BuildReaderArguments(inputFile, arguments, capabilities ?? new(), includeColorAuto: false)
+                .Concat(arguments).Concat(new[]
             {
                 "-i", inputFile, "--log-level", "input=debug", "--frames", "1", "-c", "raw", "-o", "-",
             });
@@ -241,12 +245,31 @@ public sealed class InputProbe : IAsyncDisposable
         finally { _durationGate.Release(); }
     }
 
-    /// <summary>入力ログのDuration行を読む。ファイル指定時は対応する最後のInput節に限定する。N/A、欠落、不正な値ならnull。</summary>
+    /// <summary>映像readerのsource行を優先し、なければ対応するInput節のDuration行を読む。不明・不正な値ならnull。</summary>
     public static TimeSpan? ParseDuration(string standardError, string? inputFile = null)
     {
         ArgumentNullException.ThrowIfNull(standardError);
         // ログ色指定が数値の前後へ入っても同じ値として読めるようにする。
         string plain = Regex.Replace(standardError, @"\x1B\[[0-?]*[ -/]*[@-~]", "");
+        // 映像reader自身の正確な総数を優先する。avsの--audio-sourceなどで別のInput節が
+        // 混ざっていても、音声の長さを映像の長さとして採らない。書式が合うものの最後の行だけを使う。
+        // OpenCLの「building OpenCL source: size ...」などは候補にしない。
+        var sources = Regex.Matches(plain,
+            @"^[^\r\n]*?\bsource:[ \t]*(?<frames>[0-9]+)[ \t]+frames,[ \t]*(?<num>[0-9]+)/(?<den>[0-9]+)[ \t]+fps[ \t]*\r?$",
+            RegexOptions.Multiline | RegexOptions.CultureInvariant);
+        if (sources.Count > 0)
+        {
+            var source = sources[^1];
+            if (long.TryParse(source.Groups["frames"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out long frames) && frames > 0
+                && long.TryParse(source.Groups["num"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out long num) && num > 0
+                && long.TryParse(source.Groups["den"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out long den) && den > 0)
+            {
+                // 乗算中の桁あふれや浮動小数の誤差を避け、ticksへの最後の変換で一度だけ丸める。
+                BigInteger ticks = BigInteger.DivRem((BigInteger)frames * den * TimeSpan.TicksPerSecond, num, out var remainder);
+                if (remainder * 2 >= num) ++ticks;
+                if (ticks <= TimeSpan.MaxValue.Ticks) return TimeSpan.FromTicks((long)ticks);
+            }
+        }
         if (inputFile != null)
         {
             // 常駐VCEEncではlibav側のログが遅れて次の要求に届くことがある。
@@ -300,7 +323,8 @@ public sealed class InputProbe : IAsyncDisposable
     {
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         var deadline = new CleanupDeadline(_clock, StopTimeout);
-        Task cancellation = Task.Run(async () => await _lifetime.CancelAsync().ConfigureAwait(false));
+        // backendの終了が先に見えてエラー扱いされないよう、取消要求だけ先に立てる。
+        Task cancellation = _lifetime.CancelAsync();
         Task backend = Task.Run(async () => await _backend.DisposeAsync().ConfigureAwait(false));
         KeyValuePair<Process, Task>[] processes;
         lock (_sync)
@@ -367,6 +391,13 @@ public sealed class InputProbe : IAsyncDisposable
         await JoinIgnoringFailureAsync(run, deadline, "probe.run_join").ConfigureAwait(false);
         return run.IsCompletedSuccessfully ? run.Result.StandardError : "";
     }
+
+    // vpyの相対パス対応の有無で、失敗してnullだった長さを使い回さない。
+    // 色autoは長さ検査に付けないので、対応する色の違いはここで除く。
+    private static ProbeKey DurationKey(ProbeKey key) => key with
+    {
+        Capabilities = new(VpyAssumeScriptDir: key.Capabilities?.VpyAssumeScriptDir == true),
+    };
 
     private static bool SameInput(ProbeKey a, ProbeKey b) => a.EncoderPath == b.EncoderPath
         && a.InputFile == b.InputFile && a.InputArgs == b.InputArgs;

@@ -61,7 +61,7 @@ public sealed partial class ServerBackend
             }
             catch (Exception exception)
             {
-                // 初期化に失敗しても実要求のfallbackや通常の診断へ任せ、VMへエラーを通知しない。
+                // 初期化に失敗しても実要求の通常の診断へ任せ、VMへエラーを通知しない。
                 if (PerfTrace.Enabled) PerfTrace.Write("server.initialize.failed", new { encoder, correlationId, error = exception.Message });
             }
         }

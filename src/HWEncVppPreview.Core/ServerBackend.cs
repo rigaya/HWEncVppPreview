@@ -60,6 +60,7 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
         catch (ObjectDisposedException) { throw; }
         catch (Exception exception)
         {
+            if (PerfTrace.Enabled) PerfTrace.Write("server.error", new { stage = "history", exception = exception.ToString() });
             // 未完了のprobeの応答を、次のrunのBEGINとして読まないようsessionごと破棄する。
             if (session != null) await DropSessionAsync(session).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
@@ -144,6 +145,7 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
                 catch (OperationCanceledException) { throw; }
                 catch (Exception exception)
                 {
+                    if (PerfTrace.Enabled) PerfTrace.Write("server.error", new { stage = "probe", exception = exception.ToString() });
                     await DropSessionAsync(session).ConfigureAwait(false);
                     throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed, exception);
                 }
@@ -189,9 +191,9 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
                     if (PerfTrace.Enabled) PerfTrace.Write("server.cancel_end", new { request.CorrelationId, id, end.Rc,
                         elapsedMs = Stopwatch.GetElapsedTime(cancelStart).TotalMilliseconds });
                 }
-                catch
+                catch (Exception exception)
                 {
-                    if (PerfTrace.Enabled) PerfTrace.Write("server.cancel_drop", new { request.CorrelationId, id });
+                    if (PerfTrace.Enabled) PerfTrace.Write("server.cancel_drop", new { request.CorrelationId, id, exception = exception.ToString() });
                     await DropSessionAsync(session).ConfigureAwait(false);
                     return new PreviewRunResult(-12, await session.ReadLogAsync(logTask).ConfigureAwait(false), true) { OutputStartApplied = outputStartApplied };
                 }
@@ -216,6 +218,7 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
         catch (PreviewServerNotSupportedException) { throw; }
         catch (Exception exception)
         {
+            if (PerfTrace.Enabled) PerfTrace.Write("server.error", new { stage = "request", exception = exception.ToString() });
             if (session != null) await DropSessionAsync(session).ConfigureAwait(false);
             string diagnostics = requestLog == null ? "" : await session!.ReadLogAsync(requestLog).ConfigureAwait(false);
             throw new PreviewBackendException(CoreText.ServerRequestFailed, diagnostics, exception);
@@ -345,6 +348,7 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
         }
         catch (Exception exception)
         {
+            if (PerfTrace.Enabled) PerfTrace.Write("server.error", new { stage = "handshake", exception = exception.ToString() });
             await DropSessionAsync(session).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed, exception);
@@ -579,14 +583,22 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
             bool exited = false;
             if (graceful && !_forceStop.Task.IsCompleted)
             {
+                // quitが全期限を使うと回収の成否が実行順に依存するため、回収の時間を残す。
+                var quitDeadline = new CleanupDeadline(_clock, TimeSpan.FromTicks(timeout.Ticks / 2));
+                TimeSpan QuitRemaining()
+                {
+                    TimeSpan quit = quitDeadline.Remaining;
+                    TimeSpan total = deadline.Remaining;
+                    return quit < total ? quit : total;
+                }
                 Stage("quit_begin");
                 try
                 {
-                    await SendAsync(new { cmd = "quit" }, deadline.Remaining).ConfigureAwait(false);
+                    await SendAsync(new { cmd = "quit" }, QuitRemaining()).ConfigureAwait(false);
                     Stage("quit_sent");
                     Task exit = Process.WaitForExitAsync();
                     Task first = await Task.WhenAny(exit, _forceStop.Task)
-                        .WaitAsync(deadline.Remaining, _clock).ConfigureAwait(false);
+                        .WaitAsync(QuitRemaining(), _clock).ConfigureAwait(false);
                     if (first == exit) { await exit.ConfigureAwait(false); exited = true; }
                     else ProcessSupport.Observe(exit);
                 }

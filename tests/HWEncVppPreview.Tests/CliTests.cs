@@ -12,11 +12,8 @@ public sealed class CliTests
 {
     private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
-    [Theory]
-    [InlineData("oneshot", "oneshot")]
-    [InlineData("server", "server")]
-    [InlineData("auto", "server")]
-    public async Task ModesProduceSingleJsonAndMatchingDumps(string mode, string actual)
+    [Fact]
+    public async Task ServerProducesSingleJsonAndMatchingDumps()
     {
         string directory = Path.Combine(Path.GetTempPath(), $"viewer-cli-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
@@ -24,13 +21,12 @@ public sealed class CliTests
         string y4m = Path.Combine(directory, "interval.y4m");
         try
         {
-            var run = await RunProcessAsync(Args("--mode", mode, "--dump", raw, "--dump-y4m", y4m,
+            var run = await RunProcessAsync(Args("--dump", raw, "--dump-y4m", y4m,
                 "--vpp", "--vpp-nlmeans sigma=0.1"));
             Assert.Equal(0, run.ExitCode);
             using var json = ParseSingleLine(run.Output);
             var root = json.RootElement;
             Assert.Equal(0, root.GetProperty("rc").GetInt32());
-            Assert.Equal(actual, root.GetProperty("mode").GetString());
             Assert.Equal(3, root.GetProperty("selectedIndex").GetInt32());
             Assert.Equal(0.1, root.GetProperty("selectedXts").GetDouble(), 7);
             Assert.False(root.GetProperty("targetNotReached").GetBoolean());
@@ -107,44 +103,39 @@ public sealed class CliTests
     [Fact]
     public async Task PreviewEncoderErrorReturnsExitOneWithDiagnostics()
     {
-        var run = await RunProcessAsync(Args("--mode", "oneshot", "--vpp", "--fake-rc 19"));
+        var run = await RunProcessAsync(Args("--vpp", "--fake-rc 19"));
         Assert.Equal(1, run.ExitCode);
         using var json = ParseSingleLine(run.Output);
         Assert.Equal(19, json.RootElement.GetProperty("rc").GetInt32());
-        Assert.Equal("oneshot", json.RootElement.GetProperty("mode").GetString());
         Assert.Contains("FAKE requested rc=19", json.RootElement.GetProperty("stderrTail").GetString());
         Assert.Equal(7, json.RootElement.GetProperty("frameCount").GetInt32());
     }
 
     [Fact]
-    public async Task ProbeTimeoutUsesFakeClockAndReturnsExitThree()
+    public void ProbeTimeoutIsReportedAsExitThree()
     {
-        var clock = new ProbeStartClock();
-        using var output = new StringWriter(CultureInfo.InvariantCulture);
-        var run = CliProgram.RunAsync(Args("--mode", "oneshot", "--input-args", "--fake-hang-after 0"), output, clock);
-        // help取得後に入力検査のタイマーが登録されるまで待ち、登録前Advanceとの競合を避ける。
-        await clock.ProbeTimerRegistered.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromSeconds(31));
-        Assert.Equal(3, await run.WaitWithDiagnosticsAsync(SafetyTimeout));
-        using var json = ParseSingleLine(output.ToString());
+        var result = new CliProgram.CliResult();
+        CliProgram.ApplyUnexpectedFailure(result, new InputProbeTimeoutException("タイムアウト", "入力診断"));
+        string text = JsonSerializer.Serialize(result, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        using var json = ParseSingleLine(text);
+        Assert.Equal(3, result.ExitCode);
         Assert.Equal(3, json.RootElement.GetProperty("rc").GetInt32());
         Assert.True(json.RootElement.GetProperty("timedOut").GetBoolean());
         Assert.Contains("タイムアウト", json.RootElement.GetProperty("error").GetString());
+        Assert.Equal("入力診断", json.RootElement.GetProperty("stderrTail").GetString());
     }
 
     [Fact]
-    public async Task ServerOnlyControllerDoesNotUseFallback()
+    public async Task UnsupportedServerReportsFailure()
     {
         var unsupported = new UnsupportedBackend();
-        var fallback = new UnsupportedBackend();
-        await using var controller = new PreviewController(unsupported, fallback, debounce: TimeSpan.Zero, enableFallback: false);
+        await using var controller = new PreviewController(unsupported, debounce: TimeSpan.Zero);
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(new PreviewRequest { EncoderPath = "fake", InputFile = "input", Fps = 30 });
         await controller.WaitForIdleAsync();
         Assert.IsType<PreviewServerNotSupportedException>(failure!.Exception);
         Assert.Equal(1, unsupported.Calls);
-        Assert.Equal(0, fallback.Calls);
     }
 
     [Theory]
@@ -155,7 +146,7 @@ public sealed class CliTests
         string path = Path.Combine(Path.GetTempPath(), $"viewer-cli-physical-{Guid.NewGuid():N}.y4m");
         try
         {
-            var run = await RunProcessAsync(Args("--mode", "oneshot", "--time", "10", "--pre-margin", "2",
+            var run = await RunProcessAsync(Args("--time", "10", "--pre-margin", "2",
                 "--post-margin", "1", "--dump-y4m", path, "--vpp", filter), capabilities: true);
             Assert.Equal(0, run.ExitCode);
             using var json = ParseSingleLine(run.Output);
@@ -181,7 +172,7 @@ public sealed class CliTests
         string path = Path.Combine(Path.GetTempPath(), $"viewer-cli-replay-{Guid.NewGuid():N}.y4m");
         try
         {
-            var run = await RunProcessAsync(Args("--mode", "oneshot", "--time", "10", "--pre-margin", "2",
+            var run = await RunProcessAsync(Args("--time", "10", "--pre-margin", "2",
                 "--post-margin", "1", "--input-args", "--avhw " + anomaly + " 95 --fake-origin-seconds "
                     + origin.ToString(CultureInfo.InvariantCulture), "--dump-y4m", path), capabilities: true);
             Assert.Equal(0, run.ExitCode);
@@ -205,24 +196,21 @@ public sealed class CliTests
     }
 
     [Theory]
-    [InlineData("oneshot", "", 2, 7, "QSVEnc")]
-    [InlineData("server", "", 0, 9, "QSVEnc")]
-    [InlineData("oneshot", "--vpp-tweak brightness=0.1", 2, 7, "QSVEnc")]
-    [InlineData("server", "--vpp-tweak brightness=0.1", 0, 9, "QSVEnc")]
-    [InlineData("oneshot", "--vpp-kfm", 2, 7, "QSVEnc")]
-    [InlineData("server", "--vpp-kfm", 2, 7, "QSVEnc")]
-    [InlineData("server", "", 0, 9, "VCEEnc")]
-    [InlineData("server", "", 0, 9, "rkmppenc")]
-    [InlineData("server", "", 0, 9, "NVEnc")]
-    [InlineData("server", "", 0, 9, "")]
-    public async Task JsonReportsActualWarmupAndSafeStartForSpatialAndTemporalRequests(string mode, string filter, double warmup, double seek, string encoder)
+    [InlineData("", 0, 9, "QSVEnc")]
+    [InlineData("--vpp-tweak brightness=0.1", 0, 9, "QSVEnc")]
+    [InlineData("--vpp-kfm", 2, 7, "QSVEnc")]
+    [InlineData("", 0, 9, "VCEEnc")]
+    [InlineData("", 0, 9, "rkmppenc")]
+    [InlineData("", 0, 9, "NVEnc")]
+    [InlineData("", 0, 9, "")]
+    public async Task JsonReportsActualWarmupAndSafeStartForSpatialAndTemporalRequests(string filter, double warmup, double seek, string encoder)
     {
-        var args = Args("--mode", mode, "--time", "10", "--pre-margin", "2", "--post-margin", "1",
+        var args = Args("--time", "10", "--pre-margin", "2", "--post-margin", "1",
             "--input-args", "--avhw");
         if (filter.Length > 0) args = args.Concat(new[] { "--vpp", filter }).ToArray();
         var run = await RunProcessAsync(args, capabilities: true, readyEncoder: encoder);
         Assert.True(run.ExitCode == 0,
-            $"CLI終了コードが0ではありません: rc={run.ExitCode}, mode={mode}, encoder={encoder}, filter={filter}\nstdout:\n{run.Output}\nstderr:\n{run.StandardError}");
+            $"CLI終了コードが0ではありません: rc={run.ExitCode}, encoder={encoder}, filter={filter}\nstdout:\n{run.Output}\nstderr:\n{run.StandardError}");
         using var json = ParseSingleLine(run.Output);
         var root = json.RootElement;
         Assert.True(root.GetProperty("trustedAbsolute").GetBoolean());
@@ -290,20 +278,6 @@ public sealed class CliTests
         public ValueTask AbortAsync() => ValueTask.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
-    private sealed class ProbeStartClock : TimeProvider
-    {
-        private readonly FakeTimeProvider _inner = new();
-        public TaskCompletionSource ProbeTimerRegistered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public override long TimestampFrequency => _inner.TimestampFrequency;
-        public override DateTimeOffset GetUtcNow() => _inner.GetUtcNow();
-        public override long GetTimestamp() => _inner.GetTimestamp();
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            var timer = _inner.CreateTimer(callback, state, dueTime, period);
-            if (dueTime == TimeSpan.FromSeconds(30)) ProbeTimerRegistered.TrySetResult();
-            return timer;
-        }
-        public void Advance(TimeSpan delta) => _inner.Advance(delta);
-    }
+
 
 }

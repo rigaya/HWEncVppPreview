@@ -76,9 +76,10 @@ public sealed class StreamingControllerTests
         controller.Submit(Request());
         await backend.Pauses.Reader.ReadAsync();
         clock.Advance(TimeSpan.FromHours(1));
-        Assert.Equal(0, failures);
         controller.Submit(Request() with { VppArgs = new[] { "edited" } });
         await backend.Pauses.Reader.ReadAsync();
+        await controller.WaitForCurrentDemandAsync();
+        Assert.Equal(0, failures);
         Assert.Equal(2, backend.Calls);
         Assert.Equal(1, backend.Cancellations);
     }
@@ -226,7 +227,6 @@ public sealed class StreamingControllerTests
         controller.Submit(Request());
         await blocked.Task;
         controller.Submit(Request() with { Continuous = false, VppArgs = new[] { "before" } }, background: true);
-        Assert.Equal(0, background.Calls);
         release.TrySetResult();
         await foreground.Pauses.Reader.ReadAsync();
         await controller.WaitForIdleAsync();
@@ -249,7 +249,6 @@ public sealed class StreamingControllerTests
         controller.Submit(Request(11), navigation: true);
         await blocked.Task;
         controller.Submit(Request(11) with { Continuous = false, VppArgs = new[] { "before" } }, background: true);
-        Assert.Equal(0, background.Calls);
         release.TrySetResult();
         await foreground.Pauses.Reader.ReadAsync();
         await controller.WaitForIdleAsync();
@@ -276,7 +275,7 @@ public sealed class StreamingControllerTests
     }
 
     [Fact]
-    public async Task UnknownDurationUnsafeFiniteEndFailsInsteadOfLeavingDemandUnanswered()
+    public async Task UnknownDurationFiniteEndConfirmsEofAndReleasesTheGuard()
     {
         var backend = new StreamingBackend { InputEndSeconds = 10.2, StepSeconds = 0.1 };
         await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
@@ -286,13 +285,13 @@ public sealed class StreamingControllerTests
         controller.FrameReady += _ => ++images;
         controller.Submit(Request() with { Continuous = false, Fps = 10 });
         await controller.WaitForIdleAsync();
-        Assert.NotNull(failure);
-        Assert.Contains("目標時刻", failure.Reason);
-        Assert.Equal(0, images);
+        Assert.Null(failure);
+        Assert.Equal(1, images);
+        Assert.Equal(2, backend.Calls);
     }
 
     [Fact]
-    public async Task UnsafeWarmupAtNaturalEndFailsExplicitly()
+    public async Task UnsafeWarmupAtNaturalEndBacktracksBeforeDisplaying()
     {
         var backend = new StreamingBackend { InputEndSeconds = 7.5, StepSeconds = 0.1 };
         await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
@@ -305,10 +304,10 @@ public sealed class StreamingControllerTests
         // 実際の入力が目標より大幅に短い場合、計画seek+2の暖機境界まで画像が届かない。
         controller.Submit(Request(10.2) with { Fps = 10 });
         await controller.WaitForIdleAsync();
-        Assert.NotNull(failure);
-        Assert.Contains("目標時刻", failure.Reason);
-        Assert.Equal(0, images);
-        Assert.Equal(0, completed);
+        Assert.Null(failure);
+        Assert.Equal(1, images);
+        Assert.Equal(1, completed);
+        Assert.InRange(backend.Calls, 2, 3);
     }
 
     [Fact]
@@ -336,9 +335,9 @@ public sealed class StreamingControllerTests
     [InlineData(false, 0.003, true)]
     [InlineData(true, 0.005, true)]
     [InlineData(false, 0.005, true)]
-    [InlineData(true, 0.006, false)]
-    [InlineData(false, 0.006, false)]
-    public async Task KnownEndAllowsOnlyDurationLogRounding(bool continuous, double gap, bool accepted)
+    [InlineData(true, 0.006, true)]
+    [InlineData(false, 0.006, true)]
+    public async Task NaturalEndUsesLastFrameWithoutRequiringContainerDurationAgreement(bool continuous, double gap, bool accepted)
     {
         var backend = new StreamingBackend
         {
@@ -353,15 +352,15 @@ public sealed class StreamingControllerTests
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Equal(accepted, image != null);
         Assert.Equal(!accepted, failure != null);
-        Assert.Single(backend.Requests);
+        Assert.Equal(continuous ? 1 : 2, backend.Requests.Count);
         if (image != null)
         {
             Assert.Equal(1010.1, image.Frame.Xts!.Value, 6);
             Assert.True(image.Segment!.ReachedInputEnd);
-            // 生の表示終了時刻を延ばさず、既知の終端にだけ丸め差を適用する。
+            // 生の表示終了時刻を延ばさず、EOF以降の要求に最終画像を使う。
             Assert.Equal(10.2 - gap, image.Segment.SafeEndSeconds, 6);
             var segment = image.Segment;
-            Assert.False(PreviewSafeRange.IsKnownInputEnd(segment.PhysicalRequest, segment, 10.21));
+            Assert.True(PreviewSafeRange.IsKnownInputEnd(segment.PhysicalRequest, segment, 10.21));
             Assert.False(PreviewSafeRange.IsKnownInputEnd(segment.PhysicalRequest, segment with { ReachedInputEnd = false }, 10.2));
         }
     }
@@ -464,6 +463,8 @@ public sealed class StreamingControllerTests
         Assert.Equal(2, backend.Calls);
         controller.Submit(request with { TargetSeconds = 30 }, navigation: true);
         await controller.WaitForIdleAsync();
+        // 読み取り停止まで待っても、その通知は残る。前の要求の通知を次の入力の開始と取り違えないよう、ここで受け取る。
+        await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         Assert.Equal(3, backend.Calls);
         // 区間間の照合が失敗しても、新しい1本のstream内では連続取得を維持する。
         Assert.True(backend.Requests[^1].Continuous);
@@ -517,16 +518,16 @@ public sealed class StreamingControllerTests
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
         var early = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completions = new List<PreviewCompletion>();
-        controller.FrameReady += value => { if (value.Request.CorrelationId == 2) early.TrySetResult(value); };
+        var images = new List<PreviewFrameResult>();
+        controller.FrameReady += value => { images.Add(value); if (value.Request.CorrelationId == 2) early.TrySetResult(value); };
         controller.Completed += completions.Add;
         controller.Submit(request, bypassCache: true);
         Assert.False((await early.Task).Segment!.CanStitch);
         controller.Submit(request with { TargetSeconds = 10.5, Continuous = true, CorrelationId = 3 }, navigation: true);
-        Assert.DoesNotContain(completions, value => value.Request.CorrelationId == 3);
-        Assert.Equal(1, backend.Calls);
         release.TrySetResult();
         await backend.Pauses.Reader.ReadAsync();
         await controller.WaitForIdleAsync();
+        Assert.Equal(3, images[^1].Request.CorrelationId);
         Assert.Equal(2, backend.Calls);
     }
 

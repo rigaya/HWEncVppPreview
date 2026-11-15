@@ -8,7 +8,7 @@ public sealed class SafeRangeQuantizationTests
     public async Task RoundedDecimateTailKeepsExactTargetSelectable()
     {
         var backend = new QuantizedBackend();
-        await using var controller = new PreviewController(backend, backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
         PreviewFrameResult? selected = null;
         PreviewCompletion? completed = null;
         PreviewFailure? failed = null;
@@ -131,7 +131,7 @@ public sealed class SafeRangeQuantizationTests
             new Y4mFrame(header, Math.Round(origin + 2 + index / fps, 6, MidpointRounding.AwayFromZero),
                 durations ? Math.Round(1 / fps, 6, MidpointRounding.AwayFromZero) : null, new byte[6])).ToArray();
         var backend = new QuantizedBackend(frames);
-        await using var controller = new PreviewController(backend, backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
         PreviewFrameResult? selected = null;
         PreviewFailure? failed = null;
         controller.FrameReady += value => selected = value;
@@ -147,21 +147,26 @@ public sealed class SafeRangeQuantizationTests
     }
 
     [Fact]
-    public async Task TailShortfallBeyondToleranceStillFails()
+    public async Task TailShortfallBeyondToleranceRequiresNaturalEndConfirmation()
     {
         var frames = new QuantizedBackend().Frames.ToArray();
         var last = frames[^1];
         frames[^1] = new(last.Header, 5.45833, null, last.Data);
         var backend = new QuantizedBackend(frames);
-        await using var controller = new PreviewController(backend, backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
         PreviewFrameResult? selected = null;
         PreviewFailure? failed = null;
         controller.FrameReady += value => selected = value;
         controller.Failed += value => failed = value;
         controller.Submit(Request());
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        Assert.Null(selected);
-        Assert.NotNull(failed);
+        Assert.NotNull(selected);
+        Assert.Null(failed);
+        Assert.True(selected.Segment!.ReachedInputEnd);
+        // 許容幅は広げない。有限窓のままなら従来どおり不足と判定する。
+        var finite = selected.Segment with { ReachedInputEnd = false,
+            SafeEndSeconds = selected.Segment.SafeEndSeconds - PreviewByteWindow.TailGuardSeconds };
+        Assert.True(PreviewWindowShortfall.FromSegment(Request(), finite)!.MissingTail);
     }
 
     [Fact]
@@ -173,7 +178,7 @@ public sealed class SafeRangeQuantizationTests
         var frames = timestamps.Select((timestamp, index) => new Y4mFrame(header, timestamp,
             durations[index], Enumerable.Repeat((byte)index, 6).ToArray())).ToArray();
         var backend = new QuantizedBackend(frames);
-        await using var controller = new PreviewController(backend, backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
         PreviewFrameResult? selected = null;
         controller.FrameReady += value => selected = value;
         controller.Submit(Request());

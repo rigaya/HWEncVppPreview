@@ -36,11 +36,15 @@
 
 実行ファイルに含まれるnativeライブラリは、初回起動時にWindowsでは`%TEMP%\.net`、Linuxでは`~/.net`へ展開されます。
 
-展開先は`DOTNET_BUNDLE_EXTRACT_BASE_DIR`で変更できます。書き込み可能な場所を指定し、Linuxでは共有ライブラリを読み込めない`noexec`の場所を避けてください。
+展開先は`DOTNET_BUNDLE_EXTRACT_BASE_DIR`で変更できます。書き込み可能な場所を指定し、Linuxでは共有ライブラリを読み込めない`noexec`の場所を避けてください。指定した場合、古い展開先の自動削除は行いません。
 
 ```bash
 DOTNET_BUNDLE_EXTRACT_BASE_DIR="$HOME/.cache/HWEncVppPreview/native" ./HWEncVppPreview
 ```
+
+## 注意事項
+
+raw elementary stream系のファイルには対応しません。
 
 ## ビルド方法
 

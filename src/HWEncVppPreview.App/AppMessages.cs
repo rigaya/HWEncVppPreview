@@ -6,9 +6,8 @@ namespace HWEncVppPreview.App;
 public static class AppMessages
 {
     private static string T(string japanese, string english) => UiLanguage.Current == "ja" ? japanese : english;
+    public static string ExceptionDetails => CoreText.ExceptionDetails;
     public static string HdrAsSdr => T("HDR (SDRとして表示)", "HDR (shown as SDR)");
-    public static string OneShot => T("都度起動", "One-shot");
-    public static string Server => T("常駐", "Server");
     public static string SaveSettingsFailed => T("設定を保存できませんでした", "Could not save settings");
     public static string NoDisplayableFrames => T("表示できるフレームがありません", "No displayable frames");
     public static string DoneTargetNotReached => T("完了（目標時刻に届かなかったため最終フレームを表示）", "Done (last frame; target not reached)");
@@ -34,5 +33,4 @@ public static class AppMessages
     public static string SchemaUnavailable => T("helpのスキーマを取得していません。テキストで編集してください。", "Help schema is unavailable. Edit the text instead.");
     public static string Elapsed(double seconds) => $"{seconds:0.00}" + T("秒", " s");
     public static string EncoderInfoFailed(int exitCode) => T("エンコーダの情報取得に失敗しました: ", "Could not read encoder info: ") + exitCode;
-    public static string BackendMode(string mode) => mode switch { "oneshot" => OneShot, "server" => Server, _ => mode };
 }

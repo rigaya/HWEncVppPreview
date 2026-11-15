@@ -7,7 +7,7 @@ public sealed class WindowRecoveryTests
     public async Task LateKeyAtThreeSecondsRecoversBeforeFromTheInputStart()
     {
         var backend=new WindowBackend(true);
-        await using var controller=new PreviewController(backend,backend,cache:new FrameCache(0),debounce:TimeSpan.Zero);
+        await using var controller=new PreviewController(backend,cache:new FrameCache(0),debounce:TimeSpan.Zero);
         PreviewFrameResult? image=null;PreviewFailure? failure=null;
         controller.FrameReady+=value=>image=value;controller.Failed+=value=>failure=value;
         controller.Submit(Request(3,24000.0/1001),background:true);
@@ -18,10 +18,10 @@ public sealed class WindowRecoveryTests
         Assert.Equal(1003.003,image.Frame.Xts!.Value,6);
     }
     [Fact]
-    public async Task LeadingFramesOnlyShortenTheTailAndExpandOnlyTheTail()
+    public async Task LeadingFramesConfirmTheTailWithoutChangingSeek()
     {
         var backend=new WindowBackend(false);
-        await using var controller=new PreviewController(backend,backend,cache:new FrameCache(0),debounce:TimeSpan.Zero);
+        await using var controller=new PreviewController(backend,cache:new FrameCache(0),debounce:TimeSpan.Zero);
         PreviewFrameResult? image=null;PreviewFailure? failure=null;
         controller.FrameReady+=value=>image=value;controller.Failed+=value=>failure=value;
         controller.Submit(Request(472.583,60000.0/1001) with {PreMarginSeconds=5});
@@ -29,14 +29,14 @@ public sealed class WindowRecoveryTests
         Assert.Null(failure);Assert.NotNull(image);
         Assert.Equal(2,backend.Requests.Count);
         Assert.Equal(CommandBuilder.Plan(backend.Requests[0]).SeekSeconds,CommandBuilder.Plan(backend.Requests[1]).SeekSeconds);
-        Assert.True(backend.Requests[1].PostMarginSeconds>backend.Requests[0].PostMarginSeconds);
+        Assert.True(backend.Requests[1].Continuous);
         Assert.Equal(Math.Round(1467.667189 + 295 * 1001.0 / 60000, 6), image.Frame.Xts!.Value);
     }
     [Fact]
     public async Task StreamLandingAfterTargetRecoversWithoutChangingItsTimestampMode()
     {
         var backend = new SyntheticBackend((request, call) => call == 1 ? request.TargetSeconds + 0.5 : CommandBuilder.Plan(request).SeekSeconds ?? 0);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewFrameResult? image = null;
         PreviewFailure? failure = null;
         controller.FrameReady += value => image = value;
@@ -58,7 +58,7 @@ public sealed class WindowRecoveryTests
     public async Task NoProgressStopsAndPreservesStructuredShortfall(bool background)
     {
         var backend = new SyntheticBackend((request, call) => 10.5);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request(10, 10), background: background);
@@ -74,7 +74,7 @@ public sealed class WindowRecoveryTests
     public async Task NoEarlierDataAtInputStartFailsWithoutRepeatingTheSameWindow()
     {
         var backend = new SyntheticBackend((request, call) => 0.5);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request(0.1, 10));
@@ -101,7 +101,7 @@ public sealed class WindowRecoveryTests
     public async Task TheSameLateKeyCanBeCrossedByTheSecondBoundedHeadExpansion()
     {
         var backend = new SyntheticBackend((request, call) => Math.Ceiling((CommandBuilder.Plan(request).SeekSeconds ?? 0) / 10) * 10);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewFrameResult? image = null;
         PreviewFailure? failure = null;
         controller.FrameReady += value => image = value;
@@ -119,7 +119,7 @@ public sealed class WindowRecoveryTests
     public async Task ANewEditCancelsTheOldRecoveryAndNeverPublishesItsFrame()
     {
         var backend = new BlockingRecoveryBackend();
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var selected = new List<double>();
         controller.FrameReady += value => selected.Add(value.Request.TargetSeconds);
         controller.Submit(Request(10, 10) with { PreMarginSeconds = 5 });
@@ -134,7 +134,7 @@ public sealed class WindowRecoveryTests
     public async Task AContinuouslyImprovingButStillMissingHeadStopsAtTheRetryLimit()
     {
         var backend = new SyntheticBackend((request, call) => request.TargetSeconds + 0.5 - call * 0.1);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request(100, 10));
@@ -164,7 +164,7 @@ public sealed class WindowRecoveryTests
             if (request.TargetSeconds == 10 && ++_oldRuns == 2)
             {
                 RecoveryStarted.TrySetResult();
-                try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
+                try { await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(cancellationToken); }
                 catch (OperationCanceledException) { Cancelled = true; throw; }
             }
             double seek = CommandBuilder.Plan(request).SeekSeconds ?? 0;
@@ -182,7 +182,7 @@ public sealed class WindowRecoveryTests
     public async Task SafeCandidateDoesNotPublishBeforeTheTargetItselfBecomesSafe()
     {
         var backend = new NearTailBackend();
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         int images = 0;
         PreviewFailure? failure = null;
         controller.FrameReady += _ => ++images;

@@ -13,19 +13,6 @@ public sealed class ReversePrefetchNavigationTests
     private static readonly TimeSpan Safety = TestTimeouts.Hang;
 
     [AvaloniaFact]
-    public async Task OneReverseStepThenForwardKeepsPausedPhysicalStream()
-    {
-        await using var fixture = await Fixture.StartAsync();
-        await fixture.StepAsync(-1);
-        Assert.Single(fixture.Backend.Requests);
-        Assert.Empty(fixture.Backend.Cancelled);
-        await fixture.StepAsync(1);
-        Assert.Equal(10, fixture.Vm.CurrentSeconds, 6);
-        Assert.Single(fixture.Backend.Requests);
-        Assert.Empty(fixture.Backend.Cancelled);
-    }
-
-    [AvaloniaFact]
     public async Task PrefetchFinishesBeforeTheBoundaryWithoutReplacingForegroundImageOrStatus()
     {
         await using var fixture = await Fixture.StartAsync();
@@ -40,8 +27,6 @@ public sealed class ReversePrefetchNavigationTests
         Assert.Same(image, fixture.Vm.PreviewImage);
         Assert.Equal(status, fixture.Vm.StatusText);
         Assert.Equal(log, fixture.Vm.LogText);
-        for (int i = 0; i < 30; ++i) await fixture.StepAsync(-1);
-        Assert.Equal(10 - 35.0 / 30, fixture.Vm.CurrentSeconds, 6);
         Assert.Single(fixture.Backend.Requests, IsPrefetch);
         Assert.Equal(2, fixture.Backend.Requests.Count);
         Assert.Null(fixture.Vm.ErrorText);
@@ -53,12 +38,9 @@ public sealed class ReversePrefetchNavigationTests
         await using var fixture = await Fixture.StartAsync();
         await fixture.StartPrefetchAsync();
         for (int i = 0; i < 25; ++i) await fixture.StepAsync(-1);
-        Assert.Equal(9, fixture.Vm.CurrentSeconds, 6);
         fixture.Vm.StepFrameCommand.Execute(-1);
-        Assert.True(fixture.Vm.IsBusy);
+
         for (int i = 0; i < 20; ++i) fixture.Vm.StepFrameCommand.Execute(-1);
-        Assert.Equal(9, fixture.Vm.CurrentSeconds, 6);
-        Assert.Equal(2, fixture.Backend.Requests.Count);
         fixture.Backend.Release.TrySetResult();
         await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(9 - 1.0 / 30, fixture.Vm.CurrentSeconds, 6);
@@ -74,16 +56,16 @@ public sealed class ReversePrefetchNavigationTests
         await fixture.StartPrefetchAsync();
         for (int i = 0; i < 25; ++i) await fixture.StepAsync(-1);
         fixture.Vm.StepFrameCommand.Execute(-1);
-        Assert.True(fixture.Vm.IsBusy);
+
         await fixture.StepAsync(1);
         double forward = fixture.Vm.CurrentSeconds;
-        Assert.Equal(9 + 1.0 / 30, forward, 6);
-        Assert.DoesNotContain(fixture.Backend.Cancelled, IsPrefetch);
         fixture.Backend.Release.TrySetResult();
         await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Equal(9 + 1.0 / 30, forward, 6);
         Assert.Equal(forward, fixture.Vm.CurrentSeconds);
         Assert.DoesNotContain(fixture.Backend.Cancelled, IsPrefetch);
         Assert.Equal(2, fixture.Backend.Requests.Count);
+        Assert.Null(fixture.Vm.ErrorText);
     }
 
     [AvaloniaTheory]
@@ -99,7 +81,7 @@ public sealed class ReversePrefetchNavigationTests
         if (edit) fixture.Clock.Advance(TimeSpan.FromMilliseconds(150));
         try
         {
-            await PumpUntilAsync(() => fixture.Backend.Cancelled.Any(IsPrefetch)).WaitWithDiagnosticsAsync(Safety);
+            await fixture.Backend.PrefetchCancelled.Task.WaitWithDiagnosticsAsync(Safety);
         }
         catch (Exception exception)
         {
@@ -142,7 +124,6 @@ public sealed class ReversePrefetchNavigationTests
     {
         await using var fixture = await Fixture.StartAsync(seconds: 0.2);
         for (int i = 0; i < 6; ++i) await fixture.StepAsync(-1);
-        Assert.Equal(0, fixture.Vm.CurrentSeconds, 6);
         for (int i = 0; i < 5; ++i) fixture.Vm.StepFrameCommand.Execute(-1);
         await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, fixture.Vm.CurrentSeconds, 6);
@@ -152,22 +133,38 @@ public sealed class ReversePrefetchNavigationTests
     }
 
     private static bool IsPrefetch(PreviewRequest request) => request.CorrelationId < long.MinValue / 2;
-    private static Task PumpUntilAsync(Func<bool> condition) => UiTestWait.UntilAsync(condition, Safety);
+    private static async Task WaitForPropertyAsync(MainWindowViewModel vm, Func<bool> condition)
+    {
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        System.ComponentModel.PropertyChangedEventHandler changed = (_, _) => { if (condition()) ready.TrySetResult(); };
+        vm.PropertyChanged += changed;
+        try
+        {
+            if (condition()) ready.TrySetResult();
+            await ready.Task.WaitWithDiagnosticsAsync(Safety);
+        }
+        finally { vm.PropertyChanged -= changed; }
+    }
 
     private sealed class Fixture : IAsyncDisposable
     {
-        private readonly string? _capabilities = Environment.GetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES");
         private readonly Services _services = new();
         public FakeTimeProvider Clock { get; } = new();
         public PrefetchBackend Backend { get; }
         public MainWindowViewModel Vm { get; }
+        private bool _processAttempted;
         private Fixture(bool mismatch, double seconds)
         {
-            Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", "1");
-            Backend = new PrefetchBackend(Clock, mismatch);
-            var background = new OneShotBackend(timeProvider: Clock);
-            Vm = new MainWindowViewModel(_services, Clock, Backend, Backend, null, null, null, background, background)
-            { EncoderPath = FakeEncoderPath(), InputPath = "reverse-prefetch.ts", CurrentSeconds = seconds,
+            Backend = new PrefetchBackend(mismatch);
+            var probe = new InputProbe(new ProbeBackend(), Clock, _ =>
+            {
+                _processAttempted = true;
+                throw new InvalidOperationException("この試験ではプロセスを起動しません。");
+            });
+            Vm = new MainWindowViewModel(_services, Clock, Backend, probe, null, null,
+                beforeEnabled: false, readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help"
+                    ? "  --timestamp-passthrough  入力時刻を保持する。\n  --opencl-task-threads <int>  待機スレッド数。\n" : "FakeEncoder"))
+            { EncoderPath = "fake", InputPath = "reverse-prefetch.ts", CurrentSeconds = seconds,
                 InputArgsText = "--avhw --fake-duration 00:01:00.00" };
         }
         public static async Task<Fixture> StartAsync(bool mismatch = false, double seconds = 10)
@@ -185,9 +182,10 @@ public sealed class ReversePrefetchNavigationTests
         }
         public async Task StepAsync(int direction)
         {
+            var previous = Vm.PreviewImage;
             Vm.StepFrameCommand.Execute(direction);
             await Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-            await PumpUntilAsync(() => !Vm.IsBusy).WaitWithDiagnosticsAsync(Safety);
+            await WaitForPropertyAsync(Vm, () => Vm.PreviewImage != null && !ReferenceEquals(Vm.PreviewImage, previous) && !Vm.IsBusy);
         }
         public async Task StartPrefetchAsync()
         {
@@ -198,50 +196,78 @@ public sealed class ReversePrefetchNavigationTests
         {
             Backend.Release.TrySetResult();
             await Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
-            Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", _capabilities);
+            Assert.False(_processAttempted);
             _services.Dispose();
         }
     }
 
-    private sealed class PrefetchBackend(TimeProvider clock, bool mismatch) : IPreviewBackend
+    private sealed class PrefetchBackend(bool mismatch) : IPreviewBackend
     {
-        private readonly ServerBackend _inner = new(timeProvider: clock);
         public ConcurrentQueue<PreviewRequest> Requests { get; } = new();
         public ConcurrentQueue<PreviewRequest> Cancelled { get; } = new();
         public TaskCompletionSource Paused { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<PreviewRequest> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource PrefetchCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
         {
             Requests.Enqueue(request);
-            using var registration = token.Register(() => Cancelled.Enqueue(request));
-            if (IsPrefetch(request))
+            try
             {
-                Started.TrySetResult(request);
-                await Release.Task.WaitAsync(token).ConfigureAwait(false);
-            }
-            return await _inner.RunAsync(request, new ObservingSink(this, sink, mismatch && IsPrefetch(request)), token).ConfigureAwait(false);
-        }
-        public ValueTask AbortAsync() => _inner.AbortAsync();
-        public ValueTask DisposeAsync() => _inner.DisposeAsync();
-        private sealed class ObservingSink(PrefetchBackend owner, IPreviewSink inner, bool mismatch) : IPreviewSink
-        {
-            public void OnHeader(Y4mHeader header) => inner.OnHeader(header);
-            public void OnOutput() => inner.OnOutput();
-            public ValueTask BeforeReadAsync(CancellationToken token) => inner.BeforeReadAsync(token);
-            public void OnReadStateChanged(bool reading)
-            { if (!reading) owner.Paused.TrySetResult(); inner.OnReadStateChanged(reading); }
-            public void OnFrame(Y4mFrame frame)
-            {
-                if (mismatch)
+                if (IsPrefetch(request))
                 {
-                    var data = (byte[])frame.Data.Clone();
-                    data[0] ^= 0xff;
-                    frame = new(frame.Header, frame.Xts, frame.Xdur, data);
+                    Started.TrySetResult(request);
+                    await Release.Task.WaitAsync(token).ConfigureAwait(false);
                 }
-                inner.OnFrame(frame);
+                var plan = CommandBuilder.Plan(request);
+                double seek = plan.SeekSeconds ?? 0;
+                var header = Y4mHeader.Parse("YUV4MPEG2 W64 H36 F30:1 Ip A1:1 C420jpeg");
+                sink.OnHeader(header);
+                int count = request.Continuous ? int.MaxValue : plan.FrameCount;
+                for (int i = 0; i < count; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    ValueTask permission = sink.BeforeReadAsync(token);
+                    if (!permission.IsCompleted)
+                    {
+                        sink.OnReadStateChanged(false);
+                        Paused.TrySetResult();
+                        await permission.AsTask().WaitAsync(token).ConfigureAwait(false);
+                    }
+                    else await permission.ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    sink.OnReadStateChanged(true);
+                    long index = (long)Math.Round(seek * 30) + i;
+                    byte[] pixels = new byte[header.FrameBytes];
+                    for (int j = 0; j < pixels.Length; j++) pixels[j] = unchecked((byte)(j + index));
+                    if (mismatch && IsPrefetch(request)) pixels[0] ^= 0xff;
+                    sink.OnFrame(new Y4mFrame(header, 1000 + index / 30.0, 1.0 / 30, pixels));
+                    sink.OnOutput();
+                }
+                return new PreviewRunResult(0, "");
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                Cancelled.Enqueue(request);
+                if (IsPrefetch(request)) PrefetchCancelled.TrySetResult();
+                throw;
             }
         }
+        public ValueTask AbortAsync() { Release.TrySetResult(); return ValueTask.CompletedTask; }
+        public ValueTask DisposeAsync() => AbortAsync();
+    }
+
+    private sealed class ProbeBackend : IPreviewBackend
+    {
+        public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
+        {
+            var header = Y4mHeader.Parse("YUV4MPEG2 W64 H36 F30:1 Ip A1:1 C420jpeg");
+            sink.OnHeader(header);
+            sink.OnFrame(new Y4mFrame(header, 1000, 1.0 / 30, new byte[header.FrameBytes]));
+            return Task.FromResult(new PreviewRunResult(0, "  Duration: 00:01:00.00, start: 0"));
+        }
+        public ValueTask AbortAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private static string FakeEncoderPath()

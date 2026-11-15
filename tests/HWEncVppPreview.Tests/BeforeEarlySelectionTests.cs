@@ -1,4 +1,6 @@
-﻿using HWEncVppPreview.Core;
+﻿using System.IO.Pipes;
+using System.Text;
+using HWEncVppPreview.Core;
 
 namespace HWEncVppPreview.Tests;
 
@@ -18,7 +20,7 @@ public sealed class BeforeEarlySelectionTests
     public async Task 単調な同一durationはEND前に適格な一枚を通知する()
     {
         var backend = new GatedBackend(new[] { Frame(0), Frame(.5), Frame(1), Frame(1.5) });
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.FrameReady += value => selected.TrySetResult(value);
@@ -55,7 +57,7 @@ public sealed class BeforeEarlySelectionTests
             _ => new[] { Frame(0), Frame(.5), Frame(.5), Frame(1.5) },
         };
         var backend = new GatedBackend(frames);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var images = new System.Collections.Concurrent.ConcurrentQueue<PreviewFrameResult>();
         controller.FrameReady += images.Enqueue;
         try
@@ -75,7 +77,7 @@ public sealed class BeforeEarlySelectionTests
     {
         var tail = Frame(2, 3);
         var backend = new GatedBackend(new[] { Frame(0), Frame(.5), Frame(1), Frame(1.5) }, tail);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         PreviewCompletion? completed = null;
         controller.FrameReady += value => selected.TrySetResult(value);
@@ -94,37 +96,31 @@ public sealed class BeforeEarlySelectionTests
     }
 
     [Fact]
-    public async Task 実Fakeのgateを解放する前に早期表示適格性が届く()
+    public async Task 実Fakeの早期候補が終了後も正しく選ばれる()
     {
         const int GateAfterFrame = 32;
-        string gate = Path.Combine(Path.GetTempPath(), "before-early-" + Guid.NewGuid().ToString("N"));
+        string name = "before-frame-" + Guid.NewGuid().ToString("N");
+        using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await using var backend = new ServerBackend();
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.FrameReady += value => selected.TrySetResult(value);
         controller.Completed += value => completed.TrySetResult(value);
-        try
-        {
-            controller.Submit(Request with { EncoderPath = BackendTests.FakeEncoderPath(), Fps = 30,
-                InputArgs = new[] { "--fake-gate", gate, "--fake-gate-after", GateAfterFrame.ToString(System.Globalization.CultureInfo.InvariantCulture) } },
-                background: true, bypassDebounce: true);
-            var frame = await selected.Task.WaitWithDiagnosticsAsync(Safety);
-            Assert.True(frame.CanDisplayBeforeEnd);
-            Assert.Equal(1001, frame.Frame.Xts!.Value, 6);
-            Assert.True(int.TryParse(frame.Frame.Header.ExtTags["XPID"], out _));
-            Assert.False(completed.Task.IsCompleted);
-            await File.WriteAllTextAsync(gate, "");
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            Assert.Equal(0, (await completed.Task.WaitWithDiagnosticsAsync(Safety)).Result.ExitCode);
-        }
-        finally
-        {
-            // 失敗時もgateを開いてから子を回収し、次の実行へ同期ファイルを残さない。
-            await File.WriteAllTextAsync(gate, "");
-            await controller.DisposeAsync();
-            File.Delete(gate);
-        }
+        controller.Failed += value => completed.TrySetException(new InvalidOperationException(value.Reason + " " + value.Diagnostic));
+        controller.Submit(Request with { EncoderPath = BackendTests.FakeEncoderPath(), Fps = 30,
+            InputArgs = new[] { "--fake-gate-pipe", name, "--fake-gate-after", GateAfterFrame.ToString(System.Globalization.CultureInfo.InvariantCulture) } },
+            background: true, bypassDebounce: true);
+        var frame = await selected.Task.WaitWithDiagnosticsAsync(Safety);
+        await PipeWait.UntilConnectedAsync(pipe, name, completed.Task, Safety);
+        using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+        using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+        Assert.Equal("ready", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Safety));
+        await writer.WriteLineAsync("release");
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Equal(0, (await completed.Task.WaitWithDiagnosticsAsync(Safety)).Result.ExitCode);
+        Assert.True(frame.CanDisplayBeforeEnd);
+        Assert.Equal(1001, frame.Frame.Xts!.Value, 6);
     }
 
     [Theory]
@@ -180,7 +176,7 @@ public sealed class BeforeEarlySelectionTests
         const double BaseDuration = .5;
         var tail = durationChanges ? Frame(2.25, .75) : Frame(2 + BaseDuration * OverBoundaryRatio);
         var backend = new GatedBackend(new[] { Frame(0), Frame(.5), Frame(1), Frame(1.5) }, tail);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.FrameReady += value => selected.TrySetResult(value);
@@ -200,50 +196,10 @@ public sealed class BeforeEarlySelectionTests
         finally { backend.Release.TrySetResult(); }
     }
 
-    [Theory]
-    [InlineData(.0099, true, false)]
-    [InlineData(.0099, true, true)]
-    [InlineData(.0101, false, false)]
-    [InlineData(.0101, false, true)]
-    public async Task 実Fakeの間隔境界をENDgate前に判定する(double ratio, bool eligible, bool noDuration)
-    {
-        const int GateAfterFrame = 64;
-        string gate = Path.Combine(Path.GetTempPath(), "before-jitter-" + Guid.NewGuid().ToString("N"));
-        await using var backend = new ServerBackend();
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
-        var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
-        controller.FrameReady += value => selected.TrySetResult(value);
-        controller.Completed += value => completed.TrySetResult(value);
-        var args = new List<string> { "--fake-gate", gate, "--fake-gate-after", GateAfterFrame.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            "--fake-output-rate", "double", "--fake-timestamp-jitter-ratio", ratio.ToString(System.Globalization.CultureInfo.InvariantCulture) };
-        if (noDuration) args.Add("--fake-no-xdur");
-        try
-        {
-            controller.Submit(Request with { EncoderPath = BackendTests.FakeEncoderPath(), Fps = 30, InputArgs = args },
-                background: true, bypassDebounce: true);
-            var frame = await selected.Task.WaitWithDiagnosticsAsync(Safety);
-            Assert.Equal(eligible, frame.CanDisplayBeforeEnd);
-            Assert.Equal(60, frame.Frame.Header.Fps);
-            Assert.Equal(!noDuration, frame.Frame.Xdur.HasValue);
-            Assert.Equal(1001, frame.Frame.Xts!.Value, 6);
-            Assert.False(completed.Task.IsCompleted);
-            await File.WriteAllTextAsync(gate, "");
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            Assert.Equal(0, (await completed.Task.WaitWithDiagnosticsAsync(Safety)).Result.ExitCode);
-        }
-        finally
-        {
-            await File.WriteAllTextAsync(gate, "");
-            await controller.DisposeAsync();
-            File.Delete(gate);
-        }
-    }
-
     private static async Task AssertEligibilityAsync(Y4mFrame[] frames, PreviewRequest request, bool eligible, Y4mFrame expected)
     {
         var backend = new GatedBackend(frames);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.FrameReady += value => selected.TrySetResult(value);

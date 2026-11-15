@@ -17,7 +17,7 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
     public async Task DoubleRateRightStepsShowEveryOutputFrameWithoutSkipping()
     {
         using var services = new Services();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         int starts = 0;
         await using var vm = Create(services, clock, () => ++starts);
         vm.CurrentSeconds = 6.0 / 60;
@@ -38,7 +38,7 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
     public async Task DoubleRateLeftStepStaysInsideTheCachedInterval()
     {
         using var services = new Services();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         int starts = 0;
         await using var vm = Create(services, clock, () => ++starts);
         vm.CurrentSeconds = 13.0 / 60;
@@ -52,10 +52,10 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
         Assert.Equal(ExpectedHash(12), ImageHash(vm));
     }
 
-    private static MainWindowViewModel Create(Services services, FakeTimeProvider clock, Action started)
+    private static MainWindowViewModel Create(Services services, TimeProvider clock, Action started)
     {
-        var backend = new OneShotBackend(_ => started());
-        var vm = new MainWindowViewModel(services, clock, backend, backend)
+        var backend = new CountingBackend(started);
+        var vm = new MainWindowViewModel(services, clock, backend, null, null, null, debounceOverride: TimeSpan.Zero)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "frame rate input.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00",
@@ -65,10 +65,25 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
         return vm;
     }
 
-    private static async Task InitializeAsync(MainWindowViewModel vm, FakeTimeProvider clock)
+    private sealed class CountingBackend(Action started) : IPreviewBackend
+    {
+        private readonly ServerBackend _inner = new();
+        public Task InitializeEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
+            => _inner.InitializeEncoderAsync(encoderPath, cancellationToken);
+        public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
+            => _inner.GetHistoryRequirementAsync(request, cancellationToken);
+        public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
+        {
+            started();
+            return _inner.RunAsync(request, sink, cancellationToken);
+        }
+        public ValueTask AbortAsync() => _inner.AbortAsync();
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
+    private static async Task InitializeAsync(MainWindowViewModel vm, TimeProvider clock)
     {
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Null(vm.ErrorText);
         Assert.NotNull(vm.PreviewImage);

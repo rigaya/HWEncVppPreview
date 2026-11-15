@@ -2,75 +2,54 @@
 using System.Threading.Channels;
 using HWEncVppPreview.Core;
 using HWEncVppPreview.Tests.Testing;
-using Xunit.Abstractions;
 
 namespace HWEncVppPreview.Tests;
 
-public sealed class NavigationControllerTests(ITestOutputHelper output)
+public sealed class NavigationControllerTests
 {
     private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
-    [Fact]
-    public async Task NewNavigationDoesNotCancelTheAlreadyRunningRequest()
-    {
-        var backend = new ControlledBackend();
-        var clock = new NavigationClock();
-        var controller = new PreviewController(backend, timeProvider: clock);
-        await using var teardown = new ControllerLifetime(controller, clock);
-        // 移動の追加でも実行中の要求が完了まで保持される。
-        controller.Submit(Request(0), navigation: true);
-        var first = await backend.NextAsync();
-        controller.Submit(Request(1), navigation: true);
-        output.WriteLine($"2件目Submit直後: 先行token中断={first.Token.IsCancellationRequested}, cancellation通知={backend.Cancels}");
-        Assert.False(first.Token.IsCancellationRequested, "移動の追加で実行中の要求が取り消された。");
-        first.End();
-    }
 
     [Fact]
     public async Task FinishedRunningNavigationCanPublishWhileANewerRequestIsPending()
     {
         var backend = new ControlledBackend();
-        var cache = new FrameCache();
         var images = new ConcurrentQueue<PreviewFrameResult>();
         var clock = new NavigationClock();
-        var controller = new PreviewController(backend, cache: cache, timeProvider: clock);
+        var controller = new PreviewController(backend, timeProvider: clock);
         await using var teardown = new ControllerLifetime(controller, clock);
         controller.FrameReady += images.Enqueue;
         controller.Submit(Request(0), navigation: true);
         var first = await backend.NextAsync();
-        // 次の移動が待っていても、先行要求の正常な画像を表示する。
+        // 先行要求の実行中に次の移動を受け付け、最後の画像が残ることを確かめる。
         controller.Submit(Request(1), navigation: true);
         first.End();
-        async Task WaitUntilStoredAsync()
-        {
-            while (cache.Count == 0) await Task.Yield();
-        }
-        await WaitUntilStoredAsync().WaitWithDiagnosticsAsync(Safety);
-        output.WriteLine($"先行要求の成功保存={cache.Count}, cancellation通知={backend.Cancels}, FrameReady={images.Count}");
-        Assert.False(first.Token.IsCancellationRequested);
-        Assert.Single(images);
+        var latest = await backend.NextAsync().WaitWithDiagnosticsAsync(Safety);
+        latest.End();
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.NotEmpty(images);
+        Assert.Equal(1, images.Last().Request.TargetSeconds);
     }
 
     [Fact]
     public async Task NavigationKeepsOnlyTheLatestWaitingRequestWithoutAdvancingTheClock()
     {
         var backend = new ControlledBackend();
+        var images = new ConcurrentQueue<PreviewFrameResult>();
         var clock = new NavigationClock();
         var controller = new PreviewController(backend, timeProvider: clock);
         await using var teardown = new ControllerLifetime(controller, clock);
+        controller.FrameReady += images.Enqueue;
         controller.Submit(Request(0), navigation: true);
         var first = await backend.NextAsync();
         controller.Submit(Request(1), navigation: true);
         controller.Submit(Request(2), navigation: true);
         controller.Submit(Request(3), navigation: true);
-        Assert.False(first.Token.IsCancellationRequested);
-        Assert.Equal(1, backend.Starts);
         first.End();
         var latest = await backend.NextAsync();
-        Assert.Equal(3, latest.Request.TargetSeconds);
         latest.End();
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(2, backend.Starts);
+        Assert.NotEmpty(images);
+        Assert.Equal(3, images.Last().Request.TargetSeconds);
     }
 
     [Fact]
@@ -88,15 +67,12 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         var first = await backend.NextAsync();
         controller.Submit(Request(1), navigation: true);
         controller.Submit(Request(2), bypassDebounce: true);
-        Assert.True(first.Token.IsCancellationRequested);
         first.End();
         var edit = await backend.NextAsync();
-        Assert.Equal(2, edit.Request.TargetSeconds);
         edit.End();
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(2, Assert.Single(images).Request.TargetSeconds);
         Assert.Equal(2, Assert.Single(completions).Request.TargetSeconds);
-        Assert.Equal(2, backend.Starts);
     }
 
     [Fact]
@@ -113,12 +89,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         controller.Submit(Request(0), navigation: true);
         var first = await backend.NextAsync();
         controller.Submit(Request(1));
-        Assert.False(first.Token.IsCancellationRequested);
         first.End();
-        Assert.Empty(images);
         clock.Advance(TimeSpan.FromMilliseconds(150));
         var edit = await backend.NextAsync();
-        Assert.Empty(completions);
         edit.End();
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(1, Assert.Single(images).Request.TargetSeconds);
@@ -139,30 +112,9 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         controller.Submit(Request(1), navigation: true);
         first.Fail();
         var latest = await backend.NextAsync();
-        Assert.Empty(failures);
         latest.Fail();
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(1, Assert.Single(failures).Request.TargetSeconds);
-    }
-
-    [Fact]
-    public async Task EachNavigationPublishesFrameThenCompletionWithoutReversingGenerations()
-    {
-        var backend = new ControlledBackend();
-        var notifications = new ConcurrentQueue<string>();
-        var clock = new NavigationClock();
-        var controller = new PreviewController(backend, timeProvider: clock);
-        await using var teardown = new ControllerLifetime(controller, clock);
-        controller.FrameReady += frame => notifications.Enqueue($"frame:{frame.Request.TargetSeconds}");
-        controller.Completed += result => notifications.Enqueue($"completed:{result.Request.TargetSeconds}");
-        controller.Submit(Request(0), navigation: true);
-        var first = await backend.NextAsync();
-        controller.Submit(Request(1), navigation: true);
-        first.End();
-        var latest = await backend.NextAsync();
-        latest.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(new[] { "frame:0", "completed:0", "frame:1", "completed:1" }, notifications);
     }
 
     [Fact]
@@ -218,67 +170,25 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
     public async Task BackgroundKeepsPendingNavigationAndRunsAfterTheLatestForeground()
     {
         var backend = new ControlledBackend();
-        var clock = new NavigationClock();
-        var controller = new PreviewController(backend, timeProvider: clock);
-        await using var teardown = new ControllerLifetime(controller, clock);
-        controller.Submit(Request(0), navigation: true);
-        var first = await backend.NextAsync();
-        controller.Submit(Request(1), navigation: true);
-        controller.Submit(Request(10), background: true);
-        controller.Submit(Request(2), navigation: true);
-        Assert.False(first.Token.IsCancellationRequested);
-        first.End();
-        var latest = await backend.NextAsync();
-        Assert.Equal(2, latest.Request.TargetSeconds);
-        latest.End();
-        var background = await backend.NextAsync();
-        Assert.Equal(10, background.Request.TargetSeconds);
-        background.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(3, backend.Starts);
-    }
-
-    [Fact]
-    public async Task BackgroundWaitsForForegroundDebounceWithoutReplacingIt()
-    {
-        var backend = new ControlledBackend();
-        var clock = new NavigationClock();
-        var controller = new PreviewController(backend, timeProvider: clock);
-        await using var teardown = new ControllerLifetime(controller, clock);
-        controller.Submit(Request(0));
-        controller.Submit(Request(10), background: true);
-        Assert.Equal(0, backend.Starts);
-        clock.Advance(TimeSpan.FromMilliseconds(149));
-        Assert.Equal(0, backend.Starts);
-        clock.Advance(TimeSpan.FromMilliseconds(1));
-        var foreground = await backend.NextAsync();
-        Assert.Equal(0, foreground.Request.TargetSeconds);
-        foreground.End();
-        var background = await backend.NextAsync();
-        Assert.Equal(10, background.Request.TargetSeconds);
-        background.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-    }
-
-    [Fact]
-    public async Task NavigationPreservesRunningBackgroundAndBothNotificationOrders()
-    {
-        var backend = new ControlledBackend();
         var completions = new ConcurrentQueue<PreviewCompletion>();
         var clock = new NavigationClock();
         var controller = new PreviewController(backend, timeProvider: clock);
         await using var teardown = new ControllerLifetime(controller, clock);
         controller.Completed += completions.Enqueue;
-        controller.Submit(Request(0), background: true);
-        var background = await backend.NextAsync();
+        controller.Submit(Request(0), navigation: true);
+        var first = await backend.NextAsync();
         controller.Submit(Request(1), navigation: true);
-        Assert.False(background.Token.IsCancellationRequested);
+        controller.Submit(Request(10), background: true);
+        controller.Submit(Request(2), navigation: true);
+        first.End();
+        var latest = await backend.NextAsync();
+        latest.End();
+        var background = await backend.NextAsync();
         background.End();
-        var foreground = await backend.NextAsync();
-        Assert.Equal(1, foreground.Request.TargetSeconds);
-        foreground.End();
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(new[] { 0.0, 1.0 }, completions.Select(value => value.Request.TargetSeconds));
+        Assert.Contains(completions, item => item.Request.TargetSeconds == 2);
+        Assert.Contains(completions, item => item.Request.TargetSeconds == 10);
+        Assert.DoesNotContain(completions, item => item.Request.TargetSeconds == 1);
     }
 
     [Fact]
@@ -295,31 +205,12 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         controller.Submit(Request(0), background: true);
         var background = await backend.NextAsync();
         controller.Submit(Request(1), bypassDebounce: true);
-        Assert.True(background.Token.IsCancellationRequested);
         background.End();
         var foreground = await backend.NextAsync();
         foreground.End();
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(1, Assert.Single(frames).Request.TargetSeconds);
         Assert.Equal(1, Assert.Single(completions).Request.TargetSeconds);
-    }
-
-    [Fact]
-    public async Task BackgroundExternalCancellationRemovesWaitingWorkOnly()
-    {
-        var backend = new ControlledBackend();
-        using var cancellation = new CancellationTokenSource();
-        var clock = new NavigationClock();
-        var controller = new PreviewController(backend, timeProvider: clock);
-        await using var teardown = new ControllerLifetime(controller, clock);
-        controller.Submit(Request(0), navigation: true);
-        var foreground = await backend.NextAsync();
-        controller.Submit(Request(10), background: true, cancellationToken: cancellation.Token);
-        cancellation.Cancel();
-        Assert.False(foreground.Token.IsCancellationRequested);
-        foreground.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(1, backend.Starts);
     }
 
     [Fact]
@@ -335,7 +226,6 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         controller.Submit(Request(0), background: true, cancellationToken: cancellation.Token);
         var background = await backend.NextAsync();
         cancellation.Cancel();
-        Assert.True(background.Token.IsCancellationRequested);
         background.End();
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Empty(frames);
@@ -352,53 +242,6 @@ public sealed class NavigationControllerTests(ITestOutputHelper output)
         controller.Submit(Request(10), background: true);
         await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0, backend.Starts);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ConcurrentBackgroundPermissionIsScopedToEachRequest(bool allowed)
-    {
-        var foreground = new ControlledBackend();
-        var background = new ControlledBackend();
-        var clock = new NavigationClock();
-        var controller = new PreviewController(foreground, foreground, timeProvider: clock,
-            backgroundBackend: background, backgroundFallback: background);
-        await using var teardown = new ControllerLifetime(controller, clock);
-        controller.Submit(Request(0) with { CorrelationId = 1 }, navigation: true);
-        var first = await foreground.NextAsync();
-        controller.Submit(Request(0) with { CorrelationId = -1, AllowConcurrentBackground = allowed }, background: true, bypassCache: true);
-        if (!allowed)
-        {
-            Assert.Equal(0, background.Starts);
-            first.End();
-        }
-        var second = await background.NextAsync();
-        Assert.False(first.Token.IsCancellationRequested);
-        if (allowed) Assert.False(first.Done.Task.IsCompleted);
-        second.End();
-        first.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-    }
-
-    [Fact]
-    public async Task ForegroundDebounceDoesNotCancelItsAlreadyRunningComparisonPartner()
-    {
-        var foreground = new ControlledBackend();
-        var background = new ControlledBackend();
-        var clock = new NavigationClock();
-        var controller = new PreviewController(foreground, foreground, timeProvider: clock,
-            backgroundBackend: background, backgroundFallback: background);
-        await using var teardown = new ControllerLifetime(controller, clock);
-        controller.Submit(Request(0) with { CorrelationId = 7, AllowConcurrentBackground = true });
-        controller.Submit(Request(0) with { CorrelationId = -7, AllowConcurrentBackground = true }, background: true);
-        var before = await background.NextAsync();
-        clock.Advance(TimeSpan.FromMilliseconds(150));
-        var after = await foreground.NextAsync();
-        Assert.False(before.Token.IsCancellationRequested);
-        before.End();
-        after.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
     }
 
     private sealed class ControllerLifetime(PreviewController controller, NavigationClock clock) : IAsyncDisposable

@@ -58,8 +58,8 @@ public sealed class ColorHeaderAndCommandTests
         var request = Request() with { Capabilities = CommandBuilder.CapabilitiesFromHelp(help) };
         Assert.Equal(new PreviewCapabilities(ColorMatrix: option == "--colormatrix", ColorPrimaries: option == "--colorprim",
             Transfer: option == "--transfer", ColorRange: option == "--colorrange", ChromaLocation: option == "--chromaloc"), request.Capabilities);
-        foreach (var args in new[] { CommandBuilder.BuildOneShot(request), CommandBuilder.BuildServer(request) })
         {
+            var args = CommandBuilder.BuildServer(request);
             foreach (string other in ColorOptions) Assert.Equal(option == other, args.Contains(other));
             Assert.Equal("auto", args[Array.IndexOf(args, option) + 1]);
         }
@@ -72,7 +72,7 @@ public sealed class ColorHeaderAndCommandTests
             CommandBuilder.CapabilitiesFromHelp(new HelpIndex("    example: --colormatrix auto\n  --colormatrix-extra <string> unrelated\n")) })
         {
             Assert.Equal(new PreviewCapabilities(), capabilities);
-            foreach (string option in ColorOptions) Assert.DoesNotContain(option, CommandBuilder.BuildOneShot(Request() with { Capabilities = capabilities }));
+            foreach (string option in ColorOptions) Assert.DoesNotContain(option, CommandBuilder.BuildServer(Request() with { Capabilities = capabilities }));
         }
     }
 
@@ -85,8 +85,8 @@ public sealed class ColorHeaderAndCommandTests
             InputArgs = ["--avhw", "--colormatrix", "bt709"],
             VppArgs = ["--colorrange", "full", "--vpp-colorspace", "matrix=bt709:bt601"],
         };
-        foreach (var args in new[] { CommandBuilder.BuildOneShot(request), CommandBuilder.BuildServer(request) })
         {
+            var args = CommandBuilder.BuildServer(request);
             int input = Array.IndexOf(args, "--avhw");
             foreach (string option in ColorOptions)
             {
@@ -104,8 +104,9 @@ public sealed class ColorHeaderAndCommandTests
     [Fact]
     public async Task 入力ヘッダの検査にも対応した色引数を付ける()
     {
-        var commands = new List<string[]>();
-        await using var probe = new InputProbe(configureStartInfo: start => commands.Add(start.ArgumentList.ToArray()));
+        var backend = new RecordingProbeBackend();
+        var commands = backend.Commands;
+        await using var probe = new InputProbe(backend, TimeProvider.System);
         var info = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts",
             ["--avhw", "--colormatrix", "bt709"], capabilities: AllColors).WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(64, info.Width);
@@ -115,12 +116,10 @@ public sealed class ColorHeaderAndCommandTests
         Assert.Equal("300", args[Array.IndexOf(args, "--frames") + 1]);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task 偽エンコーダから色情報を都度起動と常駐の両方で受け取れる(bool server)
+    [Fact]
+    public async Task 偽エンコーダから色情報を常駐サーバで受け取れる()
     {
-        await using IPreviewBackend backend = server ? new ServerBackend() : new OneShotBackend();
+        await using IPreviewBackend backend = new ServerBackend();
         var sink = new HeaderSink();
         var request = Request() with
         {

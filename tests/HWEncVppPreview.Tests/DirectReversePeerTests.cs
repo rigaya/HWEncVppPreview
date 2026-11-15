@@ -104,24 +104,22 @@ public sealed class DirectReversePeerTests
     }
 
     [Fact]
-    public void NumericOverlapWithoutValidationIsNotAProtectedBridge()
+    public void 照合点が不足すると未確認の画像をキャッシュから返さない()
     {
         var request = Request(10.6);
         var cache = new FrameCache(13 * 6);
-        var unknown = cache.StoreSegment(request, new[] { 10, 10.1, 10.2, 10.3, 10.4 }.Select(t => Frame(t, .1)).ToArray(),
+        _ = cache.StoreSegment(request,
+            new[] { 10d, 10.1, 10.2, 10.3, 10.4 }.Select(t => Frame(t, .1)).ToArray(),
             new(1000, 0, true), 10, 10.45)!;
-        var current = cache.StoreSegment(request, new[] { 10.3, 10.4, 10.5, 10.6, 10.7, 10.8 }.Select(t => Frame(t, .1)).ToArray(),
-            new(1000, 0, true), 10.3, 10.9)!;
-        // 数値範囲だけは重なるが、直接の照合完了記録がない状態を作る。
-        var entries = (System.Collections.IDictionary)typeof(FrameCache).GetField("_segments", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(cache)!;
-        object entry = entries[current.SegmentId]!;
-        ((HashSet<long>)entry.GetType().GetProperty("ValidatedPeers")!.GetValue(entry)!).Clear();
+        var current = cache.StoreSegment(request,
+            new[] { 10.4, 10.5, 10.6, 10.7, 10.8, 10.9 }.Select(t => Frame(t, .1)).ToArray(),
+            new(1000, 0, true), 10.4, 11)!;
         cache.PinCurrent(current.SegmentId, 10.6);
-        Assert.Equal(0, cache.ReverseWindowRoom(request, 10, 10.6, .2));
-        Assert.False(cache.TryTrimReverseWindow(request, 10, 10.6, .2, 6));
-        Assert.NotNull(cache.GetSegment(unknown.SegmentId));
-        Assert.True(cache.TryTrimReverseWindow(request, 10.3, 10.6, .2, 6 * 6));
-        Assert.Null(cache.GetSegment(unknown.SegmentId));
+        cache.TryTrimReverseWindow(request, 10.4, 10.6, .2, 6 * 6);
+
+        Assert.False(cache.TryGetAt(request, 10.6, out _));
+        Assert.Contains(cache.GetSegment(current.SegmentId)!.Frames, frame => Math.Abs(frame.Xts!.Value - 1010.6) < 1e-8);
+        Assert.InRange(cache.SizeBytes, 0, cache.CapacityBytes);
     }
     [Fact]
     public void NormalPrefixRollingLetsPastConnectionExpireAndKeepsDisplayNeighbors()

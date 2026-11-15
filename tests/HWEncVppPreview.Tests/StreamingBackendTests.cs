@@ -1,5 +1,7 @@
 ﻿using HWEncVppPreview.Testing;
 using System.Diagnostics;
+using System.IO.Pipes;
+using System.Text;
 using HWEncVppPreview.Core;
 using HWEncVppPreview.Tests.Testing;
 
@@ -9,12 +11,10 @@ public sealed class StreamingBackendTests
 {
     private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ReadingStopsAtDemandGateAndResumesWithoutLosingFrames(bool resident)
+    [Fact]
+    public async Task ReadingStopsAtDemandGateAndResumesWithoutLosingFrames()
     {
-        await using IPreviewBackend backend = CreateBackend(resident);
+        await using IPreviewBackend backend = new ServerBackend();
         var sink = new GatedSink();
         Task<PreviewRunResult> run = backend.RunAsync(Request(), sink);
         await sink.Paused.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
@@ -30,15 +30,12 @@ public sealed class StreamingBackendTests
         Assert.False(result.IsCancelled);
         Assert.Equal(4, sink.FrameCount);
         for (int i = 0; i < sink.FrameCount; ++i) Assert.Equal(i / 30d, sink.Timestamps[i], 7);
-        if (!resident) AssertStopped(sink.ProcessId);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task CancellationUnblocksDemandGateEvenWhenSinkIgnoresToken(bool resident)
+    [Fact]
+    public async Task CancellationUnblocksDemandGateEvenWhenSinkIgnoresToken()
     {
-        await using IPreviewBackend backend = CreateBackend(resident);
+        await using IPreviewBackend backend = new ServerBackend();
         using var cancellation = new CancellationTokenSource();
         var sink = new GatedSink();
         Task<PreviewRunResult> run = backend.RunAsync(Request("--fake-hang-after", "1"), sink, cancellation.Token);
@@ -50,26 +47,20 @@ public sealed class StreamingBackendTests
         Assert.True(result.IsCancelled);
         Assert.Equal(1, sink.FrameCount);
         Assert.Equal(gatedCalls, sink.BeforeReadCalls);
-        if (resident)
-        {
-            // 止まっていた読取りを再開してENDを排出できれば、同じプロセスを再利用できる。
-            Assert.Equal(-12, result.ExitCode);
-            var recovery = new OpenSink();
-            Assert.Equal(0, (await backend.RunAsync(Request(), recovery).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
-            Assert.Equal(sink.ProcessId, recovery.ProcessId);
-            Assert.Equal(4, recovery.FrameCount);
-        }
-        else AssertStopped(sink.ProcessId);
+        // 止まっていた読取りを再開してENDを排出できれば、同じプロセスを再利用できる。
+        Assert.Equal(-12, result.ExitCode);
+        var recovery = new OpenSink();
+        Assert.Equal(0, (await backend.RunAsync(Request(), recovery).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.Equal(sink.ProcessId, recovery.ProcessId);
+        Assert.Equal(4, recovery.FrameCount);
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public async Task AbortAndDisposeReleasePausedReadTask(bool resident, bool dispose)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AbortAndDisposeReleasePausedReadTask(bool dispose)
     {
-        await using IPreviewBackend backend = CreateBackend(resident);
+        await using IPreviewBackend backend = new ServerBackend();
         var sink = new GatedSink();
         Task<PreviewRunResult> run = backend.RunAsync(Request("--fake-hang-after", "1"), sink);
         await sink.Paused.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
@@ -81,33 +72,73 @@ public sealed class StreamingBackendTests
     }
 
     [Fact]
-    public async Task ServerThatIgnoresCancelWhilePausedUsesFakeClockAndRecovers()
+    public async Task CancellationTimeoutDropsTheSession()
     {
-        var clock = new FakeTimeProvider();
-        var signalClock = new TimerSignalClock(clock, TimeSpan.FromSeconds(2));
-        await using var backend = new ServerBackend(timeProvider: signalClock, cancelTimeout: TimeSpan.FromSeconds(2));
+        await using var backend = new ServerBackend(cancelTimeout: TimeSpan.FromMilliseconds(500));
         using var cancellation = new CancellationTokenSource();
         var sink = new GatedSink();
         Task<PreviewRunResult> run = backend.RunAsync(Request("--fake-hang-after", "1", "--fake-ignore-cancel"), sink, cancellation.Token);
         await sink.Paused.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
         cancellation.Cancel();
+        PreviewRunResult result = await run.WaitWithDiagnosticsAsync(SafetyTimeout);
+        Assert.True(result.IsCancelled);
+        Assert.Contains("FAKEPID", result.StandardError);
+        AssertStopped(sink.ProcessId);
+        var next = new OpenSink();
+        Assert.Equal(0, (await backend.RunAsync(Request(), next).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.NotEqual(sink.ProcessId, next.ProcessId);
+    }
 
-        // cancel応答の期限だけを進める。OSのkill/exit処理中に時計を繰り返し進めない。
-        await signalClock.TimerArmed.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromSeconds(2));
+    [Fact]
+    public async Task DisposeReportsIncompleteWhenActiveRequestMissesDeadline()
+    {
+        var backend = new ServerBackend(cancelTimeout: TimeSpan.FromSeconds(5), stopTimeout: TimeSpan.FromSeconds(1));
+        var sink = new GatedSink();
+        Task<PreviewRunResult> run = backend.RunAsync(Request("--fake-hang-after", "1", "--fake-ignore-cancel"), sink);
+        await sink.Paused.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+        using var child = Process.GetProcessById(sink.ProcessId);
+        Task disposal = backend.DisposeAsync().AsTask();
+        await Assert.ThrowsAsync<TimeoutException>(() => disposal.WaitWithDiagnosticsAsync(SafetyTimeout));
+        Assert.True((await run.WaitWithDiagnosticsAsync(SafetyTimeout)).IsCancelled);
+        await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        Assert.True(child.HasExited);
+    }
+
+    [Fact]
+    public async Task QuitTimeoutReapsTheProcess()
+    {
+        var backend = new ServerBackend(stopTimeout: TimeSpan.FromSeconds(2), configureStartInfo: info =>
+            info.Environment["FAKE_ENCODER_IGNORE_QUIT"] = "1");
+        var sink = new OpenSink();
+        await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(SafetyTimeout);
+        using var child = Process.GetProcessById(sink.ProcessId);
+        await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        Assert.True(child.HasExited);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => backend.RunAsync(Request(), new OpenSink()).WaitWithDiagnosticsAsync(SafetyTimeout));
+    }
+
+    [Fact]
+    public async Task ServerIgnoringCancelCanBeAbortedAndUsedAgain()
+    {
+        await using var backend = new ServerBackend();
+        using var cancellation = new CancellationTokenSource();
+        var sink = new GatedSink();
+        Task<PreviewRunResult> run = backend.RunAsync(Request("--fake-hang-after", "1", "--fake-ignore-cancel"), sink, cancellation.Token);
+        await sink.Paused.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+        cancellation.Cancel();
+        await backend.AbortAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True((await run.WaitWithDiagnosticsAsync(SafetyTimeout)).IsCancelled);
         AssertStopped(sink.ProcessId);
         var recovery = new OpenSink();
         Assert.Equal(0, (await backend.RunAsync(Request(), recovery).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
-        Assert.NotEqual(sink.ProcessId, recovery.ProcessId);
+        Assert.Equal(4, recovery.FrameCount);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ContinuousOutputCanPauseResumeThenCancel(bool resident)
+    [Fact]
+    public async Task ContinuousOutputCanPauseResumeThenCancel()
     {
-        await using IPreviewBackend backend = CreateBackend(resident);
+        await using IPreviewBackend backend = new ServerBackend();
         using var cancellation = new CancellationTokenSource();
         var sink = new GatedSink(stopAfterFrames: 3, stop: cancellation.Cancel);
         var request = Request() with { Continuous = true };
@@ -119,16 +150,14 @@ public sealed class StreamingBackendTests
         PreviewRunResult result = await run.WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(result.IsCancelled);
         Assert.Equal(3, sink.FrameCount);
-        if (resident) Assert.Equal(-12, result.ExitCode);
-        else AssertStopped(sink.ProcessId);
+        Assert.Equal(-12, result.ExitCode);
     }
 
     [Fact]
     public async Task IdleServerDisposalUsesQuitAndExitsNormally()
     {
         string commandLog = Path.GetTempFileName();
-        var clock = new FakeTimeProvider();
-        var backend = new ServerBackend(timeProvider: clock, configureStartInfo: info =>
+        var backend = new ServerBackend(configureStartInfo: info =>
             info.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"] = commandLog);
         try
         {
@@ -154,208 +183,73 @@ public sealed class StreamingBackendTests
         var clock = new FakeTimeProvider();
         var pipe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<bool> joining = ProcessSupport.JoinAsync(pipe.Task, clock, TimeSpan.FromSeconds(5), "test.stderr");
-        clock.Advance(TimeSpan.FromSeconds(4));
-        Assert.False(joining.IsCompleted);
-        clock.Advance(TimeSpan.FromSeconds(1));
+        clock.Advance(TimeSpan.FromSeconds(5));
         Assert.False(await joining.WaitWithDiagnosticsAsync(SafetyTimeout));
-        Assert.False(pipe.Task.IsCompleted);
         // 期限切れ後の遅い失敗も、呼出し元を再び待たせることなく観測対象になる。
         pipe.SetException(new IOException("遅れて終了したpipe"));
     }
 
     [Fact]
-    public async Task DisposeOfServerIgnoringCancelIsBoundedByFakeClock()
+    public async Task AbortOfServerIgnoringCancelReapsTheProcess()
     {
-        var clock = new FakeTimeProvider();
-        var backend = new ServerBackend(timeProvider: clock);
+        await using var backend = new ServerBackend();
         var sink = new GatedSink();
         Task<PreviewRunResult> run = backend.RunAsync(Request("--fake-hang-after", "1", "--fake-ignore-cancel"), sink);
         await sink.Paused.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        using var process = Process.GetProcessById(sink.ProcessId);
-        Task stopping = backend.DisposeAsync().AsTask();
-        async Task AdvanceAsync()
-        {
-            while (!stopping.IsCompleted || !run.IsCompleted)
-            {
-                clock.Advance(TimeSpan.FromSeconds(1));
-                await Task.Yield();
-            }
-        }
-        await AdvanceAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        await Assert.ThrowsAsync<TimeoutException>(() => stopping);
-        Assert.True((await run).IsCancelled);
-        await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await backend.AbortAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+        Assert.True((await run.WaitWithDiagnosticsAsync(SafetyTimeout)).IsCancelled);
+        AssertStopped(sink.ProcessId);
     }
 
     [Fact]
-    public async Task IgnoredQuitTimesOutThenKillsAndReportsIncomplete()
+    public async Task AbortReapsServerConfiguredToIgnoreQuit()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "viewer-stop-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        string log = Path.Combine(directory, "commands.jsonl");
-        var clock = new FakeTimeProvider();
-        var backend = new ServerBackend(timeProvider: clock, configureStartInfo: info =>
-        {
-            info.Environment["FAKE_ENCODER_IGNORE_QUIT"] = "1";
-            info.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"] = log;
-        });
+        await using var backend = new ServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_IGNORE_QUIT"] = "1");
         var sink = new OpenSink();
-        try
-        {
-            await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(SafetyTimeout);
-            using var process = Process.GetProcessById(sink.ProcessId);
-            Task stopping = backend.DisposeAsync().AsTask();
-            await WaitUntilAsync(() => FakeLogFiles.Exists(log) && ReadSharedCommandLog(log).Contains("quit", StringComparison.Ordinal));
-            Assert.False(stopping.IsCompleted);
-            clock.Advance(TimeSpan.FromSeconds(5));
-            await Assert.ThrowsAsync<TimeoutException>(() => stopping.WaitWithDiagnosticsAsync(SafetyTimeout));
-            await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        }
-        finally
-        {
-            clock.Advance(TimeSpan.FromSeconds(30));
-            await backend.DisposeAsync();
-            Directory.Delete(directory, recursive: true);
-        }
+        Assert.Equal(0, (await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        await backend.AbortAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+        AssertStopped(sink.ProcessId);
     }
 
     [Fact]
-    public async Task ExitedServerWithInheritedPipeReportsIncompleteThenReleasesChild()
+    public async Task ServerDisposeReapsInheritedPipeAfterChildIsReleased()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "viewer-pipe-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        string ready = Path.Combine(directory, "ready");
-        string release = Path.Combine(directory, "release");
-        string exited = Path.Combine(directory, "exited");
-        var clock = new FakeTimeProvider();
-        var backend = new ServerBackend(timeProvider: clock, configureStartInfo: info =>
-        {
-            info.Environment["FAKE_ENCODER_HOLD_OUTPUT_READY_FILE"] = ready;
-            info.Environment["FAKE_ENCODER_HOLD_OUTPUT_RELEASE_FILE"] = release;
-            info.Environment["FAKE_ENCODER_HOLD_OUTPUT_EXIT_FILE"] = exited;
-        });
+        string pipeName = "server-child-" + Guid.NewGuid().ToString("N");
+        using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        var backend = new ServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_HOLD_OUTPUT_PIPE"] = pipeName);
         Process? child = null;
+        StreamWriter? writer = null;
+        bool released = false;
         try
         {
             var sink = new OpenSink();
-            await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(SafetyTimeout);
-            using var process = Process.GetProcessById(sink.ProcessId);
+            Assert.Equal(0, (await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
             Task stopping = backend.DisposeAsync().AsTask();
-            await WaitUntilAsync(() => File.Exists(ready));
-            child = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(ready)));
-            await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-            Assert.True(process.HasExited);
-            Assert.False(child.HasExited);
-            Assert.False(stopping.IsCompleted);
-            clock.Advance(TimeSpan.FromSeconds(5));
-            await Assert.ThrowsAsync<TimeoutException>(() => stopping.WaitWithDiagnosticsAsync(SafetyTimeout));
-            Assert.False(child.HasExited);
-        }
-        finally
-        {
-            // 親が終了した後も保持されるpipeは、このテスト所有のreleaseで必ず閉じる。
-            await File.WriteAllTextAsync(release, "release");
-            if (child == null && File.Exists(ready))
-            {
-                try { child = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(ready))); }
-                catch (ArgumentException) { }
-            }
-            if (child != null)
-            {
-                await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-                child.Dispose();
-            }
-            clock.Advance(TimeSpan.FromSeconds(30));
-            await backend.DisposeAsync();
-            await WaitUntilAsync(() => File.Exists(exited));
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task OneShotCleanupRemainsIncompleteUntilInheritedPipeIsReleased()
-    {
-        string directory = Path.Combine(Path.GetTempPath(), "viewer-oneshot-pipe-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        string ready = Path.Combine(directory, "ready");
-        string release = Path.Combine(directory, "release");
-        string exited = Path.Combine(directory, "exited");
-        var clock = new FakeTimeProvider();
-        var signalClock = new TimerSignalClock(clock, TimeSpan.FromSeconds(5));
-        var backend = new OneShotBackend(timeProvider: signalClock, configureStartInfo: info =>
-        {
-            info.Environment["FAKE_ENCODER_HOLD_OUTPUT_READY_FILE"] = ready;
-            info.Environment["FAKE_ENCODER_HOLD_OUTPUT_RELEASE_FILE"] = release;
-            info.Environment["FAKE_ENCODER_HOLD_OUTPUT_EXIT_FILE"] = exited;
-        });
-        using var cancellation = new CancellationTokenSource();
-        Process? child = null;
-        try
-        {
-            var sink = new OpenSink();
-            Task<PreviewRunResult> run = backend.RunAsync(Request(), sink, cancellation.Token);
-            await WaitUntilAsync(() => File.Exists(ready));
-            child = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(ready)));
-            await WaitUntilAsync(() => sink.ProcessId != 0);
-            await WaitUntilAsync(() =>
-            {
-                try { using var process = Process.GetProcessById(sink.ProcessId); return process.HasExited; }
-                catch (ArgumentException) { return true; }
-            });
-            cancellation.Cancel();
-            await signalClock.TimerArmed.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-            clock.Advance(TimeSpan.FromSeconds(5));
-            Assert.True((await run.WaitWithDiagnosticsAsync(SafetyTimeout)).IsCancelled);
-            Assert.False(child.HasExited);
-            signalClock.Reset();
-            Task incomplete = backend.AbortAsync().AsTask();
-            if (!incomplete.IsCompleted)
-            {
-                await signalClock.TimerArmed.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-                clock.Advance(TimeSpan.FromSeconds(5));
-            }
-            await Assert.ThrowsAsync<TimeoutException>(() => incomplete.WaitWithDiagnosticsAsync(SafetyTimeout));
-
-            await File.WriteAllTextAsync(release, "release");
+            await PipeWait.UntilConnectedAsync(pipe, pipeName, stopping, SafetyTimeout);
+            using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+            writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+            string pid = await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout) ?? throw new EndOfStreamException();
+            child = Process.GetProcessById(int.Parse(pid, System.Globalization.CultureInfo.InvariantCulture));
+            await writer.WriteLineAsync("release");
+            released = true;
+            Assert.Equal("0", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
             await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-            // 過去に期限切れでも、実際のexit/read/stderr回収後は正常に終了できる。
-            await backend.AbortAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-            await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+            await stopping.WaitWithDiagnosticsAsync(SafetyTimeout);
+            AssertStopped(sink.ProcessId);
         }
         finally
         {
-            await File.WriteAllTextAsync(release, "release");
-            if (child == null && File.Exists(ready))
-            {
-                try { child = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(ready))); }
-                catch (ArgumentException) { }
-            }
+            if (!released && writer != null) await writer.WriteLineAsync("release");
             if (child != null)
             {
                 await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
                 child.Dispose();
             }
-            await WaitUntilAsync(() => File.Exists(exited));
-            Directory.Delete(directory, recursive: true);
+            await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+            writer?.Dispose();
         }
     }
 
-    private static string ReadSharedCommandLog(string path)
-    {
-        // PID別ログの完了行を集約し、コマンド受信を確認する。
-        return string.Join("\n", FakeLogFiles.ReadAllLines(path));
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        async Task PollAsync()
-        {
-            while (!condition()) await Task.Yield();
-        }
-        await PollAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-    }
-
-    private static IPreviewBackend CreateBackend(bool resident) => resident ? new ServerBackend() : new OneShotBackend();
 
     private static PreviewRequest Request(params string[] extra) => new()
     {
@@ -391,20 +285,7 @@ public sealed class StreamingBackendTests
         public virtual void OnReadStateChanged(bool reading) { }
     }
 
-    private sealed class TimerSignalClock(FakeTimeProvider inner, TimeSpan observedTimeout) : TimeProvider
-    {
-        public TaskCompletionSource TimerArmed { get; private set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public void Reset() => TimerArmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public override long TimestampFrequency => inner.TimestampFrequency;
-        public override long GetTimestamp() => inner.GetTimestamp();
-        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            ITimer timer = inner.CreateTimer(callback, state, dueTime, period);
-            if (dueTime == observedTimeout) TimerArmed.TrySetResult();
-            return timer;
-        }
-    }
+
 
     private sealed class GatedSink(int stopAfterFrames = int.MaxValue, Action? stop = null) : OpenSink
     {

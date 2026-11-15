@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Globalization;
+using System.IO.Pipes;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -18,6 +19,7 @@ internal static class Program
     private static long _sequence;
     private static long _cancelledPending = -1;
     private static long _logSequence, _lastLogTimestamp;
+    private static int _probeCalls;
 
     // 別プロセスのappendで受信記録を失わないよう、共有baseごとにPID別ファイルへ出す。
     private static string ProcessLogPath(string path) => Path.Combine(Path.GetDirectoryName(path) ?? "",
@@ -41,6 +43,13 @@ internal static class Program
         Console.OutputEncoding = new UTF8Encoding(false);
         if (args.Contains("--fake-hold-output-child", StringComparer.Ordinal))
             return await HoldOutputChildAsync();
+        if (Environment.GetEnvironmentVariable("FAKE_ENCODER_PID_PIPE") is string pidPipe)
+        {
+            using var connection = new NamedPipeClientStream(".", pidPipe, PipeDirection.Out, PipeOptions.Asynchronous);
+            await connection.ConnectAsync();
+            using var writer = new StreamWriter(connection, new UTF8Encoding(false)) { AutoFlush = true };
+            await writer.WriteLineAsync(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        }
         string? pidFile = Environment.GetEnvironmentVariable("FAKE_ENCODER_PID_FILE");
         if (!string.IsNullOrEmpty(pidFile)) await File.AppendAllTextAsync(ProcessLogPath(pidFile), $"{Environment.ProcessId}\n");
         if (args.Contains("--version", StringComparer.Ordinal))
@@ -50,6 +59,34 @@ internal static class Program
         }
         if (args.Contains("--help", StringComparer.Ordinal))
         {
+            string? mode = Environment.GetEnvironmentVariable("FAKE_ENCODER_HELP_MODE");
+            if (mode is "stdout" or "stderr" or "error" or "inherited" or "hang")
+            {
+                if (mode == "hang")
+                {
+                    await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task;
+                    return 0;
+                }
+                if (mode == "error")
+                {
+                    await Console.Error.WriteAsync("child failed");
+                    return 23;
+                }
+                if (mode == "inherited")
+                {
+                    await StartHoldOutputChildAsync();
+                    return 0;
+                }
+                string path = Environment.GetEnvironmentVariable("FAKE_ENCODER_HELP_FILE") ?? throw new InvalidOperationException("help入力がありません");
+                string content = await File.ReadAllTextAsync(path);
+                if (mode == "stdout")
+                {
+                    await Console.Out.WriteAsync(content);
+                    await Console.Error.WriteAsync(new string('x', 131072));
+                }
+                else await Console.Error.WriteAsync(content);
+                return 0;
+            }
             string? helpFile = Environment.GetEnvironmentVariable("FAKE_ENCODER_HELP_FILE");
             if (!string.IsNullOrEmpty(helpFile))
             {
@@ -77,7 +114,7 @@ internal static class Program
         if (Environment.GetEnvironmentVariable("FAKE_ENCODER_READY_NONE") != "1")
         {
             string encoder = Environment.GetEnvironmentVariable("FAKE_ENCODER_READY_ENCODER") ?? "fake";
-            await WriteLineAsync("RGYPREVIEW READY version=1" + (encoder.Length == 0 ? "" : " encoder=" + encoder)
+            await WriteLineAsync("RGYPREVIEW READY version=" + (Environment.GetEnvironmentVariable("FAKE_ENCODER_READY_VERSION") ?? "1") + (encoder.Length == 0 ? "" : " encoder=" + encoder)
                 + (Environment.GetEnvironmentVariable("FAKE_ENCODER_PROBE_SUPPORTED") == "1" ? " probe=1" : "")
                 + (Environment.GetEnvironmentVariable("FAKE_ENCODER_WINDOW_SEEK") is string windowSeek ? " window_seek=" + windowSeek : "")
                 + (Environment.GetEnvironmentVariable("FAKE_ENCODER_OUTPUT_START") is string outputStart ? " output_start=" + outputStart : ""));
@@ -144,9 +181,11 @@ internal static class Program
     // 親の正常終了後もパイプを保持し、回帰テストがEOF待ちを再現できるようにする。
     private static async Task StartHoldOutputChildAsync()
     {
-        string? ready = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_READY_FILE");
-        string? release = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_RELEASE_FILE");
-        if (string.IsNullOrEmpty(ready) || string.IsNullOrEmpty(release)) return;
+        string? controlPipe = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_PIPE");
+        if (string.IsNullOrEmpty(controlPipe)) return;
+        string childReadyName = "fake-child-" + Guid.NewGuid().ToString("N");
+        using var childReady = new NamedPipeServerStream(
+            childReadyName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         var start = new ProcessStartInfo(Environment.ProcessPath ?? throw new InvalidOperationException("実行パスがありません"))
         {
             UseShellExecute = false,
@@ -156,11 +195,13 @@ internal static class Program
         if (string.Equals(Path.GetFileNameWithoutExtension(start.FileName), "dotnet", StringComparison.OrdinalIgnoreCase))
             start.ArgumentList.Add(typeof(Program).Assembly.Location);
         start.ArgumentList.Add("--fake-hold-output-child");
+        start.Environment["FAKE_ENCODER_CHILD_READY_PIPE"] = childReadyName;
         using var child = Process.Start(start) ?? throw new InvalidOperationException("パイプ保持用の子を起動できませんでした");
         try
         {
             using var timeout = new CancellationTokenSource(TestTimeouts.Hang);
-            await WaitForFileAsync(ready, timeout.Token);
+            await childReady.WaitForConnectionAsync(timeout.Token);
+            if (childReady.ReadByte() != 1) throw new EndOfStreamException();
         }
         catch
         {
@@ -172,24 +213,26 @@ internal static class Program
 
     private static async Task<int> HoldOutputChildAsync()
     {
-        string? ready = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_READY_FILE");
-        string? release = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_RELEASE_FILE");
-        if (string.IsNullOrEmpty(ready) || string.IsNullOrEmpty(release)) return -24;
-        // テスト側が途中で失敗しても無期限の孤児にしない。通常はreleaseで直ちに終了する。
-        using var timeout = new CancellationTokenSource(TestTimeouts.Hang);
-        string temporaryReady = ready + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + ".tmp";
-        await File.WriteAllTextAsync(temporaryReady, Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
-        File.Move(temporaryReady, ready, overwrite: true);
-        try
+        string? controlPipe = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_PIPE");
+        if (!string.IsNullOrEmpty(controlPipe))
         {
-            await WaitForFileAsync(release, timeout.Token);
+            using var pipeTimeout = new CancellationTokenSource(TestTimeouts.Hang);
+            using var control = new NamedPipeClientStream(".", controlPipe, PipeDirection.InOut, PipeOptions.Asynchronous);
+            await control.ConnectAsync(pipeTimeout.Token);
+            using var writer = new StreamWriter(control, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+            using var reader = new StreamReader(control, Encoding.UTF8, leaveOpen: true);
+            await writer.WriteLineAsync(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            string readyName = Environment.GetEnvironmentVariable("FAKE_ENCODER_CHILD_READY_PIPE") ?? throw new InvalidOperationException("子の同期先がありません");
+            using (var parentReady = new NamedPipeClientStream(".", readyName, PipeDirection.Out, PipeOptions.Asynchronous))
+            {
+                await parentReady.ConnectAsync(pipeTimeout.Token);
+                await parentReady.WriteAsync(new byte[] { 1 }, pipeTimeout.Token);
+            }
+            if (await reader.ReadLineAsync(pipeTimeout.Token) != "release") return -24;
+            await writer.WriteLineAsync("0");
+            return 0;
         }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
-        {
-        }
-        string? exited = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_EXIT_FILE");
-        if (!string.IsNullOrEmpty(exited)) await File.WriteAllTextAsync(exited, "0");
-        return 0;
+        return -24;
     }
 
     private static async Task RunServerAsync(ChannelReader<Request> reader)
@@ -209,7 +252,7 @@ internal static class Program
             }
             await Console.Error.WriteLineAsync($"RGYPREVIEW BEGIN id={request.Id}");
             await WriteLineAsync($"RGYPREVIEW BEGIN id={request.Id}");
-            int rc = await EncodeAsync(request.Args, cancellation.Token);
+            int rc = await EncodeAsync(request.Args, cancellation.Token, serverMode: true);
             await Console.Error.WriteLineAsync($"RGYPREVIEW END id={request.Id} rc={rc}");
             await WriteLineAsync($"RGYPREVIEW END id={request.Id} rc={rc}");
             lock (Sync)
@@ -225,8 +268,8 @@ internal static class Program
     private static async Task ProbeAsync(Request request)
     {
         if (Environment.GetEnvironmentVariable("FAKE_ENCODER_PROBE_NONE") == "1") return;
-        int delay = EnvInt("FAKE_ENCODER_PROBE_DELAY_MS", 0);
-        if (delay > 0) await Task.Delay(delay);
+        if (Environment.GetEnvironmentVariable("FAKE_ENCODER_PROBE_PIPE") is string probePipe)
+            await WaitAtPipeAsync(probePipe, CancellationToken.None);
         string? reply = Environment.GetEnvironmentVariable("FAKE_ENCODER_PROBE_REPLY");
         if (reply != null)
         {
@@ -252,23 +295,21 @@ internal static class Program
                 if (option == "--vpp-resize" && !argument.StartsWith("algo=spline36", StringComparison.Ordinal)) history = 1;
             }
         }
-        int rc = EnvInt("FAKE_ENCODER_PROBE_RC", 0);
+        int rc = Interlocked.Increment(ref _probeCalls) == 1
+            ? EnvInt("FAKE_ENCODER_PROBE_FIRST_RC", EnvInt("FAKE_ENCODER_PROBE_RC", 0))
+            : EnvInt("FAKE_ENCODER_PROBE_RC", 0);
         await WriteLineAsync($"RGYPREVIEW PROBE id={request.Id} history={history} rc={rc}");
     }
 
-    private static async Task<int> EncodeAsync(string[] args, CancellationToken cancellationToken)
+    private static async Task<int> EncodeAsync(string[] args, CancellationToken cancellationToken, bool serverMode = false)
     {
         if (args.Contains("--y4m", StringComparer.Ordinal))
         {
-            string? ready = Environment.GetEnvironmentVariable("FAKE_ENCODER_INITIALIZE_READY");
-            string? release = Environment.GetEnvironmentVariable("FAKE_ENCODER_INITIALIZE_RELEASE");
-            if (ready != null)
+            try
             {
-                string temporary = ready + ".tmp";
-                await File.WriteAllTextAsync(temporary, Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
-                File.Move(temporary, ready, overwrite: true);
+                if (Environment.GetEnvironmentVariable("FAKE_ENCODER_INITIALIZE_PIPE") is string pipeName)
+                    await WaitAtPipeAsync(pipeName, cancellationToken, Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             }
-            try { if (release != null) await WaitForFileAsync(release, cancellationToken); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return -12; }
             int initializationRc = EnvInt("FAKE_ENCODER_INITIALIZE_RC", 0);
             if (initializationRc != 0) return initializationRc;
@@ -348,10 +389,8 @@ internal static class Program
         int hangAfter = Number(args, "--fake-hang-after", -1);
         int crashAt = Number(args, "--fake-crash-at", -1);
         int badControlAt = Number(args, "--fake-bad-control-at", -1);
-        int delayMs = Number(args, "--fake-delay-ms", 0);
         int rc = Number(args, "--fake-rc", 0);
         int gateAfter = Number(args, "--fake-gate-after", 0);
-        string? gate = Value(args, "--fake-gate");
         bool ignoreCancel = args.Contains("--fake-ignore-cancel", StringComparer.Ordinal);
         CancellationToken effectiveToken = ignoreCancel ? CancellationToken.None : cancellationToken;
         var vpp = new List<string>();
@@ -370,9 +409,6 @@ internal static class Program
         string? duration = Value(args, "--fake-duration");
         bool durationAtExit = args.Contains("--fake-duration-at-exit", StringComparer.Ordinal);
         if (duration != null && !durationAtExit) await Console.Error.WriteLineAsync($"  Duration: {duration}, start: 0.000000, bitrate: 1000 kb/s");
-        // ログ到着後に偽時計を進めるテスト用の同期点。
-        string? logReadyFile = Environment.GetEnvironmentVariable("FAKE_ENCODER_LOG_READY_FILE");
-        if (!string.IsNullOrEmpty(logReadyFile)) await File.WriteAllTextAsync(logReadyFile, "");
         int stderrBytes = Number(args, "--fake-stderr-bytes", 0);
         if (stderrBytes > 0) await Console.Error.WriteLineAsync(new string('x', stderrBytes));
         if (rc != 0) await Console.Error.WriteLineAsync($"FAKE requested rc={rc}");
@@ -382,9 +418,12 @@ internal static class Program
             {
                 await WriteLineAsync($"YUV4MPEG2 W{width} H{height} F{outputFps}:1 Ip A{sar} C420jpeg XTIMEBASE=1:{outputFps} XPID={Environment.ProcessId} XSEEK={seek.ToString(CultureInfo.InvariantCulture)}{colorExtensions}");
             }
+            if (Value(args, "--fake-frame-pipe") is string framePipe)
+                await WaitAtPipeAsync(framePipe, effectiveToken);
             double? firstTime = null;
             double? previousTimestamp = null;
             long outputOrdinal = 0;
+            bool frameGatePassed = false;
             foreach (var frame in OutputFrames(count, step, seek, outputRate, outputFps, globalMediaFrames, inputEnd))
             {
                 long i = frame.Index;
@@ -393,11 +432,14 @@ internal static class Program
                 if (badControlAt == i)
                 {
                     await WriteLineAsync("RGYPREVIEW BROKEN");
-                    await Task.Delay(Timeout.Infinite, effectiveToken);
+                    await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(effectiveToken);
                 }
-                if (hangAfter >= 0 && i >= hangAfter) await Task.Delay(Timeout.Infinite, effectiveToken);
-                if (gate != null && i >= gateAfter) await WaitForFileAsync(gate, effectiveToken);
-                if (delayMs > 0) await Task.Delay(delayMs, effectiveToken);
+                if (hangAfter >= 0 && i >= hangAfter) await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(effectiveToken);
+                if (!frameGatePassed && i >= gateAfter && Value(args, "--fake-gate-pipe") is string frameGate)
+                {
+                    await WaitAtPipeAsync(frameGate, effectiveToken);
+                    frameGatePassed = true;
+                }
                 // 時計だけを変え、ゼロ起点の異常モードでも同じ入力位置の画素を返す。
                 double timestampValue = zeroOrigin ? frame.Time - firstTime.Value
                     : passthrough ? origin + seek + frame.Time : frame.Time;
@@ -427,24 +469,20 @@ internal static class Program
                 }
                 // 指定した要求内の枚数で画素途中を止め、実Readerの所有とread待ちを試験する。
                 // 入力probeは除外し、seek後の絶対indexにも依存しない。
-                string? bodyGate = Value(args, "--fake-body-gate");
-                if (bodyGate != null && Value(args, "--log-level") != "input=debug"
+                if (Value(args, "--fake-body-pipe") is string bodyPipe && Value(args, "--log-level") != "input=debug"
                     && outputOrdinal == Number(args, "--fake-body-gate-at", 2))
                 {
                     int split = data.Length / 2;
                     await Output.WriteAsync(data.AsMemory(0, split));
                     await Output.FlushAsync();
-                    string ready = bodyGate + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + ".ready";
-                    string temporary = ready + ".tmp";
-                    await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(new
+                    string signal = JsonSerializer.Serialize(new
                     {
-                        pid = Environment.ProcessId, input = Value(args, "-i"), seek, outputOrdinal, index = i,
-                    }));
-                    File.Move(temporary, ready, overwrite: true);
-                    try { await WaitForFileAsync(bodyGate, effectiveToken); }
+                        pid = Environment.ProcessId, input = Value(args, "-i"), seek, outputOrdinal, index = i, timestamp,
+                    });
+                    try { await WaitAtPipeAsync(bodyPipe, effectiveToken, signal); }
                     finally
                     {
-                        // Serverの取消でも残半を送り切り、続くENDを画素へ混入させない。
+                        // 途中の取消でも残りを送り、次の制御行が画素へ混ざらないようにする。
                         await Output.WriteAsync(data.AsMemory(split));
                         await Output.FlushAsync();
                     }
@@ -454,12 +492,13 @@ internal static class Program
                 await Output.WriteAsync(data);
                 await Output.FlushAsync();
             }
-            if (durationAtExit)
+            // 終了時出力はプロセスの終了時だけで、常駐サーバの要求終了時には出さない。
+            if (durationAtExit && !serverMode)
             {
-                string? exitGate = Value(args, "--fake-duration-exit-gate");
-                string? ready = Environment.GetEnvironmentVariable("FAKE_ENCODER_DURATION_EXIT_READY_FILE");
-                if (!string.IsNullOrEmpty(ready)) await File.WriteAllTextAsync(ready, "");
-                if (exitGate != null) await WaitForFileAsync(exitGate, effectiveToken);
+                if (Value(args, "--fake-duration-exit-pipe") is string exitPipe)
+                {
+                    await WaitAtPipeAsync(exitPipe, effectiveToken);
+                }
                 if (duration != null) await Console.Error.WriteLineAsync($"  Duration: {duration}, start: 0.000000, bitrate: 1000 kb/s");
             }
             return rc;
@@ -500,18 +539,15 @@ internal static class Program
             yield return (i, Timestamp(i) - seek, Timestamp(i + step) - Timestamp(i));
     }
 
-    private static async Task WaitForFileAsync(string path, CancellationToken token)
+    // フレームや終了直前で処理を止め、テストの次の操作を明示的に待つ。
+    private static async Task WaitAtPipeAsync(string name, CancellationToken token, string signal = "ready")
     {
-        if (File.Exists(path)) return;
-        string fullPath = Path.GetFullPath(path);
-        using var watcher = new FileSystemWatcher(Path.GetDirectoryName(fullPath)!, Path.GetFileName(fullPath));
-        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        watcher.Created += (_, _) => ready.TrySetResult();
-        watcher.Renamed += (_, _) => { if (File.Exists(fullPath)) ready.TrySetResult(); };
-        watcher.EnableRaisingEvents = true;
-        // 監視を有効にする前後で作られたファイルも取りこぼさない。
-        if (File.Exists(fullPath)) return;
-        await ready.Task.WaitAsync(token);
+        using var connection = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await connection.ConnectAsync(token);
+        using var writer = new StreamWriter(connection, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+        using var reader = new StreamReader(connection, Encoding.UTF8, leaveOpen: true);
+        await writer.WriteLineAsync(signal);
+        if (await reader.ReadLineAsync(token) != "release") throw new InvalidDataException("同期解除の指示が不正です");
     }
 
     private static async Task WriteLineAsync(string line)

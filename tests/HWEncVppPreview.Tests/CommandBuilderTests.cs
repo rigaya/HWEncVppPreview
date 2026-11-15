@@ -26,9 +26,9 @@ public class CommandBuilderTests
 
         Assert.Equal(new[]
         {
-            "--avhw", "-i", @"D:\my videos\in.ts", "--seek", "0:01:38.000", "--frames", "76",
-            "-c", "raw", "--y4m-timestamp", "-o", "-", "--vpp-nlmeans", "d=1", "--log-opt", "color=false",
-        }, CommandBuilder.BuildOneShot(req));
+            "-i", @"D:\my videos\in.ts", "--seek", "0:01:38.000", "--frames", "76",
+            "--vpp-nlmeans", "d=1", "--log-opt", "color=false",
+        }, CommandBuilder.BuildServer(req));
     }
 
     [Fact]
@@ -36,7 +36,7 @@ public class CommandBuilderTests
     {
         Assert.Equal(new[]
         {
-            "--avhw", "-i", @"D:\my videos\in.ts", "--seek", "0:01:38.000", "--frames", "76",
+            "-i", @"D:\my videos\in.ts", "--seek", "0:01:38.000", "--frames", "76",
             "--vpp-nlmeans", "d=1", "--log-opt", "color=false",
         }, CommandBuilder.BuildServer(Req(100.0)));
     }
@@ -52,8 +52,8 @@ public class CommandBuilderTests
             InputArgs = new[] { "--avsw", "--log-opt", "color=true" },
             VppArgs = new[] { "--log-opt", "addtime=true,color=true" },
         };
-        foreach (string[] args in new[] { CommandBuilder.BuildOneShot(request), CommandBuilder.BuildServer(request) })
         {
+            var args = CommandBuilder.BuildServer(request);
             int last = Array.LastIndexOf(args, "--log-opt");
             Assert.Equal("color=false", args[last + 1]);
             Assert.True(last > Array.IndexOf(args, "addtime=true,color=true"));
@@ -68,7 +68,7 @@ public class CommandBuilderTests
         Assert.Null(plan.SeekSeconds);
         Assert.Equal(0.0, plan.ActualPreMargin);
         Assert.Equal(16, plan.FrameCount); // ceil(0.5*30)+1
-        Assert.DoesNotContain("--seek", CommandBuilder.BuildOneShot(req));
+        Assert.DoesNotContain("--seek", CommandBuilder.BuildServer(req));
     }
 
     [Fact]
@@ -111,7 +111,7 @@ public class CommandBuilderTests
         {
             System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
             Assert.Equal("0:01:01.250", CommandBuilder.FormatSeek(61.25));
-            Assert.Contains("0:01:38.000", CommandBuilder.BuildOneShot(Req(100.0)));
+            Assert.Contains("0:01:38.000", CommandBuilder.BuildServer(Req(100.0)));
         }
         finally { System.Globalization.CultureInfo.CurrentCulture = old; }
     }

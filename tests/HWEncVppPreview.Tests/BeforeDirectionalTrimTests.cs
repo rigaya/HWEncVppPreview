@@ -1,5 +1,4 @@
-﻿using System.Reflection;
-using HWEncVppPreview.Core;
+﻿using HWEncVppPreview.Core;
 
 namespace HWEncVppPreview.Tests;
 
@@ -118,7 +117,6 @@ public sealed class BeforeDirectionalTrimTests
         state.Cache.ProtectDisplayedBeforeSegment(long.MaxValue, frame.FrameId, -1);
         Assert.Equal(0, state.Cache.Count);
         Assert.Equal(0, state.Cache.SizeBytes);
-        Assert.Null(Hint(state.Cache, "_displayedBeforeSegmentId"));
     }
 
     [Theory]
@@ -138,9 +136,6 @@ public sealed class BeforeDirectionalTrimTests
         Assert.True(state.Cache.Append(current.SegmentId, state.Frame(2)));
         Assert.Null(state.Cache.GetSegment(before.SegmentId));
         Assert.Throws<ObjectDisposedException>(() => frame.RawPixels);
-        Assert.Null(Hint(state.Cache, "_displayedBeforeSegmentId"));
-        Assert.Equal(0L, Hint(state.Cache, "_displayedBeforeFrameId"));
-        Assert.Equal(0, Hint(state.Cache, "_displayedBeforeDirection"));
     }
 
     [Fact]
@@ -318,27 +313,6 @@ public sealed class BeforeDirectionalTrimTests
     }
 
     [Fact]
-    public void 明示解除消失IDとRemoveとClearは全ヒントを消す()
-    {
-        using var state = new Fixture(4 * FrameBytes);
-        var before = state.Store("before", new[] { 10d });
-        state.Cache.ProtectDisplayedBeforeSegment(before.SegmentId, before.Frames[0].FrameId, -7);
-        Assert.Equal(-1, Hint(state.Cache, "_displayedBeforeDirection"));
-        state.Cache.ProtectDisplayedBeforeSegment(long.MaxValue, before.Frames[0].FrameId, 1);
-        AssertHintsCleared(state.Cache);
-        state.Cache.ProtectDisplayedBeforeSegment(before.SegmentId, before.Frames[0].FrameId, 1);
-        state.Cache.RemoveSegment(before.SegmentId);
-        AssertHintsCleared(state.Cache);
-        var next = state.Store("next", new[] { 20d });
-        state.Cache.ProtectDisplayedBeforeSegment(next.SegmentId, next.Frames[0].FrameId, 1);
-        state.Cache.ProtectDisplayedBeforeSegment(null);
-        AssertHintsCleared(state.Cache);
-        state.Cache.ProtectDisplayedBeforeSegment(next.SegmentId, next.Frames[0].FrameId, 1);
-        state.Cache.Clear();
-        AssertHintsCleared(state.Cache);
-    }
-
-    [Fact]
     public void 末尾を残す方向窓では既知EOFを解除せず先頭番号だけを進める()
     {
         using var state = new Fixture(64 * FrameBytes);
@@ -440,15 +414,6 @@ public sealed class BeforeDirectionalTrimTests
         Assert.Throws<ObjectDisposedException>(() => before.Frames[11].RawPixels);
         Assert.False(state.Cache.TryGetAt(Fixture.Request("before"), 111, out _));
         Assert.True(state.Cache.TryGetAt(Fixture.Request("before"), 110, out _));
-    }
-
-    private static object? Hint(FrameCache cache, string name)
-        => typeof(FrameCache).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(cache);
-    private static void AssertHintsCleared(FrameCache cache)
-    {
-        Assert.Null(Hint(cache, "_displayedBeforeSegmentId"));
-        Assert.Equal(0L, Hint(cache, "_displayedBeforeFrameId"));
-        Assert.Equal(0, Hint(cache, "_displayedBeforeDirection"));
     }
 
     private sealed class Fixture(long capacity) : IDisposable

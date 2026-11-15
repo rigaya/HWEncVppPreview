@@ -1,5 +1,4 @@
-﻿using System.Reflection;
-using Avalonia.Headless.XUnit;
+﻿using Avalonia.Headless.XUnit;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.ViewModels;
 using HWEncVppPreview.Core;
@@ -11,19 +10,23 @@ public sealed class EncoderPreparationViewModelTests
     public async Task MetadataCompletesWhileEncoderInitializationIsStillPending()
     {
         var backend = new HeldInitializationBackend();
-        await using var vm = new MainWindowViewModel(new Services(), null, backend, backend, null, null, null)
+        await using var vm = new MainWindowViewModel(new Services(), null, backend, null, null, null)
         { EncoderPath = FakeEncoderPath() };
+        var metadataReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(vm.HelpSchema)) metadataReady.TrySetResult();
+        };
         try
         {
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             await backend.Started.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            Task metadata = (Task)typeof(MainWindowViewModel).GetField("_metadataTask", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(vm)!;
-            await metadata.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            Assert.NotNull(vm.HelpSchema);
-            Assert.False(backend.Release.Task.IsCompleted);
+            await metadataReady.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         }
         finally { backend.Release.TrySetResult(); }
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        Assert.NotNull(vm.HelpSchema);
+        Assert.Null(vm.ErrorText);
     }
 
     private sealed class HeldInitializationBackend : IPreviewBackend

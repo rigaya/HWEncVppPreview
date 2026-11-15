@@ -10,7 +10,7 @@ public sealed class PreparationTests
     {
         var backend = new CountingBackend();
         var cache = new FrameCache();
-        var controller = new PreviewController(backend, backend, cache);
+        var controller = new PreviewController(backend, cache);
         var probe = new InputProbe();
         int notifications = 0;
         controller.FrameReady += _ => notifications++;
@@ -29,23 +29,10 @@ public sealed class PreparationTests
     }
 
     [Fact]
-    public async Task UnsupportedServerFallsBackAndRemembersTheEncoder()
-    {
-        var server = new CountingBackend(unsupported: true);
-        var fallback = new CountingBackend();
-        await using var controller = new PreviewController(server, fallback);
-        await using var probe = new InputProbe();
-        await controller.ProbeInputAsync(probe, "encoder", "a.ts", [], new()).WaitWithDiagnosticsAsync(Safety);
-        await controller.ProbeInputAsync(probe, "encoder", "b.ts", [], new()).WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(1, server.Calls);
-        Assert.Equal(2, fallback.Calls);
-    }
-
-    [Fact]
     public async Task DisposeCancelsAndTracksBorrowedProbe()
     {
         var backend = new CountingBackend(hang: true);
-        var controller = new PreviewController(backend, backend);
+        var controller = new PreviewController(backend);
         await using var probe = new InputProbe();
         Task<InputInfo> pending = controller.ProbeInputAsync(probe, "encoder", "input.ts", [], new());
         await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
@@ -64,7 +51,7 @@ public sealed class PreparationTests
             Calls++;
             if (unsupported) throw new PreviewServerNotSupportedException("未対応のテストbackend");
             Started.TrySetResult();
-            if (hang) await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            if (hang) await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(token);
             var header = Y4mHeader.Parse("YUV4MPEG2 W4 H4 F30:1 Ip A1:1 C420");
             sink.OnHeader(header);
             sink.OnFrame(new(header, 0, null, new byte[header.FrameBytes]));

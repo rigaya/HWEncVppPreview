@@ -37,8 +37,7 @@ public sealed partial class PreviewController : IAsyncDisposable
     private readonly object _sync = new();
     private readonly SemaphoreSlim _execution = new(1);
     private readonly SemaphoreSlim _backgroundExecution = new(1);
-    private readonly IPreviewBackend _backgroundPreferred;
-    private readonly IPreviewBackend _backgroundFallback;
+    private readonly IPreviewBackend _backgroundBackend;
     private CancellationTokenSource? _backgroundActive;
     private PreviewRequest? _backgroundActiveRequest;
     private readonly bool _separateBackground;
@@ -53,10 +52,7 @@ public sealed partial class PreviewController : IAsyncDisposable
     public bool ShutdownIncomplete => Volatile.Read(ref _shutdownIncomplete) != 0;
     private readonly FrameCache _cache;
     private readonly PreviewFiniteBudget _finiteBudget = new();
-    private readonly IPreviewBackend _preferred;
-    private readonly IPreviewBackend _fallback;
-    private readonly bool _enableFallback;
-    private readonly HashSet<string> _unsupported = new(StringComparer.Ordinal);
+    private readonly IPreviewBackend _backend;
     private readonly HashSet<Task> _tasks = new();
     private readonly Dictionary<IPreviewBackend, List<BackendRun>> _backendRuns = new(ReferenceEqualityComparer.Instance);
     private CancellationTokenSource? _scheduled;
@@ -71,10 +67,9 @@ public sealed partial class PreviewController : IAsyncDisposable
     private bool _disposed;
     private Task? _disposeTask;
 
-    public PreviewController(IPreviewBackend? backend = null, IPreviewBackend? fallback = null,
-        FrameCache? cache = null, TimeProvider? timeProvider = null,
-        TimeSpan? debounce = null, TimeSpan? watchdog = null, bool enableFallback = true,
-        IPreviewBackend? backgroundBackend = null, IPreviewBackend? backgroundFallback = null, TimeSpan? disposeGrace = null, TimeSpan? disposeTimeout = null)
+    public PreviewController(IPreviewBackend? backend = null, FrameCache? cache = null, TimeProvider? timeProvider = null,
+        TimeSpan? debounce = null, TimeSpan? watchdog = null, IPreviewBackend? backgroundBackend = null,
+        TimeSpan? disposeGrace = null, TimeSpan? disposeTimeout = null)
     {
         _clock = timeProvider ?? TimeProvider.System;
         _debounce = debounce ?? TimeSpan.FromMilliseconds(150);
@@ -86,13 +81,10 @@ public sealed partial class PreviewController : IAsyncDisposable
         if (_watchdog <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(watchdog));
         if (_disposeTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(disposeTimeout));
         if (_disposeGrace < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(disposeGrace));
-        _preferred = backend ?? new ServerBackend(_clock);
-        _fallback = fallback ?? new OneShotBackend(timeProvider: _clock, stopTimeout: _disposeTimeout);
-        // 実プロセスは最初のBefore miss時に起動する。注入backendは従来テストの既定を保つ。
-        _backgroundPreferred = backgroundBackend ?? (backend == null ? new ServerBackend(_clock) : _preferred);
-        _backgroundFallback = backgroundFallback ?? (fallback == null && backend == null ? new OneShotBackend(timeProvider: _clock, stopTimeout: _disposeTimeout) : _fallback);
-        _separateBackground = !ReferenceEquals(_backgroundPreferred, _preferred) || !ReferenceEquals(_backgroundFallback, _fallback);
-        _enableFallback = enableFallback;
+        _backend = backend ?? new ServerBackend(_clock);
+        // 実プロセスは最初のBefore miss時に起動する。
+        _backgroundBackend = backgroundBackend ?? (backend == null ? new ServerBackend(_clock) : _backend);
+        _separateBackground = !ReferenceEquals(_backgroundBackend, _backend);
         _cache = cache ?? new FrameCache();
     }
 
@@ -238,19 +230,6 @@ public sealed partial class PreviewController : IAsyncDisposable
         }
     }
 
-    private async Task<(IPreviewBackend Backend, bool? History)> PrepareBackendAsync(
-        IPreviewBackend backend, PreviewRequest request, bool background, CancellationToken token)
-    {
-        try { return (backend, await backend.GetHistoryRequirementAsync(request, token).ConfigureAwait(false)); }
-        catch (PreviewServerNotSupportedException) when (_enableFallback
-            && ReferenceEquals(backend, background ? _backgroundPreferred : _preferred))
-        {
-            token.ThrowIfCancellationRequested();
-            lock (_sync) _unsupported.Add(request.EncoderPath);
-            return (background ? _backgroundFallback : _fallback, null);
-        }
-    }
-
     private PreviewRequest PhysicalAfterRequest(PreviewRequest request, bool background)
     {
         if (IsLegacySource(request))
@@ -296,7 +275,7 @@ public sealed partial class PreviewController : IAsyncDisposable
 
     private async Task ScheduleAsync(PreviewRequest request, long version, CancellationTokenSource scheduled,
         bool bypassCache, bool bypassDebounce, bool navigation, bool background, long editVersion,
-        CancellationToken cancellationToken, bool isReplay = false, ReversePrefetchState? prefetch = null, int recoveryAttempt = 0)
+        CancellationToken cancellationToken, bool isReplay = false, ReversePrefetchState? prefetch = null, int recoveryAttempt = 0, int emptyRecoveryAttempt = 0)
     {
         // 回復窓は通知する論理要求から分離する。Afterの物理VPP列をBeforeのwithコピーへ持ち込まない。
         var recoveryPhysicalWindow = request.RecoveryPhysicalWindow;
@@ -368,11 +347,15 @@ public sealed partial class PreviewController : IAsyncDisposable
                     waitMs = System.Diagnostics.Stopwatch.GetElapsedTime(waitStart).TotalMilliseconds });
             }
             var physicalRequest = PhysicalAfterRequest(request with { RecoveryPhysicalWindow = recoveryPhysicalWindow }, background) with { Continuous = false };
+            CancellationTokenSource? selectionStop = null;
+            bool scanToEnd = recoveryPhysicalWindow?.Continuous == true;
             Action<PreviewFrameResult> emit = frame =>
             {
                 if (PerfTrace.Enabled) PerfTrace.Write("core.target_frame", new { request.CorrelationId, version,
                     frame.Frame.Xts, frame.TargetNotReached });
                 Publish(() => EmitFrame(frame with { IsReplay = isReplay }));
+                // EOF確認の上限なし取得でも、目標が安全に選べたらそこで止める。全編を読み切らない。
+                selectionStop?.Cancel();
             };
             var sink = new SelectionSink(rawSinks, request, emit, background, physicalRequest);
             var physicalKey = physicalRequest with
@@ -406,12 +389,10 @@ public sealed partial class PreviewController : IAsyncDisposable
                 return;
             }
             if (!background && prefetch == null) pendingSource = _cache.BeginPendingSource(request);
-            IPreviewBackend backend;
-            lock (_sync) backend = _unsupported.Contains(request.EncoderPath)
-                ? (background ? _backgroundFallback : _fallback) : (background ? _backgroundPreferred : _preferred);
-            bool? history;
-            (backend, history) = await PrepareBackendAsync(backend, request, background, active.Token).ConfigureAwait(false);
+            IPreviewBackend backend = background ? _backgroundBackend : _backend;
+            bool? history = await backend.GetHistoryRequirementAsync(request, active.Token).ConfigureAwait(false);
             physicalRequest = PhysicalAfterRequest(request with { DependsOnHistory = history, RecoveryPhysicalWindow = recoveryPhysicalWindow }, background) with { Continuous = false };
+            physicalRequest = physicalRequest with { Continuous = scanToEnd };
             physicalKey = physicalRequest with
             { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
             finiteWindow.Reset();
@@ -436,7 +417,9 @@ public sealed partial class PreviewController : IAsyncDisposable
                 active.Token.ThrowIfCancellationRequested();
                 if (!IsCurrent()) return;
                 progress.Touch();
-                var run = RunWithFallbackAsync();
+                using var runStop = CancellationTokenSource.CreateLinkedTokenSource(active.Token);
+                selectionStop = scanToEnd ? runStop : null;
+                var run = RunTrackedBackendAsync(backend, physicalRequest, sink, selectionStop?.Token ?? active.Token);
                 var winner = await Task.WhenAny(run, progress.Expired).ConfigureAwait(false);
                 if (winner == progress.Expired)
                 {
@@ -453,6 +436,8 @@ public sealed partial class PreviewController : IAsyncDisposable
                     return;
                 }
                 try { result = await run.ConfigureAwait(false); }
+                catch (OperationCanceledException) when (scanToEnd && runStop.IsCancellationRequested && sink.HasSelection && !active.IsCancellationRequested)
+                { result = new(0, ""); }
                 catch (OperationCanceledException) when (sink.NeedsLegacyReplay)
                 { result = new(-12, "", true); }
                 result = WithLegacyDiagnostic(request, result);
@@ -469,13 +454,16 @@ public sealed partial class PreviewController : IAsyncDisposable
                     if (replay != null) await replay.ConfigureAwait(false);
                     return;
                 }
+                selectionStop = null;
+                bool stoppedAfterSelection = scanToEnd && runStop.IsCancellationRequested && sink.HasSelection;
+                if (stoppedAfterSelection && result.IsCancelled) result = result with { ExitCode = 0, IsCancelled = false };
                 if (active.IsCancellationRequested || result.IsCancelled) return;
                 if (result.ExitCode != 0)
                 {
                     Publish(() => Failed?.Invoke(new(request, CoreText.EncoderExited(result.ExitCode), result)), currentOnly: true);
                     return;
                 }
-                sink.Finish();
+                sink.Finish(scanToEnd && !stoppedAfterSelection);
                 var shortfall = PreviewWindowShortfall.FromSegment(request, sink.Segment);
                 if (shortfall is { MissingHead: true } && result.OutputStartApplied && !physicalRequest.DisableOutputStart)
                 {
@@ -485,6 +473,38 @@ public sealed partial class PreviewController : IAsyncDisposable
                     Publish(() => ReplayStarted?.Invoke(request), currentOnly: true);
                     physicalRequest = physicalRequest with { DisableOutputStart = true };
                     physicalKey = physicalRequest with { Capabilities=request.Capabilities, InputArgs=request.InputArgs, VppArgs=request.VppArgs };
+                    sink.Dispose();
+                    finiteWindow.Reset();
+                    sink = new SelectionSink(rawSinks, request, emit, background, physicalRequest, finiteWindow)
+                    {
+                        HeaderObserved = header => RememberOutputHeader(request, header),
+                        FrameObserved = frame => RememberOutputFrame(request, frame),
+                        Progress = progress.Touch,
+                        ReplayRequired = reason => { MarkLegacySource(request, reason); active.Cancel(); },
+                        ReadState = reading => { if (reading) progress.Resume(); else progress.Suspend(); },
+                    };
+                    continue;
+                }
+                PreviewRequest? endRecovery = null;
+                if (prefetch == null && request.Capabilities.TimestampPassthrough && request.TimestampOriginSeconds.HasValue && sink.Frames.Count == 0
+                    && PreviewWindowRecovery.TryBacktrackEmpty(request, physicalRequest, emptyRecoveryAttempt, out var earlier))
+                {
+                    ++emptyRecoveryAttempt;
+                    endRecovery = earlier.RecoveryPhysicalWindow;
+                }
+                else if (prefetch == null && shortfall is { MissingTail: true } && !scanToEnd)
+                {
+                    // 枚数制限の終了をEOFと誤認しない。上限を外した同じ窓で末尾を確認する。
+                    endRecovery = physicalRequest with { Continuous = true, DisableOutputStart = true };
+                }
+                if (endRecovery != null)
+                {
+                    if (PerfTrace.Enabled) PerfTrace.Write("core.end_recovery", new { request.CorrelationId,
+                        emptyRecoveryAttempt, seek = CommandBuilder.Plan(endRecovery).SeekSeconds, empty = sink.Frames.Count == 0 });
+                    scanToEnd = true;
+                    physicalRequest = endRecovery;
+                    physicalKey = physicalRequest with { Capabilities=request.Capabilities, InputArgs=request.InputArgs, VppArgs=request.VppArgs };
+                    sink.Dispose();
                     finiteWindow.Reset();
                     sink = new SelectionSink(rawSinks, request, emit, background, physicalRequest, finiteWindow)
                     {
@@ -510,9 +530,10 @@ public sealed partial class PreviewController : IAsyncDisposable
                             attempt = recoveryAttempt + 1, shortfall, next = CommandBuilder.Plan(expanded.RecoveryPhysicalWindow!) });
                         previousShortfall = shortfall;
                         ++recoveryAttempt;
-                        physicalRequest = PhysicalAfterRequest(expanded, background) with { Continuous = false };
+                        physicalRequest = PhysicalAfterRequest(expanded, background) with { Continuous = scanToEnd };
                         physicalKey = physicalRequest with
                         { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
+                        sink.Dispose();
                         finiteWindow.Reset();
                         sink = new SelectionSink(rawSinks, request, emit, background, physicalRequest, finiteWindow)
                         {
@@ -525,7 +546,7 @@ public sealed partial class PreviewController : IAsyncDisposable
                         continue;
                     }
                 }
-                if (prefetch == null && (shortfall != null || !sink.HasSelection && !background
+                if (prefetch == null && (shortfall != null || (sink.Frames.Count == 0 || !sink.HasSelection && !background)
                     && request.Capabilities.TimestampPassthrough && request.TimestampOriginSeconds.HasValue))
                 {
                     Publish(() => Failed?.Invoke(new(request, CoreText.FrameUnavailable, result)
@@ -558,29 +579,6 @@ public sealed partial class PreviewController : IAsyncDisposable
             Publish(() => EmitCompletion(new(request, result, false, sink.TargetNotReached) { Frames = sink.Frames.AsReadOnly(), Segment = sink.Segment, IsReplay = isReplay,
                 EarlyDisplayFallbackReason = sink.EarlyDisplayFallbackReason }));
 
-            async Task<PreviewRunResult> RunWithFallbackAsync()
-            {
-                try { return await RunTrackedBackendAsync(backend, physicalRequest, sink, active.Token).ConfigureAwait(false); }
-                catch (PreviewServerNotSupportedException) when (_enableFallback && ReferenceEquals(backend, background ? _backgroundPreferred : _preferred))
-                {
-                    lock (_sync) _unsupported.Add(request.EncoderPath);
-                    backend = background ? _backgroundFallback : _fallback;
-                    physicalRequest = PhysicalAfterRequest(request with { DependsOnHistory = null, RecoveryPhysicalWindow = recoveryAttempt > 0 || recoveryPhysicalWindow != null ? physicalRequest : null }, background) with { Continuous = false };
-                    physicalKey = physicalRequest with
-                    { Capabilities = request.Capabilities, InputArgs = request.InputArgs, VppArgs = request.VppArgs };
-                    finiteWindow.Reset();
-                    sink = new SelectionSink(rawSinks, request, emit, background, physicalRequest, finiteWindow)
-                    {
-                        HeaderObserved = header => RememberOutputHeader(request, header),
-                        FrameObserved = frame => RememberOutputFrame(request, frame),
-                        Progress = progress.Touch,
-                        ReplayRequired = reason => { MarkLegacySource(request, reason); active.Cancel(); },
-                        ReadState = reading => { if (reading) progress.Resume(); else progress.Suspend(); },
-                    };
-                    progress.Touch();
-                    return await RunTrackedBackendAsync(backend, physicalRequest, sink, active.Token).ConfigureAwait(false);
-                }
-            }
         }
         catch (OperationCanceledException) when (scheduled.IsCancellationRequested || active?.IsCancellationRequested == true)
         {
@@ -696,7 +694,7 @@ public sealed partial class PreviewController : IAsyncDisposable
             await timer.CancelAsync().ConfigureAwait(false);
         }
         TraceDispose("grace_end", new { completed = cooperative.IsCompleted });
-        var backends = new[] { _preferred, _fallback, _backgroundPreferred, _backgroundFallback }
+        var backends = new[] { _backend, _backgroundBackend }
             .Distinct(ReferenceEqualityComparer.Instance).Cast<IPreviewBackend>().ToArray();
         HashSet<IPreviewBackend> pending;
         lock (_sync)
@@ -992,6 +990,7 @@ public sealed partial class PreviewController : IAsyncDisposable
             int first = Math.Max(0, _candidate - 1);
             int count = Math.Min(Frames.Count - first, 3);
             if (first == 0 && count == Frames.Count) return;
+            bool retainsInputEnd = Segment.ReachedInputEnd && first + count == Frames.Count;
             var retained = Frames.Skip(first).Take(count).ToArray();
             long removed = Frames.Sum(f => f.RawByteLength) - retained.Sum(f => f.RawByteLength);
             budget?.Remove(removed);
@@ -1000,27 +999,19 @@ public sealed partial class PreviewController : IAsyncDisposable
             Frames.AddRange(keep.Frames);
             _candidate -= first;
             _clock = _clock with { FrameIndexOffset = _clock.FrameIndexOffset + first };
-            Segment = Segment with { Frames = Array.AsReadOnly(retained), Clock = _clock,
+            Segment = Segment with { Frames = Array.AsReadOnly(retained), Clock = _clock, ReachedInputEnd = retainsInputEnd,
                 SafeStartSeconds = Math.Max(Segment.SafeStartSeconds, _clock.ToInputSeconds(retained[0], 0, request.Fps)),
                 SafeEndSeconds = Math.Min(Segment.SafeEndSeconds,
                     _clock.ToInputSeconds(retained[^1], count - 1, request.Fps) + FrameSelector.Duration(retained[^1], request.Fps)) };
             MarkLimited();
         }
 
-        public void Finish()
+        public void Finish(bool reachedInputEnd = false)
         {
             _finishing = true;
             if (Frames.Count == 0) return;
-            bool naturalEnd = false;
-            if (request.InputDurationSeconds is double duration && double.IsFinite(duration) && duration >= 0)
-            {
-                var plan = CommandBuilder.Plan(_physicalRequest);
-                double plannedEnd = (plan.SeekSeconds ?? 0) + plan.FrameCount / request.Fps;
-                double receivedEnd = _receivedEnd;
-                // 出力枚数は間引きで変わるためEOF根拠にはしない。既知の入力長と受信した末尾を照合する。
-                double endTolerance = Math.Max(0.02, FrameSelector.Duration(Frames[^1], request.Fps) / 2);
-                naturalEnd = plannedEnd >= duration - endTolerance && receivedEnd >= duration - endTolerance;
-            }
+            // 枚数制限での正常終了や申告Durationとの近さは実EOFの根拠にしない。
+            bool naturalEnd = reachedInputEnd;
             UpdateSegment(naturalEnd);
             if (_confirmed) return;
             if (!_hasTimestamp)
@@ -1033,7 +1024,7 @@ public sealed partial class PreviewController : IAsyncDisposable
             double tolerance = FrameSelector.Duration(lastTimed, request.Fps) / 2.0;
             TargetNotReached = _lastTime + tolerance < _target;
             if (TargetNotReached) _candidate = Frames.Count - 1;
-            // 有限窓が目標へ届かなかったことは入力EOFの証拠にならない。長さと実末尾が一致した場合だけ終端にする。
+            // 有限窓が目標へ届かなかったことは入力EOFの証拠にならない。上限なし取得の自然終了だけを使う。
             UpdateSegment(naturalEnd);
             Confirm(TargetNotReached);
         }

@@ -70,13 +70,12 @@ public sealed class ForwardAdoptionTests
         if (reason == "content") neighbor = neighbor with { VppArgs = new[] { "different" } };
         if (reason == "legacy") neighbor = neighbor with { TimestampOriginTrusted = false };
         controller.Submit(neighbor, bypassCache: true, navigation: reason != "explicit", reuseActiveStream: reason != "no_reuse");
-        if (reason == "eof")
-        {
-            await backend.Started.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety); Assert.Equal(3, backend.Calls); return;
-        }
         if (reason is not ("near" or "watchdog" or "generation"))
         {
-            Assert.True(forward.Token.IsCancellationRequested); return;
+            await backend.Started.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+            if (reason != "eof") Assert.True(forward.Token.IsCancellationRequested);
+            else Assert.Equal(3, backend.Calls);
+            return;
         }
         Assert.False(forward.Token.IsCancellationRequested);
         Assert.Equal(2, backend.Calls);
@@ -90,8 +89,8 @@ public sealed class ForwardAdoptionTests
         if (reason == "generation")
         {
             controller.Submit(Request(30, 21), bypassCache: true);
-            Assert.True(forward.Token.IsCancellationRequested);
             var latest = await backend.Started.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+            Assert.True(forward.Token.IsCancellationRequested);
             clock.Advance(TimeSpan.FromSeconds(1)); await latest.Send(29);
             for (int i = 291; i <= 301; ++i) { clock.Advance(TimeSpan.FromMilliseconds(50)); await latest.Send(i / 10d); }
             forward.EmitLate(12.9);
