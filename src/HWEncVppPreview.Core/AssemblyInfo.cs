@@ -6,3 +6,6 @@
 [assembly: InternalsVisibleTo("HWEncVppPreview")]
 
 [assembly: InternalsVisibleTo("HWEncVppPreview.App.Tests")]
+
+// 撮影用の入力検査を実プロセスなしで通す。
+[assembly: InternalsVisibleTo("UiSnapshot")]

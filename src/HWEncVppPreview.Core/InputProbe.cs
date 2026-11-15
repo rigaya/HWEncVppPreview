@@ -69,8 +69,8 @@ public sealed class InputProbe : IAsyncDisposable
     }
 
     // 終了要求を無視する検査backendの回帰を、GPUやOSの異常終了に頼らず再現する。
-    internal InputProbe(IPreviewBackend backend, TimeProvider timeProvider)
-        : this(timeProvider) => _backend = backend;
+    internal InputProbe(IPreviewBackend backend, TimeProvider timeProvider, Action<ProcessStartInfo>? configureStartInfo = null)
+        : this(timeProvider, configureStartInfo: configureStartInfo) => _backend = backend;
 
     /// <summary>追加引数の既定は空。引数配列を複製し、値が同じ要求にはキャッシュを返す。</summary>
     /// <exception cref="InputProbeException">エンコーダがエラー終了した、または有効なヘッダがない。</exception>

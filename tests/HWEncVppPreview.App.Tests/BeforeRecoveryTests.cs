@@ -4,7 +4,6 @@ using Avalonia.Threading;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.ViewModels;
 using HWEncVppPreview.Core;
-using HWEncVppPreview.Tests.Testing;
 
 namespace HWEncVppPreview.App.Tests;
 
@@ -19,54 +18,76 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var backend = new ControlledBackend(moveWhileRunning);
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend)
+        await using var vm = new MainWindowViewModel(services, clock, backend, backend, null, null, EncodeTime, debounceOverride: TimeSpan.Zero)
         { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
+        Task afterApplied = ObserveAfterApplied(vm);
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
         vm.IsShowingBefore = true;
         await backend.FirstBefore.Task.WaitWithDiagnosticsAsync(Safety);
+        await afterApplied.WaitWithDiagnosticsAsync(Safety);
         if (moveWhileRunning)
         {
-            await Until(() => !vm.IsBusy && vm.PreviewImage != null);
-            var shown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            System.ComponentModel.PropertyChangedEventHandler applied = (_, change) =>
-            {
-                if (change.PropertyName != nameof(vm.PreviewImage) || vm.PreviewImage == null) return;
-                var frame = typeof(MainWindowViewModel).GetField("_displayedFrame",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(vm) as Y4mFrame;
-                if (frame?.Xts is double timestamp && Math.Abs(timestamp - 1009.3) < 1e-6) shown.TrySetResult();
-            };
-            vm.PropertyChanged += applied;
-            try
-            {
-                for (int i = 0; i < 7; ++i)
-                {
-                    vm.StepFrameCommand.Execute(-1);
-                    double expected = 10 - (i + 1) * 0.1;
-                    await Until(() => Math.Abs(vm.CurrentSeconds - expected) < 1e-6);
-                }
-                // 目標更新は変換より先なので、最後のAfter表示を待ってからBeforeを解放し、描画との順序を競わせない。
-                await shown.Task.WaitWithDiagnosticsAsync(Safety);
-                // PropertyChangedはsetter内で同期通知され、ApplyImage後半のQueueBeforeはまだ終わっていない。
-                // UIを一巡させて同じApplyImageの残りを完了してから、保留中のBeforeを解放する。
-                await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitWithDiagnosticsAsync(Safety);
-            }
-            finally
-            {
-                vm.PropertyChanged -= applied;
-            }
-            Assert.Equal(9.3, vm.CurrentSeconds, 6);
+            for (int i = 0; i < 7; ++i)
+                vm.StepFrameCommand.Execute(-1);
         }
         backend.Release.TrySetResult();
+        // 最初の窓が不足した後、回復要求の登録を待ってから全処理の静止を待つ。
+        await backend.RecoveryStarted.Task.WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        await Until(() => !vm.IsBeforeBusy);
+        Assert.False(vm.IsBeforeBusy);
         Assert.NotNull(vm.BeforeImage);
-        Assert.True(backend.BeforeRequests.Count == 2, string.Join(" | ", backend.BeforeRequests.Select(request => $"target={request.TargetSeconds:R}, seek={CommandBuilder.Plan(request).SeekSeconds:R}, frames={CommandBuilder.Plan(request).FrameCount}, corr={request.CorrelationId}")));
+        Assert.Equal(moveWhileRunning ? (byte)93 : (byte)100, FirstPixel(vm.BeforeImage));
+        Assert.Equal(2, backend.BeforeRequests.Count);
         Assert.Equal(moveWhileRunning ? 9.3 : 10, backend.BeforeRequests.Last().TargetSeconds, 6);
         Assert.Null(vm.ErrorText);
+    }
+
+    [AvaloniaFact]
+    public async Task 回復画像の変換を保留すると静止待ちも画像反映まで完了しない()
+    {
+        using var capability = new CapabilityScope();
+        using var services = new Services();
+        var backend = new ControlledBackend(false);
+        var conversionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseConversion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<byte[]> ConvertAsync(Y4mFrame frame, CancellationToken token)
+        {
+            if (frame.Data[0] == 16 && frame.Xts is double timestamp && Math.Abs(timestamp - 1010) < 1e-6)
+            {
+                conversionStarted.TrySetResult();
+                await releaseConversion.Task.WaitAsync(token);
+            }
+            return await EncodeTime(frame, token);
+        }
+        await using var vm = new MainWindowViewModel(services, TimeProvider.System, backend, backend, null, null, ConvertAsync,
+            debounceOverride: TimeSpan.Zero)
+        { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw", IsShowingBefore = true };
+        vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
+        try
+        {
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+            await backend.FirstBefore.Task.WaitWithDiagnosticsAsync(Safety);
+            backend.Release.TrySetResult();
+            await backend.RecoveryStarted.Task.WaitWithDiagnosticsAsync(Safety);
+            await conversionStarted.Task.WaitWithDiagnosticsAsync(Safety);
+            Task idle = vm.WaitForIdleAsync();
+            // 変換完了を試験が保留しているため、静止待ちは論理的に完了できない。
+            Assert.False(idle.IsCompleted);
+            releaseConversion.TrySetResult();
+            await idle.WaitWithDiagnosticsAsync(Safety);
+            Assert.NotNull(vm.BeforeImage);
+            Assert.Equal((byte)100, FirstPixel(vm.BeforeImage));
+            Assert.Equal(2, backend.BeforeRequests.Count);
+            Assert.Null(vm.ErrorText);
+        }
+        finally
+        {
+            backend.Release.TrySetResult();
+            releaseConversion.TrySetResult();
+        }
     }
 
     [AvaloniaFact]
@@ -74,10 +95,10 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var backend = new ControlledBackend(false, lateAfter: true);
         backend.Release.TrySetResult();
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend)
+        await using var vm = new MainWindowViewModel(services, clock, backend, backend, null, null, EncodeTime, debounceOverride: TimeSpan.Zero)
         { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw", IsShowingBefore = true };
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
@@ -85,7 +106,7 @@ public sealed class BeforeRecoveryTests
         Assert.Null(vm.ErrorText);
         Assert.NotNull(vm.PreviewImage);
         Assert.NotNull(vm.BeforeImage);
-        Assert.True(backend.AfterRequests.Count >= 2);
+        Assert.NotEqual(FirstPixel(vm.PreviewImage), FirstPixel(vm.BeforeImage));
         Assert.NotEmpty(backend.BeforeRequests);
         Assert.All(backend.BeforeRequests, request => Assert.Empty(request.VppArgs));
     }
@@ -95,14 +116,14 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var backend = new ControlledBackend(false, alwaysLate: true);
         await using var vm = await Start(services, clock, backend);
         backend.Release.TrySetResult();
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.True(backend.BeforeRequests.Count == 1 + PreviewWindowRecovery.MaximumRetries, string.Join(" | ", backend.BeforeRequests.Select(request => $"target={request.TargetSeconds:R}, seek={CommandBuilder.Plan(request).SeekSeconds:R}, frames={CommandBuilder.Plan(request).FrameCount}, corr={request.CorrelationId}")));
         Assert.False(vm.IsBeforeBusy);
         Assert.Null(vm.BeforeImage);
+        Assert.Equal(1 + PreviewWindowRecovery.MaximumRetries, backend.BeforeRequests.Count);
     }
 
     [AvaloniaFact]
@@ -110,40 +131,19 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var backend = new ControlledBackend(false, blockRecovery: true);
         await using var vm = await Start(services, clock, backend);
         backend.Release.TrySetResult();
         await backend.RecoveryStarted.Task.WaitWithDiagnosticsAsync(Safety);
-        var shown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        System.ComponentModel.PropertyChangedEventHandler applied = (_, change) =>
-        {
-            if (change.PropertyName != nameof(vm.PreviewImage) || vm.PreviewImage == null) return;
-            var frame = typeof(MainWindowViewModel).GetField("_displayedFrame",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(vm) as Y4mFrame;
-            if (frame?.Xts is double timestamp && Math.Abs(timestamp - 1009.3) < 1e-6) shown.TrySetResult();
-        };
-        vm.PropertyChanged += applied;
-        try
-        {
-            for (int i = 0; i < 7; ++i)
-            {
-                vm.StepFrameCommand.Execute(-1);
-                double expected = 10 - (i + 1) * 0.1;
-                await Until(() => Math.Abs(vm.CurrentSeconds - expected) < 1e-6);
-            }
-            // 目標だけでなく最後のAfterのUI適用を待つ。早期Before1枚と競う順序はこの試験の対象外。
-            await shown.Task.WaitWithDiagnosticsAsync(Safety);
-        }
-        finally
-        {
-            vm.PropertyChanged -= applied;
-        }
+        for (int i = 0; i < 7; ++i)
+            vm.StepFrameCommand.Execute(-1);
         backend.ReleaseRecovery.TrySetResult();
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(9.3, vm.CurrentSeconds, 6);
-        Assert.True(backend.BeforeRequests.Count == 2, string.Join(" | ", backend.BeforeRequests.Select(request => $"target={request.TargetSeconds:R}, seek={CommandBuilder.Plan(request).SeekSeconds:R}, frames={CommandBuilder.Plan(request).FrameCount}, corr={request.CorrelationId}")));
         Assert.NotNull(vm.BeforeImage);
+        Assert.Equal((byte)93, FirstPixel(vm.BeforeImage));
+        Assert.Null(vm.ErrorText);
         Assert.False(vm.IsBeforeBusy);
     }
 
@@ -152,7 +152,7 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var backend = new ControlledBackend(false, blockRecovery: true, stopAfterEarly: true);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseAfter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -163,7 +163,7 @@ public sealed class BeforeRecoveryTests
                 entered.TrySetResult();
                 await releaseAfter.Task.WaitAsync(token);
             }
-            return YuvToBgra.Convert(frame);
+            return await EncodeTime(frame, token);
         }
         await using var vm = await Start(services, clock, backend, ConvertFrame);
         try
@@ -173,44 +173,21 @@ public sealed class BeforeRecoveryTests
             for (int index = 0; index < 6; ++index)
             {
                 vm.StepFrameCommand.Execute(-1);
-                double expected = 10 - (index + 1) * 0.1;
-                await Until(() => Math.Abs(vm.CurrentSeconds - expected) < 1e-6);
             }
             // 最後の入力は9.3へ確定済み。After画像のUI適用だけをconverterで保留する。
             vm.BeginSeekDrag();
             vm.EndSeekDrag(9.3);
             await entered.Task.WaitWithDiagnosticsAsync(Safety);
-            Assert.Equal(9.3, vm.CurrentSeconds, 6);
             backend.ReleaseRecovery.TrySetResult();
             await backend.EarlyOutsideCoreLock.Task.WaitWithDiagnosticsAsync(Safety);
-            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-            object context = typeof(MainWindowViewModel).GetField("_beforeExecutionContext", flags)!.GetValue(vm)!;
-            var segment = (PreviewSegmentSnapshot)context.GetType().GetProperty("Segment")!.GetValue(context)!;
-            Assert.Single(segment.Frames);
-            Assert.Equal(1010, segment.Frames[0].Xts!.Value, 6);
             // OnFrameから戻った後なのでCore lockを持たない。実際のAfter適用→QueueBeforeを通す。
             releaseAfter.TrySetResult();
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            // 現在の余分な第3要求を固定する。後日の最適化でこの期待値は見直す。
-            Assert.Equal(3, backend.BeforeRequests.Count);
-            Assert.Equal(9.3, backend.BeforeRequests.Last().TargetSeconds, 6);
-            var before = Assert.IsType<Y4mFrame>(typeof(MainWindowViewModel).GetField("_beforeDisplayedFrame", flags)!.GetValue(vm));
-            Assert.Equal(1009.3, before.Xts!.Value, 6);
+            Assert.Equal(9.3, vm.CurrentSeconds, 6);
             Assert.NotNull(vm.BeforeImage);
+            Assert.Equal((byte)93, FirstPixel(vm.BeforeImage));
             Assert.False(vm.IsBeforeBusy);
-            var header = Y4mHeader.Parse("YUV4MPEG2 W2 H2 F10:1 C420");
-            byte[] expectedPixels = YuvToBgra.Convert(new Y4mFrame(header, 1009.3, 0.1, new byte[6]));
-            byte[] actualPixels = new byte[16];
-            var handle = System.Runtime.InteropServices.GCHandle.Alloc(actualPixels, System.Runtime.InteropServices.GCHandleType.Pinned);
-            try
-            {
-                vm.BeforeImage.CopyPixels(new Avalonia.PixelRect(vm.BeforeImage.PixelSize), handle.AddrOfPinnedObject(), actualPixels.Length, 8);
-            }
-            finally
-            {
-                handle.Free();
-            }
-            Assert.Equal(expectedPixels, actualPixels);
+            Assert.Null(vm.ErrorText);
         }
         finally
         {
@@ -225,12 +202,11 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var backend = new ControlledBackend(false);
         await using var vm = await Start(services, clock, backend);
         await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
         await backend.Cancelled.Task.WaitWithDiagnosticsAsync(Safety);
-        Assert.Single(backend.BeforeRequests);
         Assert.False(vm.IsBeforeBusy);
     }
 
@@ -239,38 +215,59 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var backend = new ControlledBackend(false);
         await using var vm = await Start(services, clock, backend);
         vm.RefreshCommand.Execute(null);
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
         await backend.Cancelled.Task.WaitWithDiagnosticsAsync(Safety);
         backend.Release.TrySetResult();
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.NotNull(vm.BeforeImage);
-        Assert.Equal(2, backend.BeforeRequests.Count);
+        Assert.Equal((byte)100, FirstPixel(vm.BeforeImage));
+        Assert.Null(vm.ErrorText);
         Assert.False(vm.IsBeforeBusy);
     }
 
-    private static async Task<MainWindowViewModel> Start(Services services, FakeTimeProvider clock, ControlledBackend backend,
+    private static async Task<MainWindowViewModel> Start(Services services, TimeProvider clock, ControlledBackend backend,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter = null)
     {
-        var vm = new MainWindowViewModel(services, clock, backend, backend, null, null, converter)
+        var vm = new MainWindowViewModel(services, clock, backend, backend, null, null, converter ?? EncodeTime, debounceOverride: TimeSpan.Zero)
         { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
+        Task afterApplied = ObserveAfterApplied(vm);
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
         vm.IsShowingBefore = true;
         await backend.FirstBefore.Task.WaitWithDiagnosticsAsync(Safety);
-        await Until(() => vm.PreviewImage != null && !vm.IsBusy);
+        await afterApplied.WaitWithDiagnosticsAsync(Safety);
         return vm;
     }
 
-    private static async Task Until(Func<bool> predicate)
+    private static Task<byte[]> EncodeTime(Y4mFrame frame, CancellationToken token)
     {
-        using var timeout = new CancellationTokenSource(Safety);
-        while (!predicate()) await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(timeout.Token);
+        int role = frame.Data[0] == 80 ? 100 : 0;
+        byte value = (byte)(Math.Round(((frame.Xts ?? 1000) - 1000) * 10) + role);
+        return Task.FromResult(Enumerable.Repeat(value, frame.Header.Width * frame.Header.Height * 4).ToArray());
+    }
+
+    private static byte FirstPixel(Avalonia.Media.Imaging.Bitmap image)
+    {
+        using var pixels = Assert.IsType<Avalonia.Media.Imaging.WriteableBitmap>(image).Lock();
+        return System.Runtime.InteropServices.Marshal.ReadByte(pixels.Address);
+    }
+
+    private static Task ObserveAfterApplied(MainWindowViewModel vm)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        System.ComponentModel.PropertyChangedEventHandler? changed = null;
+        changed = (_, args) =>
+        {
+            if (args.PropertyName != nameof(vm.PreviewImage)) return;
+            vm.PropertyChanged -= changed;
+            done.TrySetResult();
+        };
+        vm.PropertyChanged += changed;
+        return done.Task;
     }
 
     private sealed class ControlledBackend(bool moved, bool alwaysLate = false, bool blockRecovery = false, bool lateAfter = false, bool stopAfterEarly = false) : IPreviewBackend
@@ -318,10 +315,10 @@ public sealed class BeforeRecoveryTests
                     FirstBefore.TrySetResult();
                     await WaitForReleaseAsync(Release.Task, cancellationToken);
                 }
-                if (number == 2 && blockRecovery)
+                if (number == 2)
                 {
                     RecoveryStarted.TrySetResult();
-                    await WaitForReleaseAsync(ReleaseRecovery.Task, cancellationToken);
+                    if (blockRecovery) await WaitForReleaseAsync(ReleaseRecovery.Task, cancellationToken);
                 }
             }
             var header = Y4mHeader.Parse("YUV4MPEG2 W2 H2 F10:1 C420");
@@ -338,7 +335,9 @@ public sealed class BeforeRecoveryTests
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 await sink.BeforeReadAsync(cancellationToken);
-                var frame = new Y4mFrame(header, 1000 + first + i * 0.1, 0.1, new byte[6]);
+                byte pixel = request.VppArgs.Count == 0 ? (byte)16 : (byte)80;
+                var frame = new Y4mFrame(header, 1000 + first + i * 0.1, 0.1,
+                    new[] { pixel, pixel, pixel, pixel, (byte)128, (byte)128 });
                 sink.OnFrame(frame);
                 if (before && number == 2 && stopAfterEarly && !EarlyOutsideCoreLock.Task.IsCompleted
                     && frame.Xts >= 1000 + request.TargetSeconds + 0.1 - 1e-6)

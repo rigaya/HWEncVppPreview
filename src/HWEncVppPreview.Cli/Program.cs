@@ -51,13 +51,7 @@ public static class Program
         }
         catch (Exception exception)
         {
-            result.ExitCode = 3;
-            result.Rc = 3;
-            result.Error = exception.Message;
-            result.ExceptionChain = ExceptionDiagnostics.Lines(exception);
-            result.TimedOut = exception is TimeoutException;
-            if (exception is PreviewBackendException backendException) result.StderrTail = Tail(backendException.StandardError);
-            else if (exception is InputProbeTimeoutException probeTimeout) result.StderrTail = Tail(probeTimeout.StandardError);
+            ApplyUnexpectedFailure(result, exception);
         }
         finally
         {
@@ -66,6 +60,18 @@ public static class Program
         // エンコーダのログやバイナリはstdoutへ流さず、この1行だけを出力する。
         await output.WriteLineAsync(JsonSerializer.Serialize(result, JsonOptions)).ConfigureAwait(false);
         return result.ExitCode;
+    }
+
+    // 実行時の例外を利用者向けの終了値と診断にまとめる。
+    internal static void ApplyUnexpectedFailure(CliResult result, Exception exception)
+    {
+        result.ExitCode = 3;
+        result.Rc = 3;
+        result.Error = exception.Message;
+        result.ExceptionChain = ExceptionDiagnostics.Lines(exception);
+        result.TimedOut = exception is TimeoutException;
+        if (exception is PreviewBackendException backendException) result.StderrTail = Tail(backendException.StandardError);
+        else if (exception is InputProbeTimeoutException probeTimeout) result.StderrTail = Tail(probeTimeout.StandardError);
     }
 
     private static async Task ExecuteAsync(Options options, CliResult result, TimeProvider clock, CancellationToken cancellationToken)
@@ -316,7 +322,7 @@ public static class Program
         }
     }
 
-    private sealed class CliResult
+    internal sealed class CliResult
     {
         public int Rc { get; set; }
         public string? Mode { get; set; }

@@ -30,7 +30,7 @@ public sealed partial class MainWindowViewModel
             DisplayBeforeFrame(value.Frame, Volatile.Read(ref _generation), revisionContext: context,
                 sourceSegment: segment, earlyDisplay: true);
         });
-        try { Dispatcher.UIThread.Post(post.Execute); }
+        try { _postToUi(post.Execute); }
         catch { post.Dispose(); throw; }
     }
 

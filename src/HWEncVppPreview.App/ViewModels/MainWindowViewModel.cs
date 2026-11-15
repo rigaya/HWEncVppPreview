@@ -31,6 +31,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private bool _hasDuration, _isBusy, _isLogOpen;
     private string _durationText = "", _statusText = "", _logText = "", _backendModeText = "", _elapsedText = "", _inputInfoText = "";
     private string? _errorText;
+    private readonly Action<Action> _postToUi;
     private readonly IViewModelServices _services;
     private readonly TimeProvider _clock;
     private readonly InputProbe _probe;
@@ -38,6 +39,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private readonly FrameCache _cache;
     private readonly bool _usesOwnedRaw;
     private readonly RawOwnershipScope? _rawOwnershipScope;
+    private readonly TimeSpan _inputEditDelay;
+    private readonly Func<string, string, CancellationToken, Task<string>>? _readTextOverride;
     private readonly PreviewController _controller;
     private readonly Func<Y4mFrame, HdrDisplaySettings, CancellationToken, Task<byte[]>>? _imageConverter;
     private readonly CancellationTokenSource _lifetime = new();
@@ -67,19 +70,36 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     internal MainWindowViewModel(IViewModelServices? services, TimeProvider? timeProvider,
         IPreviewBackend? preferred, IPreviewBackend? fallback, InputProbe? probe, FrameCache? cache,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter,
-        IPreviewBackend? backgroundPreferred = null, IPreviewBackend? backgroundFallback = null, bool beforeEnabled = true)
+        IPreviewBackend? backgroundPreferred = null, IPreviewBackend? backgroundFallback = null, bool beforeEnabled = true,
+        OwnedPreviewDependencies? owned = null, TimeSpan? debounceOverride = null,
+        Func<string, string, CancellationToken, Task<string>>? readTextOverride = null)
     {
+        if (owned != null)
+        {
+            ArgumentNullException.ThrowIfNull(preferred);
+            ArgumentNullException.ThrowIfNull(fallback);
+            if (preferred is not IRawOwnedBackend || fallback is not IRawOwnedBackend
+                || (backgroundPreferred != null && backgroundPreferred is not IRawOwnedBackend)
+                || (backgroundFallback != null && backgroundFallback is not IRawOwnedBackend))
+                throw new ArgumentException("所有権付きの画像を扱えるバックエンドが必要です。", nameof(owned));
+            if (cache != null && !ReferenceEquals(cache.OwnershipScope, owned.Scope))
+                throw new ArgumentException("キャッシュと画像の所有範囲が一致しません。", nameof(cache));
+        }
+        _postToUi = owned?.PostToUi ?? (action => Dispatcher.UIThread.Post(action));
+        _bgraPool = owned?.BgraPool ?? new BgraBufferPool();
         // rawを外へ渡し得る注入が1つでもあれば、VM全体を通常配列の経路へ固定する。
-        _usesOwnedRaw = preferred == null && fallback == null && backgroundPreferred == null
-            && backgroundFallback == null && cache == null && converter == null && probe == null;
+        _usesOwnedRaw = owned != null || (preferred == null && fallback == null && backgroundPreferred == null
+            && backgroundFallback == null && cache == null && converter == null && probe == null);
         _imageConverter = converter != null ? (frame, settings, token) => converter(frame, token) : null;
         _beforeEnabled = beforeEnabled;
         _services = services ?? new AvaloniaViewModelServices();
         _clock = timeProvider ?? TimeProvider.System;
+        _inputEditDelay = debounceOverride ?? TimeSpan.FromMilliseconds(150);
+        _readTextOverride = readTextOverride;
         _probe = probe ?? new InputProbe(_clock);
         _borrowInputProbe = probe == null && preferred == null;
         // 同じ長さなら読取が全体を上書きし、所有権が貸出中の画素を守るため、入力世代や形式では分けない。
-        _rawOwnershipScope = _usesOwnedRaw ? new RawOwnershipScope(new RawBufferPool()) : null;
+        _rawOwnershipScope = owned?.Scope ?? (_usesOwnedRaw ? new RawOwnershipScope(new RawBufferPool()) : null);
         _cache = cache ?? (_rawOwnershipScope != null ? new FrameCache(_rawOwnershipScope) : new FrameCache());
         var first = preferred ?? new ServerBackend(_clock);
         var second = fallback ?? new OneShotBackend(timeProvider: _clock);
@@ -91,9 +111,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             preferred == null ? new ObservedBackend(new OneShotBackend(timeProvider: _clock), "oneshot", this) : observedSecond;
         _controller = _rawOwnershipScope != null
             ? new PreviewController(_rawOwnershipScope, observedFirst, observedSecond, _cache, _clock,
-                backgroundBackend: beforeFirst, backgroundFallback: beforeSecond)
+                debounce: debounceOverride, backgroundBackend: beforeFirst, backgroundFallback: beforeSecond)
             : new PreviewController(observedFirst, observedSecond, _cache, _clock,
-                backgroundBackend: beforeFirst, backgroundFallback: beforeSecond);
+                debounce: debounceOverride, backgroundBackend: beforeFirst, backgroundFallback: beforeSecond);
         _controller.ReplayStarted += OnReplayStarted;
         if (_usesOwnedRaw)
         {
@@ -136,6 +156,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (parameter is PreviewCompareMode mode) CompareMode = mode;
         });
     }
+
+    // 画素の所有経路を保ったまま、試験で実行と画面配送の境界を制御する。
+    internal sealed record OwnedPreviewDependencies(RawOwnershipScope Scope, Action<Action> PostToUi,
+        BgraBufferPool? BgraPool = null);
 
     public double WindowWidth { get; set; } = 1440;
     public double WindowHeight { get; set; } = 900;
@@ -477,7 +501,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         DropRawPosts(candidate => ReferenceEquals(candidate, context));
         BeginReplay(context);
         long revision = Volatile.Read(ref context.DisplayRevision);
-        Dispatcher.UIThread.Post(() =>
+        _postToUi(() =>
         {
             if (!IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)) return;
             if (context.Kind == RequestKind.Before) { IsBeforeBusy = true; return; }
@@ -683,7 +707,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         context.Segment = null;
         string diagnostics = value.Diagnostic ?? value.Result?.StandardError ?? (value.Exception as PreviewBackendException)?.StandardError ?? context.Diagnostics;
         if (context.Kind == RequestKind.After) _afterRequests.TryRemove(context.Generation, out _);
-        Dispatcher.UIThread.Post(() =>
+        _postToUi(() =>
         {
             if (!IsCurrent(context)) return;
             context.Segment = null;
@@ -987,6 +1011,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     private async Task<string> ReadTextAsync(string encoder, string argument, CancellationToken token)
     {
+        // 実プロセスを使わない試験でも、受け取った文字列の処理は通常経路を通す。
+        if (_readTextOverride != null) return await _readTextOverride(encoder, argument, token).ConfigureAwait(false);
         using var process = new Process { StartInfo = new ProcessStartInfo(encoder)
         { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true } };
         process.StartInfo.ArgumentList.Add(argument);
@@ -1011,10 +1037,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _ = task.ContinueWith(completed => { lock (_taskLock) _tasks.Remove(completed); }, CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
-    private static Task PostAsync(Action action)
+    private Task PostAsync(Action action)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Dispatcher.UIThread.Post(() => { try { action(); completion.TrySetResult(); } catch (Exception exception) { completion.TrySetException(exception); } });
+        _postToUi(() => { try { action(); completion.TrySetResult(); } catch (Exception exception) { completion.TrySetException(exception); } });
         return completion.Task;
     }
     public ValueTask DisposeAsync()

@@ -36,7 +36,7 @@ public sealed partial class MainWindowViewModel
             try
             {
                 // パスや入力引数の文字入力では、metadata/probeのプロセス起動より前に待つ。
-                await Task.Delay(TimeSpan.FromMilliseconds(150), _clock, cancellation.Token).ConfigureAwait(false);
+                await Task.Delay(_inputEditDelay, _clock, cancellation.Token).ConfigureAwait(false);
                 Task preparation = Task.CompletedTask;
                 await PostAsync(() =>
                 {

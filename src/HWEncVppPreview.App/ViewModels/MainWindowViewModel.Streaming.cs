@@ -39,7 +39,7 @@ public sealed partial class MainWindowViewModel
     private void QueueSegmentPost()
     {
         if (!_disposed && Interlocked.CompareExchange(ref _segmentPostQueued, 1, 0) == 0)
-            Dispatcher.UIThread.Post(ApplyPendingSegment);
+            _postToUi(ApplyPendingSegment);
     }
 
     private void ApplyPendingSegment()

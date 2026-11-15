@@ -64,7 +64,7 @@ public sealed partial class MainWindowViewModel
     private void PostOwnership(RequestContext context, IDisposable ownership, Action callback)
     {
         var post = CaptureOwnershipPost(context, ownership, callback);
-        try { Dispatcher.UIThread.Post(post.Execute); }
+        try { _postToUi(post.Execute); }
         catch { post.Dispose(); throw; }
     }
 
@@ -72,13 +72,13 @@ public sealed partial class MainWindowViewModel
     {
         if (!_usesOwnedRaw)
         {
-            Dispatcher.UIThread.Post(callback);
+            _postToUi(callback);
             return;
         }
         var post = CaptureRawPost(context, frames, callback);
         try
         {
-            Dispatcher.UIThread.Post(post.Execute);
+            _postToUi(post.Execute);
         }
         catch
         {
