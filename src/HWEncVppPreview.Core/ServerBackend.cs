@@ -583,14 +583,22 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
             bool exited = false;
             if (graceful && !_forceStop.Task.IsCompleted)
             {
+                // quitが全期限を使うと回収の成否が実行順に依存するため、回収の時間を残す。
+                var quitDeadline = new CleanupDeadline(_clock, TimeSpan.FromTicks(timeout.Ticks / 2));
+                TimeSpan QuitRemaining()
+                {
+                    TimeSpan quit = quitDeadline.Remaining;
+                    TimeSpan total = deadline.Remaining;
+                    return quit < total ? quit : total;
+                }
                 Stage("quit_begin");
                 try
                 {
-                    await SendAsync(new { cmd = "quit" }, deadline.Remaining).ConfigureAwait(false);
+                    await SendAsync(new { cmd = "quit" }, QuitRemaining()).ConfigureAwait(false);
                     Stage("quit_sent");
                     Task exit = Process.WaitForExitAsync();
                     Task first = await Task.WhenAny(exit, _forceStop.Task)
-                        .WaitAsync(deadline.Remaining, _clock).ConfigureAwait(false);
+                        .WaitAsync(QuitRemaining(), _clock).ConfigureAwait(false);
                     if (first == exit) { await exit.ConfigureAwait(false); exited = true; }
                     else ProcessSupport.Observe(exit);
                 }
