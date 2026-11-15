@@ -26,9 +26,9 @@ public sealed class FormViewTests
         var search = catalog.GetVisualDescendants().OfType<TextBox>().First();
         search.Focus();
         session.Window.KeyTextInput("nlmeans");
-        await Flush();
+
         session.Window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
-        await Flush();
+
 
         var line = Assert.Single(session.ViewModel.FilterLines);
         Assert.Equal("--vpp-nlmeans", line.Text);
@@ -59,7 +59,7 @@ public sealed class FormViewTests
         foreach (int index in new[] { 0, 1, 0, 1 })
         {
             session.ViewModel.SelectedFilterLine = session.ViewModel.FilterLines[index];
-            await Flush();
+
         }
         Assert.Equal(texts, session.ViewModel.FilterLines.Select(line => line.Text));
     }
@@ -73,12 +73,12 @@ public sealed class FormViewTests
 
         // 利用者の操作でない値の変化 (初期化・補正) は書き戻さない
         slider.Value = 0.8;
-        await Flush();
+
         Assert.Equal("--vpp-kfm mode=24", line.Text);
 
         slider.Focus();
         slider.Value = 0.7;
-        await Flush();
+
         Assert.Equal("--vpp-kfm mode=24,thswitch=0.7", line.Text);
     }
 
@@ -89,13 +89,13 @@ public sealed class FormViewTests
         var line = await session.SelectAsync("--vpp-kfm thswitch=0.6");
         var combo = Field<ComboBox>(session, "mode");
         combo.SelectedItem = "60";
-        await Flush();
+
         Assert.Equal("--vpp-kfm thswitch=0.6,mode=60", line.Text);
 
         var reset = session.Window.GetVisualDescendants().OfType<Button>()
             .First(button => button.Content as string == "↺" && button.DataContext is FilterParameterViewModel { Name: "mode" });
         reset.Command!.Execute(null);
-        await Flush();
+
         Assert.Equal("--vpp-kfm thswitch=0.6", line.Text);
     }
 
@@ -107,7 +107,7 @@ public sealed class FormViewTests
         var box = Field<TextBox>(session, "patch");
         var center = box.TranslatePoint(new Point(box.Bounds.Width / 2, box.Bounds.Height / 2), session.Window)!.Value;
         session.Window.MouseWheel(center, new Vector(0, 1));
-        await Flush();
+
         Assert.Equal("--vpp-nlmeans patch=6", line.Text);
     }
 
@@ -118,7 +118,7 @@ public sealed class FormViewTests
         var line = await session.SelectAsync("--vpp-nlmeans sigma=0.01");
         var box = Field<TextBox>(session, "sigma");
         box.Text = "0.02,h=1";
-        await Flush();
+
         Assert.Equal("--vpp-nlmeans sigma=0.01", line.Text);
         var message = session.Window.GetVisualDescendants().OfType<TextBlock>()
             .First(text => text.Classes.Contains("paramError") && text.DataContext is FilterParameterViewModel { Name: "sigma" });
@@ -142,18 +142,18 @@ public sealed class FormViewTests
         Assert.False(number.IsEnabled);
 
         Segment("off").Command!.Execute(null);
-        await Flush();
+
         Assert.Equal("--vpp-kfm mode=24,search_early_sad=off", line.Text);
 
         // 「数値」を押しただけでは行を変えず、数値の欄が使えるようになる
         Segment("数値").Command!.Execute(null);
-        await Flush();
+
         Assert.Equal("--vpp-kfm mode=24,search_early_sad=off", line.Text);
         Assert.True(number.IsEnabled);
         Assert.DoesNotContain("active", Segment("off").Classes);
 
         number.Text = "16";
-        await Flush();
+
         Assert.Equal("--vpp-kfm mode=24,search_early_sad=16", line.Text);
         Assert.Contains("active", Segment("数値").Classes);
     }
@@ -166,7 +166,7 @@ public sealed class FormViewTests
         var slider = Field<Slider>(session, "thswitch");
         double width = slider.Bounds.Width;
         line.Text = "--vpp-kfm mode=24,thswitch=0.7";
-        await Flush();
+
         Assert.Equal(width, Field<Slider>(session, "thswitch").Bounds.Width);
     }
 
@@ -189,7 +189,9 @@ internal static class FormSessionExtensions
         var line = new FilterLineViewModel { Text = text };
         session.ViewModel.FilterLines.Add(line);
         session.ViewModel.SelectedFilterLine = line;
-        await Flush();
+        await WaitForLayoutAsync(session.Window, () => session.Window.GetVisualDescendants().OfType<Control>()
+            .Any(control => control.IsEffectivelyVisible && control.DataContext is FilterParameterViewModel
+                && control is TextBox or Slider or ComboBox));
         return line;
     }
 }

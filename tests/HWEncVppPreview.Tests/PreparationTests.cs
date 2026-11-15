@@ -64,7 +64,7 @@ public sealed class PreparationTests
             Calls++;
             if (unsupported) throw new PreviewServerNotSupportedException("未対応のテストbackend");
             Started.TrySetResult();
-            if (hang) await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            if (hang) await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(token);
             var header = Y4mHeader.Parse("YUV4MPEG2 W4 H4 F30:1 Ip A1:1 C420");
             sink.OnHeader(header);
             sink.OnFrame(new(header, 0, null, new byte[header.FrameBytes]));

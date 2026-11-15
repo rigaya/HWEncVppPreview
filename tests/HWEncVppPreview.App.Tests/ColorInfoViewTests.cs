@@ -14,8 +14,8 @@ public sealed class ColorInfoViewTests
     public async Task 表示画像の色とHDRの印を表示し言語と前後の切り替えに追従する()
     {
         string previous = UiLanguage.Preference;
-        var clock = new FakeTimeProvider();
-        await using var vm = new MainWindowViewModel(timeProvider: clock, preferred: new OneShotBackend())
+        await using var vm = new MainWindowViewModel(null, TimeProvider.System, new OneShotBackend(), null, null, null, null,
+            debounceOverride: TimeSpan.Zero)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "fake.ts"
         };
@@ -31,9 +31,8 @@ public sealed class ColorInfoViewTests
             Assert.False(vm.IsHdrReferenceWhiteVisible);
             window.Show();
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            clock.Advance(TimeSpan.FromMilliseconds(150));
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await Flush();
+
             Assert.NotNull(vm.PreviewImage);
             Assert.Contains("BT.2020", vm.ColorInfoText);
             Assert.Contains("full", vm.ColorInfoText);
@@ -42,13 +41,13 @@ public sealed class ColorInfoViewTests
             Assert.True(vm.IsHdrReferenceWhiteVisible);
             Assert.True(window.FindControl<StackPanel>("HdrReferenceWhitePanel")!.IsVisible);
             UiLanguage.Set("en");
-            await Flush();
+
             Assert.Contains("PQ→SDR 203nit", vm.ColorInfoText);
             string after = vm.ColorInfoText;
 
             vm.IsShowingBefore = true;
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await Flush();
+
             Assert.NotNull(vm.BeforeImage);
             Assert.Equal("BT.601 limited", vm.ColorInfoText);
             vm.IsShowingBefore = false;
@@ -66,8 +65,8 @@ public sealed class ColorInfoViewTests
     [AvaloniaFact]
     public async Task SDRだけの表示では基準白の設定を出さない()
     {
-        var clock = new FakeTimeProvider();
-        await using var vm = new MainWindowViewModel(timeProvider: clock, preferred: new OneShotBackend())
+        await using var vm = new MainWindowViewModel(null, TimeProvider.System, new OneShotBackend(), null, null, null, null,
+            debounceOverride: TimeSpan.Zero)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "fake.ts"
         };
@@ -77,9 +76,8 @@ public sealed class ColorInfoViewTests
         {
             window.Show();
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            clock.Advance(TimeSpan.FromMilliseconds(150));
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await Flush();
+
             Assert.NotNull(vm.PreviewImage);
             Assert.DoesNotContain("SDR", vm.ColorInfoText);
             Assert.False(vm.IsHdrReferenceWhiteVisible);

@@ -27,26 +27,39 @@ AppBuilder.Configure<HWEncVppPreview.App.App>()
     .SetupWithoutStarting();
 
 // デザイン確認用のダミー値を入れたViewModel（スクリーンショット・デザイナー用）。
-static MainWindowViewModel CreateDesignSample()
+static MainWindowViewModel CreateDesignSample(bool loadHelp = false)
 {
-    var vm = new MainWindowViewModel
+    var metadataBackend = new SnapshotMetadataBackend();
+    var vm = loadHelp
+        ? new MainWindowViewModel(null, TimeProvider.System, metadataBackend, metadataBackend, new InputProbe(metadataBackend, TimeProvider.System), null, null,
+            readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help"
+                ? File.ReadAllText(HelpDataPath("qsvenc-h1.txt")) : "QSVEnc 8.35"))
+        : new MainWindowViewModel();
+    if (loadHelp)
     {
-        EncoderPath = @"C:\Encoders\QSVEncC64.exe",
-        EncoderDescription = "QSVEnc 8.35",
-        InputPath = @"X:\Encoders\narnia.ts",
-        CurrentTimeText = "1:29:58.000",
-        CurrentSeconds = 5398,
-        DurationSeconds = 6750,
-        HasDuration = true,
-        DurationText = "1:52:30",
-        BackendModeText = AppMessages.Server,
-        ElapsedText = AppMessages.Elapsed(0.48),
-        InputInfoText = "1440x1080 (SAR 4:3)  29.97fps",
-        StatusText = AppMessages.Done,
-        DisplayWidth = 1920,
-        DisplayHeight = 1080,
-        HelpText =
-            "   --vpp-nlmeans [<param1>=<value>][,<param2>=<value>][...]\n" +
+        // 偽の入力検査を使い、ダミーパスとhelpを通常の初期化経路で取得する。
+        vm.EncoderPath = @"C:\Encoders\QSVEncC64.exe";
+        vm.InputPath = @"X:\Encoders\narnia.ts";
+        Pump(vm.InitializeAsync(false));
+        Pump(vm.WaitForIdleAsync());
+    }
+    vm.EncoderPath = @"C:\Encoders\QSVEncC64.exe";
+    vm.EncoderDescription = "QSVEnc 8.35";
+    if (!loadHelp) vm.InputPath = @"X:\Encoders\narnia.ts";
+    vm.CurrentTimeText = "1:29:58.000";
+    vm.CurrentSeconds = 5398;
+    vm.DurationSeconds = 6750;
+    vm.HasDuration = true;
+    vm.DurationText = "1:52:30";
+    vm.BackendModeText = AppMessages.Server;
+    vm.ElapsedText = AppMessages.Elapsed(0.48);
+    vm.InputInfoText = "1440x1080 (SAR 4:3)  29.97fps";
+    vm.StatusText = AppMessages.Done;
+    vm.DisplayWidth = 1920;
+    vm.DisplayHeight = 1080;
+    if (!loadHelp)
+    {
+        vm.HelpText = "   --vpp-nlmeans [<param1>=<value>][,<param2>=<value>][...]\n" +
             "     enable denoise filter by non-local means.\n" +
             "    params\n" +
             "      sigma=<float>  sigma (default=0.005, 0.0 -)\n" +
@@ -55,8 +68,8 @@ static MainWindowViewModel CreateDesignSample()
             "      search=<int>   search size (default=11, 3-)\n" +
             "      fp16=<string>  select fp16 usage.\n" +
             "                       none, blockdiff (default), all\n" +
-            "      d=<int>        temporal radius (default=0, 0-2)\n",
-    };
+            "      d=<int>        temporal radius (default=0, 0-2)\n";
+    }
     vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.005,h=0.05" });
     vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-edgelevel strength=10", IsEnabled = false });
     vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-deband" });
@@ -151,11 +164,9 @@ CaptureForm("dark_form_number_or_choice", ThemeVariant.Dark, ["--vpp-mctf"], 0);
 void CaptureForm(string name, ThemeVariant theme, string[] lines, int selected, bool openAdd = false, bool textMode = false)
 {
     Application.Current!.RequestedThemeVariant = theme;
-    var vm = CreateDesignSample();
+    var vm = CreateDesignSample(loadHelp: true);
     vm.PreviewImage = CreateTestImage(1440, 1080);
     vm.FilterLines.Clear();
-    typeof(MainWindowViewModel).GetProperty(nameof(MainWindowViewModel.HelpSchema))!
-        .SetValue(vm, new HWEncVppPreview.Core.HelpSchema(File.ReadAllText(HelpDataPath("qsvenc-h1.txt"))));
     foreach (var text in lines) vm.FilterLines.Add(new FilterLineViewModel { Text = text });
     vm.SelectedFilterLine = selected >= 0 ? vm.FilterLines[selected] : null;
     vm.IsTextListMode = textMode;
@@ -181,11 +192,8 @@ void CaptureForm(string name, ThemeVariant theme, string[] lines, int selected, 
 void CaptureCompletion(string name, ThemeVariant theme, string text, bool category = false)
 {
     Application.Current!.RequestedThemeVariant = theme;
-    var vm = CreateDesignSample();
+    var vm = CreateDesignSample(loadHelp: true);
     vm.PreviewImage = CreateTestImage(1440, 1080);
-    // デザイン用の ViewModel はエンコーダを実行しないので、H1 の書式の実 help を直接与える (開発用ツールなのでリフレクションで足りる)
-    typeof(MainWindowViewModel).GetProperty(nameof(MainWindowViewModel.HelpSchema))!
-        .SetValue(vm, new HWEncVppPreview.Core.HelpSchema(File.ReadAllText(HelpDataPath("qsvenc-h1.txt"))));
     var line = new FilterLineViewModel { Text = text };
     vm.FilterLines.Add(line);
     // V8 以降、行のテキスト欄は選んだ行のフォームの上にある
@@ -293,11 +301,13 @@ static string? Option(string[] arguments, string name)
 
 static void Pump(Task operation)
 {
-    // HeadlessのコンソールにはUIループがないため、Postの反映と非同期処理を同じスレッドで待つ。
-    while (!operation.IsCompleted)
+    // 完了通知で入れ子の画面ループを終了し、待機時間の推測を使わない。
+    if (!operation.IsCompleted)
     {
-        Dispatcher.UIThread.RunJobs();
-        ((IAsyncResult)operation).AsyncWaitHandle.WaitOne(5);
+        var frame = new DispatcherFrame();
+        _ = operation.ContinueWith(_ => Dispatcher.UIThread.Post(() => frame.Continue = false),
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        Dispatcher.UIThread.PushFrame(frame);
     }
     operation.GetAwaiter().GetResult();
     Dispatcher.UIThread.RunJobs();
@@ -346,4 +356,19 @@ sealed class SnapshotServices(string outputDirectory) : IViewModelServices
     public Task<string?> ChooseSaveFiltersAsync() => Task.FromResult<string?>(null);
     public Task<string?> ChooseLoadFiltersAsync() => Task.FromResult<string?>(null);
     public Task CopyTextAsync(string text) => Task.CompletedTask;
+}
+
+// 撮影時の入力検査とプレビューを実プロセスなしで完了させる。
+sealed class SnapshotMetadataBackend : IPreviewBackend
+{
+    public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
+    {
+        var header = Y4mHeader.Parse("YUV4MPEG2 W2 H2 F30000:1001 Ip A1:1 C420");
+        sink.OnHeader(header);
+        double seek = CommandBuilder.Plan(request).SeekSeconds ?? 0;
+        sink.OnFrame(new Y4mFrame(header, seek, 1001.0 / 30000, [16, 16, 16, 16, 128, 128]));
+        return Task.FromResult(new PreviewRunResult(0, "Duration: 01:52:30.00"));
+    }
+    public ValueTask AbortAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

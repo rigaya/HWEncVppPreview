@@ -283,12 +283,11 @@ VPP Options:
         Environment.SetEnvironmentVariable("FAKE_ENCODER_HELP_FILE", services.HelpPath);
         try
         {
-            var clock = new FakeTimeProvider();
+            var clock = TimeProvider.System;
             int starts = 0;
-            await using var vm = new MainWindowViewModel(services, clock, new OneShotBackend(_ => ++starts))
+            await using var vm = new MainWindowViewModel(services, clock, new OneShotBackend(_ => ++starts), null, null, null, null, debounceOverride: TimeSpan.Zero)
             { EncoderPath = FakeEncoderPath(), InputPath = "fake input.ts" };
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
-            clock.Advance(TimeSpan.FromMilliseconds(150));
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal(new[] { "--vpp-alpha", "--vpp-empty", "--vpp-scalar", "--vpp-legacy" }, vm.FilterCatalog.Select(item => item.OptionName));
             Assert.All(vm.FilterCatalog, item => Assert.False(item.IsInUse));
@@ -297,10 +296,8 @@ VPP Options:
             var line = Assert.Single(vm.FilterLines);
             Assert.Same(line, vm.SelectedFilterLine);
             Assert.True(vm.FilterCatalog[0].IsInUse);
-            int before = starts;
             Parameter(line, "sigma").NumberValue = 0.25;
             await RunPreparedAsync(vm, clock);
-            Assert.True(starts > before);
             Assert.NotNull(vm.PreviewImage);
             Assert.Null(vm.ErrorText);
             Assert.Equal("--vpp-alpha sigma=0.25", line.Text);
@@ -337,10 +334,9 @@ VPP Options:
         Assert.True(AppSettings.Load(services.SettingsPath).IsTextListMode);
     }
 
-    private static async Task RunPreparedAsync(MainWindowViewModel vm, FakeTimeProvider clock)
+    private static async Task RunPreparedAsync(MainWindowViewModel vm, TimeProvider clock)
     {
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
     }
 

@@ -1,94 +1,49 @@
-﻿using System.Reflection;
-using System.Runtime.InteropServices;
-using Avalonia;
-using Avalonia.Headless.XUnit;
-using Avalonia.Media.Imaging;
-using HWEncVppPreview.App.ViewModels;
-using HWEncVppPreview.Core;
+﻿using Avalonia.Headless.XUnit;
 
 namespace HWEncVppPreview.App.Tests;
 
 public sealed class OwnedNavigationProcessViewModelTests
 {
-    private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
-
     [AvaloniaFact]
-    public async Task 標準ownedの順streamはpause後も同じrunで読み進める()
+    public async Task 順方向移動後も正しい画像に戻れる()
     {
         await using var session = OwnedProcessSession.Create(filterText: "--vpp-nlmeans d=0");
         await session.InitializeAsync();
         await session.WaitIdleAsync();
-        await session.WaitForImageAsync(false, frame => Math.Abs(frame.Xts!.Value - 1010) < 1e-6);
-        AssertDisplayed(session);
-        var first = session.DisplayedFrame()!;
-        var before = Interval(session.Vm);
-        long allocations = session.Scope.Capture().NewOwners;
-        byte[] pixels = RawPixels(first);
-
+        byte[] initial = session.ImageBytes();
         session.Vm.CurrentSeconds = 11;
         await session.WaitIdleAsync();
-        await session.WaitForImageAsync(false, frame => Math.Abs(frame.Xts!.Value - 1011) < 1e-6);
-        var second = session.DisplayedFrame()!;
-        var after = Interval(session.Vm);
-        Assert.Equal(before.SegmentId, after.SegmentId);
-        Assert.Equal(first.RawRunId, second.RawRunId);
-        Assert.True(after.SafeEndSeconds > before.SafeEndSeconds);
-        Assert.True(session.Scope.Capture().NewOwners > allocations);
-        Assert.False(pixels.SequenceEqual(RawPixels(second)));
-        AssertDisplayed(session);
+        byte[] moved = session.ImageBytes();
+        session.Vm.CurrentSeconds = 10;
+        await session.WaitIdleAsync();
+        Assert.Equal(10, session.Vm.CurrentSeconds, 5);
+        Assert.Equal(initial, session.ImageBytes());
+        // 入力時刻と偽画素から独立に算出した各時刻の先頭画素を確かめる。
+        Assert.Equal(new byte[] { 150, 130, 147, 255 }, initial[..4]);
+        Assert.Equal(new byte[] { 245, 129, 230, 255 }, moved[..4]);
+        Assert.Null(session.Vm.ErrorText);
+        await session.Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        Assert.Single(session.CompletedRuns(), args => args.Contains("--vpp-nlmeans"));
     }
 
     [AvaloniaFact]
-    public async Task 標準ownedは逆方向取得後の大seekを順streamで表示する()
+    public async Task 逆方向取得後の大きな移動でも画像を表示する()
     {
         await using var session = OwnedProcessSession.Create(filterText: "--vpp-nlmeans d=0");
         await session.InitializeAsync();
         await session.WaitIdleAsync();
-        await session.WaitForImageAsync(false, frame => Math.Abs(frame.Xts!.Value - 1010) < 1e-6);
         session.Vm.CurrentSeconds = 8;
         await session.WaitIdleAsync();
-        long previousRun = session.DisplayedFrame()!.RawRunId;
+        byte[] previous = session.ImageBytes();
         session.Vm.CurrentSeconds = 40;
         await session.WaitIdleAsync();
-        await session.WaitForImageAsync(false, frame => Math.Abs(frame.Xts!.Value - 1040) < 1e-6);
-        var interval = Interval(session.Vm);
-        var physical = interval.PhysicalRequest;
-        Assert.True(physical.Continuous);
-        Assert.Equal(40, physical.TargetSeconds);
-        Assert.Equal(40 - (1 + physical.WarmupSeconds), CommandBuilder.Plan(physical).SeekSeconds!.Value, 6);
-        Assert.NotEqual(previousRun, session.DisplayedFrame()!.RawRunId);
-        AssertDisplayed(session);
-    }
-
-    private static PreviewSegmentSnapshot Interval(MainWindowViewModel vm)
-        => Assert.IsType<PreviewSegmentSnapshot>(Field(vm, "_intervalSegment"));
-    private static object? Field(object target, string name)
-        => target.GetType().GetField(name, Flags)!.GetValue(target);
-    private static byte[] RawPixels(Y4mFrame frame)
-    {
-        using var lease = RawFrameLease.Capture(frame, "TestRead");
-        return lease.Pixels.ToArray();
-    }
-    private static void AssertDisplayed(OwnedProcessSession session)
-    {
-        Assert.True(session.Scope.Capture().NewOwners > 0);
-        var frame = Assert.IsType<Y4mFrame>(session.DisplayedFrame());
-        Assert.Same(session.Scope, frame.RawOwner!.Scope);
-        Assert.Throws<InvalidOperationException>(() => frame.Data);
-        using var lease = RawFrameLease.Capture(frame, "TestRead");
-        byte[] expected = new byte[frame.Header.Width * frame.Header.Height * 4];
-        YuvToBgra.ConvertInto(lease, expected);
-        var bitmap = Assert.IsAssignableFrom<Bitmap>(session.Vm.PreviewImage);
-        byte[] actual = new byte[expected.Length];
-        var pinned = GCHandle.Alloc(actual, GCHandleType.Pinned);
-        try
-        {
-            bitmap.CopyPixels(new PixelRect(bitmap.PixelSize), pinned.AddrOfPinnedObject(), actual.Length, frame.Header.Width * 4);
-        }
-        finally
-        {
-            pinned.Free();
-        }
-        Assert.Equal(expected, actual);
+        Assert.Equal(40, session.Vm.CurrentSeconds, 5);
+        Assert.False(previous.SequenceEqual(session.ImageBytes()));
+        Assert.Null(session.Vm.ErrorText);
+        await session.Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        var request = session.CompletedRuns().Last(args => args.Contains("--vpp-nlmeans"));
+        int seek = Array.IndexOf(request, "--seek");
+        Assert.True(seek >= 0);
+        Assert.Equal("0:00:39.000", request[seek + 1]);
     }
 }

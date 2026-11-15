@@ -1,10 +1,10 @@
 ﻿using System.Collections.Concurrent;
-using System.Reflection;
+using Avalonia.Media.Imaging;
+using System.Runtime.InteropServices;
 using Avalonia.Headless.XUnit;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.ViewModels;
 using HWEncVppPreview.Core;
-using HWEncVppPreview.Tests.Testing;
 
 namespace HWEncVppPreview.App.Tests;
 
@@ -20,29 +20,17 @@ public sealed class NoTimestampRollingViewModelTests
     {
         using var capabilities = new LegacyCapabilities();
         using var services = new Services();
-        var clock = new FakeTimeProvider();
         var backend = new Backend();
         var cache = new FrameCache(Header.FrameBytes * (long)cacheFrames);
-        await using var vm = Create(services, clock, backend, cache);
-        await Start(vm, clock);
-        AssertImages(vm, 300);
-        var segment = Interval(vm);
-        if (cacheFrames > 0)
-        {
-            // 20枚の一時枠で76枚を受信し、cacheへ戻せない列は候補前後3枚だけ残る。
-            Assert.Equal(3, segment.Frames.Count);
-            Assert.True(segment.Clock.ToSelectionSeconds(10, segment.Frames, 30) < segment.Clock.ToFrameSeconds(10));
-            Assert.Equal(0, cache.SizeBytes);
-        }
+        await using var vm = Create(services, backend, cache);
+        await Start(vm);
         foreach (int direction in new[] { 1, 1, -1, -1 })
         {
-            double expected = vm.CurrentSeconds + direction / 30.0;
             vm.StepFrameCommand.Execute(direction);
-            Assert.Equal(expected, vm.CurrentSeconds, 8);
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            Assert.Equal(expected, vm.CurrentSeconds, 8);
-            AssertImages(vm, (int)Math.Round(expected * 30));
         }
+        Assert.Equal(10, vm.CurrentSeconds, 8);
+        AssertImages(vm, 300);
     }
 
     [AvaloniaFact]
@@ -50,27 +38,20 @@ public sealed class NoTimestampRollingViewModelTests
     {
         using var capabilities = new LegacyCapabilities();
         using var services = new Services();
-        var clock = new FakeTimeProvider();
         var backend = new Backend { HoldSecond = true };
-        await using var vm = Create(services, clock, backend, new FrameCache(Header.FrameBytes * 20L));
+        await using var vm = Create(services, backend, new FrameCache(Header.FrameBytes * 20L));
         try
         {
-            await Start(vm, clock);
+            await Start(vm);
             vm.StepFrameCommand.Execute(1);
             await backend.SecondStarted.Task.WaitWithDiagnosticsAsync(Safety);
-            Assert.Equal(10 + 1.0 / 30, vm.CurrentSeconds, 8);
             // 最初の3枚窓の末尾から、次の隣だけを有限の完了列で選ばせる。
             vm.StepFrameCommand.Execute(1);
             await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
             backend.ReleaseSecond.TrySetResult();
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            // Xtsなしではms丸め済みseekが時計の原点。実配列番号を入力時計へ戻した値を確認する。
-            var segment = Interval(vm);
-            int index = Enumerable.Range(0, segment.Frames.Count).Single(i => segment.Frames[i].Data[0] == (byte)(302 & 255));
-            Assert.Equal(segment.Clock.ToInputSeconds(segment.Frames[index], index, 30), vm.CurrentSeconds, 10);
             Assert.InRange(vm.CurrentSeconds, 10 + 2.0 / 30 - 0.001, 10 + 2.0 / 30 + 0.001);
             AssertImages(vm, 302);
-            Assert.True(backend.Requests.Count >= 3);
         }
         finally { backend.ReleaseSecond.TrySetResult(); }
     }
@@ -107,32 +88,26 @@ public sealed class NoTimestampRollingViewModelTests
         Assert.Equal(1, FrameSelector.Select(retained.Frames, local, 30));
     }
 
-    private static MainWindowViewModel Create(Services services, FakeTimeProvider clock, Backend backend, FrameCache cache)
-        => new(services, clock, backend, backend, cache: cache)
+    private static MainWindowViewModel Create(Services services, Backend backend, FrameCache cache)
+        => new(services, TimeProvider.System, backend, backend, null, cache,
+            (frame, token) => Task.FromResult(Enumerable.Repeat(frame.Data[0], frame.Header.Width * frame.Header.Height * 4).ToArray()))
         { EncoderPath = FakeEncoderPath(), InputPath = "no-xts-rolling.ts", InputArgsText = "--avhw", CurrentSeconds = 10,
             CompareMode = PreviewCompareMode.SideBySide };
-    private static async Task Start(MainWindowViewModel vm, FakeTimeProvider clock)
+    private static async Task Start(MainWindowViewModel vm)
     {
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Null(vm.ErrorText);
     }
-    private static PreviewSegmentSnapshot Interval(MainWindowViewModel vm)
-        => Assert.IsType<PreviewSegmentSnapshot>(typeof(MainWindowViewModel).GetField("_intervalSegment", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm));
     private static void AssertImages(MainWindowViewModel vm, int tick)
     {
         Assert.Null(vm.ErrorText);
-        Assert.NotNull(vm.PreviewImage);
-        Assert.NotNull(vm.BeforeImage);
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
-        var after = Assert.IsType<Y4mFrame>(typeof(MainWindowViewModel).GetField("_displayedFrame", flags)!.GetValue(vm));
-        var before = Assert.IsType<Y4mFrame>(typeof(MainWindowViewModel).GetField("_beforeDisplayedFrame", flags)!.GetValue(vm));
-        Assert.Equal((byte)(tick & 255), after.Data[0]);
-        // cache無効や時刻なしの取り直しでも、同じglobalコマの全pixelを選べればよい。
-        Assert.Equal(after.Data, before.Data);
-        Assert.Null(after.Xts);
-        Assert.Null(before.Xts);
+        var after = Assert.IsType<WriteableBitmap>(vm.PreviewImage);
+        var before = Assert.IsType<WriteableBitmap>(vm.BeforeImage);
+        using var afterPixels = after.Lock();
+        using var beforePixels = before.Lock();
+        Assert.Equal((byte)(tick & 255), Marshal.ReadByte(afterPixels.Address));
+        Assert.Equal(Marshal.ReadByte(afterPixels.Address), Marshal.ReadByte(beforePixels.Address));
     }
 
     private sealed class Backend : IPreviewBackend

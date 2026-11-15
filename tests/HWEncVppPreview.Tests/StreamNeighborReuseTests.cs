@@ -22,20 +22,20 @@ public sealed class StreamNeighborReuseTests
     {
         var backend = new Backend(holdCenter: reading);
         await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
-        var updated = new TaskCompletionSource<PreviewSegmentUpdate>(TaskCreationOptions.RunContinuationsAsynchronously);
+        PreviewSegmentUpdate? result = null;
         double center = reading ? 10 : 12;
         controller.SegmentUpdated += value =>
         {
-            if (value.Request.CorrelationId == 2 && value.Segment.Frames.Any(frame => frame.Xts == 1000 + center + 0.5))
-                updated.TrySetResult(value);
+            if (value.Request.CorrelationId == 2) result = value;
         };
         controller.Submit(Request());
         if (reading) await backend.Center.Task.WaitWithDiagnosticsAsync(Safety);
         else await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
         controller.Submit(Request(center, 2), bypassCache: true, navigation: true, reuseActiveStream: true);
         backend.Next.TrySetResult();
-        var result = await updated.Task.WaitWithDiagnosticsAsync(Safety);
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.NotNull(result);
+        Assert.Contains(result.Segment.Frames, frame => frame.Xts == 1000 + center + 0.5);
         Assert.Single(backend.Requests);
         Assert.Equal(0, backend.Cancelled);
         Assert.Equal(2, result.Request.CorrelationId);

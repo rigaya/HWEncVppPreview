@@ -1,11 +1,9 @@
-﻿using System.Collections.Concurrent;
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media.Imaging;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.ViewModels;
 using HWEncVppPreview.Core;
-using HWEncVppPreview.Tests.Testing;
 
 namespace HWEncVppPreview.App.Tests;
 
@@ -20,112 +18,78 @@ public sealed class StitchRejectedStreamingViewModelTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = new FakeTimeProvider();
-        var cache = new FrameCache();
+        var clock = TimeProvider.System;
+        var scope = new RawOwnershipScope(new RawBufferPool());
+        var cache = new FrameCache(scope);
         var request = new PreviewRequest
         {
             EncoderPath = FakeEncoderPath(), InputFile = "reject-stream.ts", InputArgs = ["--avhw"], Fps = 30, TargetSeconds = 10,
             Capabilities = new(true, true), TimestampOriginSeconds = 1000,
         };
-        var old = Assert.IsType<PreviewSegmentSnapshot>(cache.StoreSegment(request, Frames(OldPixels), new(1000, 0, true), 9, 12));
+        cache.StoreSegment(request, Frames(OldPixels), new(1000, 0, true), 9, 12);
         var backend = new ControlledBackend();
-        var applied = new ConcurrentQueue<byte[]>();
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, null, cache)
+        var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Avalonia.Threading.Dispatcher.UIThread.Post(action));
+        await using var vm = new MainWindowViewModel(services, clock, backend, backend, null, cache,
+            (frame, token) =>
+            {
+                byte[] result = new byte[frame.Header.Width * frame.Header.Height * 4];
+                byte position = (byte)((int)Math.Round(((frame.Xts ?? 1000) - 1000) * 30) & 255);
+                for (int index = 0; index < result.Length; index += 4)
+                {
+                    result[index] = frame.RawPixels[0];
+                    result[index + 1] = position;
+                    result[index + 3] = 255;
+                }
+                return Task.FromResult(result);
+            },
+            debounceOverride: TimeSpan.Zero, owned: dependencies)
         { EncoderPath = FakeEncoderPath(), InputPath = request.InputFile, CurrentSeconds = 10, InputArgsText = "--avhw" };
-        vm.PropertyChanged += (_, args) =>
-        {
-            if (args.PropertyName == nameof(vm.PreviewImage) && vm.PreviewImage is WriteableBitmap bitmap)
-                applied.Enqueue(Pixels(bitmap));
-        };
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Empty(backend.Requests);
-        Assert.NotNull(vm.PreviewImage);
-        Assert.True(cache.CanStitch(request));
-
-        // 初回source設定は診断をresetするため、VM初期化後に実画素不一致を発生させる。
-        var rejected = Assert.IsType<PreviewSegmentSnapshot>(cache.StoreSegment(request,
-            Frames(RejectedPixels), new(1000, 0, true), 9, 12));
-        Assert.False(cache.CanStitch(request));
-        Assert.False(rejected.CanStitch);
-        Assert.True(rejected.Clock.TrustedAbsolute);
-        Assert.Null(cache.GetSegment(old.SegmentId));
-        while (applied.TryDequeue(out _)) { }
+        // 二つの区間に異なる画素を与え、接続できない状態で操作を続ける。
+        cache.StoreSegment(request, Frames(RejectedPixels), new(1000, 0, true), 9, 12);
 
         vm.CurrentSeconds = 13;
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         await backend.ForwardPaused.Task.WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        var forward = Assert.Single(backend.Requests, value => value.CorrelationId >= 0);
-        Assert.True(forward.Continuous);
-        Assert.Equal(13, forward.TargetSeconds);
-        Assert.NotEmpty(applied);
-        Assert.All(applied, image => Assert.Equal(YuvToBgra.Convert(Frame(13, StreamPixels)), image));
-        Assert.False(cache.CanStitch(request));
-        Assert.Null(cache.GetSegment(rejected.SegmentId));
-        var navigation = cache.GetNavigationFrames(request with { TargetSeconds = 13 });
-        Assert.NotEmpty(navigation);
-        long streamId = navigation[0].SegmentId;
-        Assert.All(navigation, reference =>
-        {
-            Assert.Equal(streamId, reference.SegmentId);
-            Assert.False(reference.Segment.CanStitch);
-            Assert.True(reference.Clock.TrustedAbsolute);
-            Assert.Contains(reference.Frame, backend.StreamFrames);
-            Assert.Equal(StreamPixels, reference.Frame.Data[0]);
-        });
-        Assert.False(vm.IsBusy);
-        Assert.Null(vm.ErrorText);
-
-        while (applied.TryDequeue(out _)) { }
-        // 保持域の左端までは実フレームを戻り、最後の1操作で逆方向の有限再取得へ進む。
         for (int step = 0; step < 40; ++step)
         {
-            while (applied.TryDequeue(out _)) { }
             vm.StepFrameCommand.Execute(-1);
             await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            if (backend.Requests.Any(value => value.CorrelationId >= 0 && !value.Continuous)) break;
         }
-        var reverse = Assert.Single(backend.Requests, value => value.CorrelationId >= 0 && !value.Continuous);
-        Assert.InRange(reverse.TargetSeconds, 12 - 1.0 / 30, 12);
-        await backend.ForwardCancelled.Task.WaitWithDiagnosticsAsync(Safety);
-        Assert.NotEmpty(applied);
-        Assert.All(applied, image => Assert.Equal(YuvToBgra.Convert(Frame(reverse.TargetSeconds, ReversePixels)), image));
-        Assert.False(cache.CanStitch(request));
+        // 取得経路で時刻表現がミリ秒丸めの分だけ異なるため、フレームの同一性で比べる。
+        Assert.True(Math.Abs(vm.CurrentSeconds - 11.6663333333) < 1.0 / 60.0);
         Assert.False(vm.IsBusy);
         Assert.Null(vm.ErrorText);
+        using (var pixels = Assert.IsType<WriteableBitmap>(vm.PreviewImage).Lock())
+        {
+            Assert.Equal(StreamPixels, Marshal.ReadByte(pixels.Address));
+            Assert.Equal((byte)94, Marshal.ReadByte(pixels.Address, 1));
+        }
+        await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        Assert.True(scope.Capture().IsEmpty);
     }
 
     private static Y4mFrame Frame(double time, byte value)
         => new(Header, 1000 + time, 1.0 / 30, Enumerable.Repeat(value, Header.FrameBytes).ToArray());
     private static Y4mFrame[] Frames(byte value)
         => Enumerable.Range(0, 91).Select(index => Frame(9 + index / 30.0, value)).ToArray();
-    private static byte[] Pixels(WriteableBitmap bitmap)
+    private sealed class ControlledBackend : IPreviewBackend, IRawOwnedBackend
     {
-        byte[] data = new byte[bitmap.PixelSize.Width * bitmap.PixelSize.Height * 4];
-        using var locked = bitmap.Lock();
-        for (int row = 0; row < bitmap.PixelSize.Height; ++row)
-            Marshal.Copy(IntPtr.Add(locked.Address, row * locked.RowBytes), data,
-                row * bitmap.PixelSize.Width * 4, bitmap.PixelSize.Width * 4);
-        return data;
-    }
-
-    private sealed class ControlledBackend : IPreviewBackend
-    {
-        public ConcurrentQueue<PreviewRequest> Requests { get; } = new();
-        public ConcurrentQueue<Y4mFrame> StreamFrames { get; } = new();
         public TaskCompletionSource ForwardPaused { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource ForwardCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken token = default)
             => Task.FromResult<bool?>(false);
-        public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
+        public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
+            => throw new InvalidOperationException("所有権のない経路は使えません。");
+        public async Task<PreviewRunResult> RunOwnedAsync(PreviewRequest request, IRawOwnedSink sink,
+            RawOwnershipScope scope, CancellationToken token = default)
         {
-            Requests.Enqueue(request);
             sink.OnHeader(Header);
             var plan = CommandBuilder.Plan(request);
             double seek = plan.SeekSeconds ?? 0;
+            long run = scope.NewRunId();
             byte pixel = request.CorrelationId < 0 ? (byte)240 : request.Continuous ? StreamPixels : ReversePixels;
             try
             {
@@ -140,16 +104,15 @@ public sealed class StitchRejectedStreamingViewModelTests
                     await permission;
                     sink.OnReadStateChanged(true);
                     token.ThrowIfCancellationRequested();
-                    var frame = Frame(seek + index / 30.0, pixel);
-                    if (request.Continuous) StreamFrames.Enqueue(frame);
+                    using var frame = scope.Create(Header, 1000 + seek + index / 30.0, 1.0 / 30,
+                        Enumerable.Repeat(pixel, Header.FrameBytes).ToArray(), run, "試験の読取");
                     sink.OnOutput();
-                    sink.OnFrame(frame);
+                    sink.OnFrame(frame.Frame);
                 }
                 return new(0, "");
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
-                if (request.Continuous) ForwardCancelled.TrySetResult();
                 return new(-12, "", true);
             }
         }

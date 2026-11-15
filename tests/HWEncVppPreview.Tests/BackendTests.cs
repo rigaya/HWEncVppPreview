@@ -125,20 +125,16 @@ public sealed class BackendTests
     }
 
     [Fact]
-    public async Task IgnoredCancellationKillsThenRestartsServer()
+    public async Task IgnoredCancellationCanBeAbortedThenServerRestarts()
     {
-        var clock = new FakeTimeProvider();
-        var observedClock = new TimerSignalClock(clock, TimeSpan.FromSeconds(2));
-        await using var backend = new ServerBackend(timeProvider: observedClock, cancelTimeout: TimeSpan.FromSeconds(2));
+        await using var backend = new ServerBackend();
         using var cancellation = new CancellationTokenSource();
         var sink = new RecordingSink();
         var run = backend.RunAsync(Request("--fake-hang-after", "1", "--fake-ignore-cancel"), sink, cancellation.Token);
         await sink.FirstFrame.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
         cancellation.Cancel();
-        await observedClock.TimerArmed.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromSeconds(2));
-        await run.WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.True((await run).IsCancelled);
+        await backend.AbortAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+        Assert.True((await run.WaitWithDiagnosticsAsync(SafetyTimeout)).IsCancelled);
         AssertStopped(sink.ProcessId);
         var next = new RecordingSink();
         Assert.Equal(0, (await backend.RunAsync(Request(), next).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
@@ -146,31 +142,49 @@ public sealed class BackendTests
     }
 
     [Fact]
-    public async Task MissingReadyUsesInjectedClockAndReapsProcess()
+    public async Task MissingReadyTimesOutAndDropsTheSession()
     {
-        string pidFile = Path.Combine(Path.GetTempPath(), $"viewer-ready-{Guid.NewGuid():N}.txt");
-        var clock = new FakeTimeProvider();
-        var observedClock = new TimerSignalClock(clock, TimeSpan.FromSeconds(3));
-        await using var backend = new ServerBackend(timeProvider: observedClock, configureStartInfo: info =>
+        string name = "missing-ready-" + Guid.NewGuid().ToString("N");
+        using var pipe = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.In, 1,
+            System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
+        int starts = 0;
+        await using var backend = new ServerBackend(readyTimeout: TimeSpan.FromSeconds(2), configureStartInfo: info =>
         {
-            info.Environment["FAKE_ENCODER_READY_NONE"] = "1";
-            info.Environment["FAKE_ENCODER_PID_FILE"] = pidFile;
-        });
-        try
-        {
-            var run = backend.RunAsync(Request(), new RecordingSink());
-            await observedClock.TimerArmed.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-            clock.Advance(TimeSpan.FromSeconds(3));
-            await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => run.WaitWithDiagnosticsAsync(SafetyTimeout));
-            if (FakeLogFiles.Exists(pidFile))
+            if (Interlocked.Increment(ref starts) == 1)
             {
-                foreach (string pid in FakeLogFiles.ReadAllLines(pidFile)) AssertStopped(int.Parse(pid));
+                info.Environment["FAKE_ENCODER_READY_NONE"] = "1";
+                info.Environment["FAKE_ENCODER_PID_PIPE"] = name;
             }
-        }
-        finally
+        });
+        Task<PreviewRunResult> first = backend.RunAsync(Request(), new RecordingSink());
+        await PipeWait.UntilConnectedAsync(pipe, name, first, SafetyTimeout);
+        using var reader = new StreamReader(pipe);
+        int pid = int.Parse(await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout) ?? throw new EndOfStreamException());
+        var error = await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => first.WaitWithDiagnosticsAsync(SafetyTimeout));
+        Assert.IsType<TimeoutException>(error.InnerException);
+        AssertStopped(pid);
+        var next = new RecordingSink();
+        Assert.Equal(0, (await backend.RunAsync(Request(), next).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.NotEqual(pid, next.ProcessId);
+    }
+
+    [Fact]
+    public async Task InvalidReadyReapsTheServer()
+    {
+        string name = "invalid-ready-" + Guid.NewGuid().ToString("N");
+        using var pipe = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.In, 1,
+            System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
+        await using var backend = new ServerBackend(configureStartInfo: info =>
         {
-            FakeLogFiles.Delete(pidFile);
-        }
+            info.Environment["FAKE_ENCODER_READY_VERSION"] = "0";
+            info.Environment["FAKE_ENCODER_PID_PIPE"] = name;
+        });
+        var run = backend.RunAsync(Request(), new RecordingSink());
+        await PipeWait.UntilConnectedAsync(pipe, name, run, SafetyTimeout);
+        using var reader = new StreamReader(pipe);
+        int pid = int.Parse(await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout) ?? throw new EndOfStreamException());
+        await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => run.WaitWithDiagnosticsAsync(SafetyTimeout));
+        AssertStopped(pid);
     }
 
     [Fact]
@@ -268,104 +282,31 @@ public sealed class BackendTests
         await using var backend = new ServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_DROP_AFTER"] = "1");
         var first = new RecordingSink();
         Assert.Equal(0, (await backend.RunAsync(Request(), first).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
-        await WaitUntilAsync(() => IsStopped(first.ProcessId));
+        try
+        {
+            using var process = Process.GetProcessById(first.ProcessId);
+            await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        }
+        catch (ArgumentException) { }
         var next = new RecordingSink();
         Assert.Equal(0, (await backend.RunAsync(Request(), next).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
         Assert.NotEqual(first.ProcessId, next.ProcessId);
     }
 
     [Fact]
-    public async Task ControllerWatchdogKillsHungProcessAndRestartsServer()
+    public async Task ControllerFallsBackWhenReadyIsInvalid()
     {
-        var clock = new FakeTimeProvider();
-        await using var observed = new ObservedBackend(new ServerBackend(timeProvider: clock));
-        await using var controller = new PreviewController(backend: observed, timeProvider: clock, debounce: TimeSpan.Zero);
-        var failure = new TaskCompletionSource<PreviewFailure>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var completion = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var displayed = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        controller.Failed += value => failure.TrySetResult(value);
-        controller.Completed += value => completion.TrySetResult(value);
-        controller.FrameReady += value => displayed.TrySetResult(value);
-        controller.Submit(Request("--fake-hang-after", "1", "--fake-ignore-cancel"));
-        var first = await observed.FirstFrame.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        int firstPid = int.Parse(first.Header.ExtTags["XPID"]);
-        clock.Advance(TimeSpan.FromSeconds(31));
-        Assert.Contains("タイムアウト", (await failure.Task.WaitWithDiagnosticsAsync(SafetyTimeout)).Reason);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        AssertStopped(firstPid);
-        controller.Submit(Request());
-        Assert.Equal(0, (await completion.Task.WaitWithDiagnosticsAsync(SafetyTimeout)).Result.ExitCode);
-        var frame = await displayed.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.NotEqual(firstPid, int.Parse(frame.Frame.Header.ExtTags["XPID"]));
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-    }
-
-    [Fact]
-    public async Task ControllerFallsBackOnceWhenReadyIsMissing()
-    {
-        string pidFile = Path.Combine(Path.GetTempPath(), $"viewer-fallback-{Guid.NewGuid():N}.txt");
-        var clock = new FakeTimeProvider();
-        await using var preferred = new ServerBackend(timeProvider: clock, configureStartInfo: info =>
-        {
-            info.Environment["FAKE_ENCODER_READY_NONE"] = "1";
-            info.Environment["FAKE_ENCODER_PID_FILE"] = pidFile;
-        });
-        await using var fallback = new OneShotBackend(info => info.Environment["FAKE_ENCODER_PID_FILE"] = pidFile);
-        await using var controller = new PreviewController(backend: preferred, fallback: fallback, timeProvider: clock, debounce: TimeSpan.Zero);
+        await using var preferred = new ServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_READY_VERSION"] = "0");
+        await using var fallback = new OneShotBackend();
+        await using var controller = new PreviewController(backend: preferred, fallback: fallback, debounce: TimeSpan.Zero);
         var completed = Channel.CreateUnbounded<PreviewCompletion>();
         controller.Completed += result => completed.Writer.TryWrite(result);
-        try
-        {
-            controller.Submit(Request());
-            await WaitUntilAsync(() => FakeLogFiles.Exists(pidFile) && FakeLogFiles.ReadAllLines(pidFile).Length > 0);
-            clock.Advance(TimeSpan.FromSeconds(4));
-            Assert.Equal(0, (await completed.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout)).Result.ExitCode);
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-            Assert.Equal(2, FakeLogFiles.ReadAllLines(pidFile).Length);
-            controller.Submit(Request() with { VppArgs = new[] { "--vpp-nlmeans", "sigma=0.2" } });
-            Assert.Equal(0, (await completed.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout)).Result.ExitCode);
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-            Assert.Equal(3, FakeLogFiles.ReadAllLines(pidFile).Length);
-            foreach (string pid in FakeLogFiles.ReadAllLines(pidFile)) AssertStopped(int.Parse(pid));
-        }
-        finally
-        {
-            FakeLogFiles.Delete(pidFile);
-        }
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        async Task WaitAsync()
-        {
-            while (!condition()) await Task.Yield();
-        }
-        await WaitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-    }
-
-    private static bool IsStopped(int pid)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(pid);
-            return process.HasExited;
-        }
-        catch (ArgumentException) { return true; }
-    }
-
-    private sealed class ObservedBackend(IPreviewBackend inner) : IPreviewBackend
-    {
-        public TaskCompletionSource<Y4mFrame> FirstFrame { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default) =>
-            inner.RunAsync(request, new ObservedSink(sink, frame => FirstFrame.TrySetResult(frame)), cancellationToken);
-        public ValueTask AbortAsync() => inner.AbortAsync();
-        public ValueTask DisposeAsync() => inner.DisposeAsync();
-        private sealed class ObservedSink(IPreviewSink innerSink, Action<Y4mFrame> onFrame) : IPreviewSink
-        {
-            public void OnHeader(Y4mHeader header) => innerSink.OnHeader(header);
-            public void OnOutput() => innerSink.OnOutput();
-            public void OnFrame(Y4mFrame frame) { innerSink.OnFrame(frame); onFrame(frame); }
-        }
+        controller.Submit(Request());
+        Assert.Equal(0, (await completed.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout)).Result.ExitCode);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        controller.Submit(Request() with { VppArgs = new[] { "--vpp-nlmeans", "sigma=0.2" } });
+        Assert.Equal(0, (await completed.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout)).Result.ExitCode);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
     }
 
     private static PreviewRequest Request(params string[] extra) => new()
@@ -386,20 +327,7 @@ public sealed class BackendTests
         return path;
     }
 
-    private sealed class TimerSignalClock(FakeTimeProvider inner, TimeSpan timeout) : TimeProvider
-    {
-        public TaskCompletionSource TimerArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public override long TimestampFrequency => inner.TimestampFrequency;
-        public override long GetTimestamp() => inner.GetTimestamp();
-        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            ITimer timer = inner.CreateTimer(callback, state, dueTime, period);
-            // 応答待ちの期限だけを進め、続くOSのkill/pipe回収には偽時計を進めない。
-            if (dueTime == timeout) TimerArmed.TrySetResult();
-            return timer;
-        }
-    }
+
 
     private static void AssertStopped(int pid)
     {

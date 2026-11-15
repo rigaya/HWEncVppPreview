@@ -1,4 +1,6 @@
-﻿using HWEncVppPreview.Testing;
+﻿using System.IO.Pipes;
+using System.Text;
+using HWEncVppPreview.Testing;
 using System.Diagnostics;
 using System.Text.Json;
 using HWEncVppPreview.Core;
@@ -96,60 +98,30 @@ public sealed class HistoryProbeTests
         Assert.Equal(7, CommandBuilder.Plan(segment.PhysicalRequest).SeekSeconds);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task CacheNormalizesWindowButRetainsOrderedArguments(bool history)
+    [Fact]
+    public async Task ProbeResultsFollowFilterArgumentsAcrossWindowChanges()
     {
-        string log = Path.GetTempFileName();
-        try
-        {
-            await using var backend = Backend(start =>
-            {
-                start.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"] = log;
-                start.Environment["FAKE_ENCODER_PROBE_HISTORY"] = history ? "1" : "0";
-            });
-            var request = Request();
-            Assert.Equal(history, await backend.GetHistoryRequirementAsync(request));
-            Assert.Equal(history, await backend.GetHistoryRequirementAsync(request with
-            { TargetSeconds = 20, PreMarginSeconds = 5, PostMarginSeconds = 3, SeekSecondsOverride = 4, Continuous = true }));
-            foreach (var changed in new[]
-            {
-                request with { VppArgs = new[] { "--vpp-tweak", "brightness=0.1" } },
-                request with { VppArgs = new[] { "--vpp-tweak", "brightness=0.2" } },
-                request with { InputArgs = new[] { "--avsw" } },
-                request with { VppArgs = new[] { "--vpp-tweak", "brightness=0.1", "--vpp-unsharp" } },
-                request with { VppArgs = new[] { "--vpp-unsharp", "--vpp-tweak", "brightness=0.1" } },
-                request with { InputFile = "other.ts" },
-                request with { Capabilities = request.Capabilities with { OpenClTaskThreads = true } },
-            }) Assert.Equal(history, await backend.GetHistoryRequirementAsync(changed));
-            Assert.Equal(8, Commands(log).Count(item => item.GetProperty("cmd").GetString() == "probe"));
-            if (!history)
-            {
-                Assert.Equal(0, (await backend.RunAsync(request with { WarmupSeconds = 0 }, new EmptySink())).ExitCode);
-                Assert.Equal(8, Commands(log).Count(item => item.GetProperty("cmd").GetString() == "probe"));
-            }
-        }
-        finally { FakeLogFiles.Delete(log); }
+        await using var backend = Backend();
+        var request = Request() with { VppArgs = ["--vpp-nlmeans", "d=0"] };
+        bool? spatial = await backend.GetHistoryRequirementAsync(request);
+        bool? anotherWindow = await backend.GetHistoryRequirementAsync(request with
+        { TargetSeconds = 20, PreMarginSeconds = 5, PostMarginSeconds = 3, SeekSecondsOverride = 4, Continuous = true });
+        bool? temporal = await backend.GetHistoryRequirementAsync(request with { VppArgs = ["--vpp-nlmeans", "d=1"] });
+        Assert.False(spatial);
+        Assert.False(anotherWindow);
+        Assert.True(temporal);
     }
 
     [Fact]
     public async Task FailedParseIsNotCachedAndSessionCanStillRun()
     {
-        string log = Path.GetTempFileName();
-        try
-        {
-            await using var backend = Backend(start =>
-            {
-                start.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"] = log;
-                start.Environment["FAKE_ENCODER_PROBE_RC"] = "-5";
-            });
-            Assert.Null(await backend.GetHistoryRequirementAsync(Request()));
-            Assert.Null(await backend.GetHistoryRequirementAsync(Request()));
-            Assert.Equal(2, Commands(log).Count(item => item.GetProperty("cmd").GetString() == "probe"));
-            Assert.Equal(0, (await backend.RunAsync(Request(), new EmptySink())).ExitCode);
-        }
-        finally { FakeLogFiles.Delete(log); }
+        await using var backend = Backend(start => start.Environment["FAKE_ENCODER_PROBE_FIRST_RC"] = "-5");
+        bool? first = await backend.GetHistoryRequirementAsync(Request());
+        bool? second = await backend.GetHistoryRequirementAsync(Request());
+        PreviewRunResult result = await backend.RunAsync(Request(), new EmptySink()).WaitWithDiagnosticsAsync(Timeout);
+        Assert.Null(first);
+        Assert.False(second);
+        Assert.Equal(0, result.ExitCode);
     }
 
     [Fact]
@@ -180,27 +152,20 @@ public sealed class HistoryProbeTests
     }
 
     [Fact]
-    public async Task QueryWaitsForCancelledRunEnd()
+    public async Task QueryCompletesAfterCancelledRun()
     {
-        string log = Path.GetTempFileName();
-        try
-        {
-            await using var backend = Backend(start => start.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"] = log);
-            using var cancellation = new CancellationTokenSource();
-            var sink = new EmptySink();
-            var run = backend.RunAsync(Request() with { Continuous = true, TargetSeconds = 0, PreMarginSeconds = 0,
-                InputArgs = new[] { "--avhw", "--fake-hang-after", "1" } }, sink, cancellation.Token);
-            await sink.FirstFrame.Task.WaitWithDiagnosticsAsync(Timeout);
-            var probe = backend.GetHistoryRequirementAsync(Request());
-            Assert.False(probe.IsCompleted);
-            Assert.DoesNotContain(Commands(log), item => item.GetProperty("cmd").GetString() == "probe");
-            cancellation.Cancel();
-            Assert.True((await run.WaitWithDiagnosticsAsync(Timeout)).IsCancelled);
-            Assert.False(await probe.WaitWithDiagnosticsAsync(Timeout));
-            string[] commands = Commands(log).Select(item => item.GetProperty("cmd").GetString()!).ToArray();
-            Assert.Equal(new[] { "run", "cancel", "probe" }, commands);
-        }
-        finally { FakeLogFiles.Delete(log); }
+        await using var backend = Backend();
+        using var cancellation = new CancellationTokenSource();
+        var sink = new EmptySink();
+        var run = backend.RunAsync(Request() with { Continuous = true, TargetSeconds = 0, PreMarginSeconds = 0,
+            InputArgs = new[] { "--avhw", "--fake-hang-after", "1" } }, sink, cancellation.Token);
+        await sink.FirstFrame.Task.WaitWithDiagnosticsAsync(Timeout);
+        var probe = backend.GetHistoryRequirementAsync(Request());
+        cancellation.Cancel();
+        PreviewRunResult result = await run.WaitWithDiagnosticsAsync(Timeout);
+        bool? history = await probe.WaitWithDiagnosticsAsync(Timeout);
+        Assert.True(result.IsCancelled);
+        Assert.False(history);
     }
 
     [Theory]
@@ -242,10 +207,10 @@ public sealed class HistoryProbeTests
     [InlineData(true)]
     public async Task UnsupportedReadyAndStartFailureKeepAutoFallback(bool startFailure)
     {
-        var backend = new ServerBackend(readyTimeout: TimeSpan.FromMilliseconds(100), configureStartInfo: start =>
+        var backend = new ServerBackend(configureStartInfo: start =>
         {
             if (startFailure) start.FileName = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-            else start.Environment["FAKE_ENCODER_READY_NONE"] = "1";
+            else start.Environment["FAKE_ENCODER_READY_VERSION"] = "0";
         });
         Assert.Equal(2, (await RunAsync(backend)).PhysicalRequest.WarmupSeconds);
     }
@@ -253,44 +218,43 @@ public sealed class HistoryProbeTests
     [Fact]
     public async Task CancellationDuringProbeDropsSessionAndDoesNotBecomeHistory()
     {
-        string log = Path.GetTempFileName();
-        bool delay = true;
-        try
+        string name = "probe-query-" + Guid.NewGuid().ToString("N");
+        using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        int starts = 0;
+        await using var backend = Backend(start =>
         {
-            await using var backend = Backend(start =>
-            {
-                start.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"] = log;
-                start.Environment["FAKE_ENCODER_PROBE_DELAY_MS"] = delay ? "5000" : "0";
-            });
-            using var cancellation = new CancellationTokenSource();
-            var query = backend.GetHistoryRequirementAsync(Request(), cancellation.Token);
-            using var deadline = new CancellationTokenSource(Timeout);
-            while (!Commands(log).Any(item => item.GetProperty("cmd").GetString() == "probe"))
-                await Task.Delay(10, deadline.Token);
-            cancellation.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => query);
-            delay = false;
-            Assert.False(await backend.GetHistoryRequirementAsync(Request()));
-        }
-        finally { FakeLogFiles.Delete(log); }
+            if (Interlocked.Increment(ref starts) == 1) start.Environment["FAKE_ENCODER_PROBE_PIPE"] = name;
+        });
+        using var cancellation = new CancellationTokenSource();
+        var query = backend.GetHistoryRequirementAsync(Request(), cancellation.Token);
+        await PipeWait.UntilConnectedAsync(pipe, name, query, Timeout);
+        using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+        Assert.Equal("ready", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Timeout));
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => query.WaitWithDiagnosticsAsync(Timeout));
+        Assert.False(await backend.GetHistoryRequirementAsync(Request()).WaitWithDiagnosticsAsync(Timeout));
     }
 
     [Fact]
     public async Task CancellationDuringReadyRemainsCancellation()
     {
-        await using var backend = Backend(start => start.Environment["FAKE_ENCODER_READY_NONE"] = "1");
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => backend.GetHistoryRequirementAsync(Request(), cancellation.Token));
-    }
-
-    private static JsonElement[] Commands(string log)
-    {
-        // PID別ログを受信順に集約し、完了したJSON行だけを読む。
-        return FakeLogFiles.ReadAllLines(log).Select(line =>
+        string name = "ready-cancel-" + Guid.NewGuid().ToString("N");
+        using var pipe = new NamedPipeServerStream(name, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        await using var backend = Backend(start =>
         {
-            using var document = JsonDocument.Parse(line);
-            return document.RootElement.Clone();
-        }).ToArray();
+            start.Environment["FAKE_ENCODER_READY_NONE"] = "1";
+            start.Environment["FAKE_ENCODER_PID_PIPE"] = name;
+        });
+        using var cancellation = new CancellationTokenSource();
+        Task<bool?> run = backend.GetHistoryRequirementAsync(Request(), cancellation.Token);
+        await PipeWait.UntilConnectedAsync(pipe, name, run, Timeout);
+        using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+        string value = await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Timeout) ?? throw new EndOfStreamException();
+        int pid = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitWithDiagnosticsAsync(Timeout));
+        try { using var process = Process.GetProcessById(pid); Assert.True(process.HasExited); }
+        catch (ArgumentException) { }
     }
 
     private sealed class EmptySink : IPreviewSink

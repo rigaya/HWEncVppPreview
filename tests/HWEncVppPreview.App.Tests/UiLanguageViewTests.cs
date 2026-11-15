@@ -26,11 +26,15 @@ VPP Options:
     {
         string previous = UiLanguage.Preference;
         MainWindow? window = null;
-        await using var vm = new MainWindowViewModel();
+        var backend = new OwnedInjectionViewModelTests.OwnedBackend();
+        await using var vm = new MainWindowViewModel(null, TimeProvider.System, backend, backend, null, null, null,
+            readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help" ? Help : "FakeEncoder"))
+        { EncoderPath = "fake" };
         try
         {
             vm.Language = "ja";
-            typeof(MainWindowViewModel).GetProperty(nameof(MainWindowViewModel.HelpSchema))!.SetValue(vm, new HelpSchema(Help));
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             var line = new FilterLineViewModel { Text = "--vpp-alpha sigma=0.25" };
             vm.FilterLines.Add(line);
             vm.SelectedFilterLine = line;
@@ -41,7 +45,7 @@ VPP Options:
             Assert.Equal("自動", line.Parameters[1].DefaultText);
             window = new MainWindow { DataContext = vm, Width = 1440, Height = 900 };
             window.Show();
-            await Flush();
+
             Assert.Equal("HWEnc VPPプレビュー " + ApplicationVersion.Value, window.Title);
             Assert.Equal("＋ フィルタを追加", window.FindControl<Button>("AddFilterButton")!.Content);
             var selector = window.FindControl<ComboBox>("LanguageSelector")!;
@@ -49,7 +53,7 @@ VPP Options:
 
             // 実際の選択欄から切り替え、静的文言とViewModelの表示を両方確認する。
             selector.SelectedIndex = 2;
-            await Flush();
+
             Assert.Equal("en", vm.Language);
             Assert.NotSame(oldText, Localizer.Instance.Text);
             Assert.Equal("HWEnc VPP Preview " + ApplicationVersion.Value, window.Title);
@@ -63,7 +67,7 @@ VPP Options:
             Assert.Equal("0.25", line.Parameters[0].ValueText);
 
             vm.Language = "ja";
-            await Flush();
+
             Assert.Equal(1, selector.SelectedIndex);
             Assert.Equal("HWEnc VPPプレビュー " + ApplicationVersion.Value, window.Title);
             Assert.Equal("ノイズ除去", line.CategoryName);
@@ -86,7 +90,7 @@ VPP Options:
             var english = Localizer.Instance.Text;
             Assert.Equal("+ Add filter", english.AddFilter);
             Localizer.Instance.Language = "auto";
-            await Flush();
+
             Assert.Equal("ja", UiLanguage.Current);
             Assert.NotSame(english, Localizer.Instance.Text);
             Assert.Equal("＋ フィルタを追加", Localizer.Instance.Text.AddFilter);
@@ -121,21 +125,19 @@ VPP Options:
     public async Task 別スレッドの言語変更もUIへ非同期に通知する()
     {
         string previous = UiLanguage.Preference;
-        bool notified = false, onUi = false;
+        var notified = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         void Changed(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
         {
             if (args.PropertyName != nameof(Localizer.Text)) return;
-            notified = true;
-            onUi = Avalonia.Threading.Dispatcher.UIThread.CheckAccess();
+            notified.TrySetResult(Avalonia.Threading.Dispatcher.UIThread.CheckAccess());
         }
         try
         {
             UiLanguage.Set("ja");
             Localizer.Instance.PropertyChanged += Changed;
             await Task.Run(() => UiLanguage.Set("en"));
-            await Flush();
-            Assert.True(notified);
-            Assert.True(onUi);
+
+            Assert.True(await notified.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang));
             Assert.Equal("+ Add filter", Localizer.Instance.Text.AddFilter);
         }
         finally

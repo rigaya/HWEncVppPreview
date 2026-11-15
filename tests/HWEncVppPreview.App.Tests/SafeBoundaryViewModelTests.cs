@@ -1,9 +1,9 @@
-﻿using System.Reflection;
+﻿using System.Runtime.InteropServices;
 using Avalonia.Headless.XUnit;
-using HWEncVppPreview.App.Services;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using HWEncVppPreview.App.ViewModels;
 using HWEncVppPreview.Core;
-using HWEncVppPreview.Tests.Testing;
 
 namespace HWEncVppPreview.App.Tests;
 
@@ -17,50 +17,69 @@ public sealed class SafeBoundaryViewModelTests
     [InlineData(true, 0.000003, false)]
     public async Task BeforeAndNavigationUseTheSameSafeBoundary(bool lowerBoundary, double error, bool expected)
     {
-        using var services = new Services();
-        var backend = new UnusedBackend();
-        await using var vm = new MainWindowViewModel(services, new FakeTimeProvider(), backend, backend);
+        string? previous = Environment.GetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES");
+        Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", "1");
+        var scope = new RawOwnershipScope();
+        var cache = new FrameCache(scope);
+        var backend = new MissingBackend();
         var request = new PreviewRequest
         {
-            EncoderPath = "encoder", InputFile = "rounded.ts", TargetSeconds = 5, Fps = 30,
-            InputDurationSeconds = 20, TimestampOriginSeconds = 0, Capabilities = new(true, true),
+            EncoderPath = OwnedInjectionViewModelTests.FakeEncoderPath(), InputFile = "boundary.ts", InputArgs = ["--avhw"],
+            TargetSeconds = 5, Fps = 30, Capabilities = new(true, true), TimestampOriginSeconds = 1000,
         };
-        var header = Y4mHeader.Parse("YUV4MPEG2 W2 H2 F24:1 C420");
-        var frames = new[] { new Y4mFrame(header, 5, null, new byte[6]) };
-        double start = lowerBoundary ? 5 + error : 4;
-        double end = lowerBoundary ? 6 : 5 - error;
-        var segment = new PreviewSegmentSnapshot(1, request, new(0, 2, true), frames, start, end, false, false);
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
-        // 公開APIを増やさず、Before再利用とコマ送りの最終safe判定を同じ区間で確認する。
-        var before = typeof(MainWindowViewModel).GetMethod("ContainsBeforeFrameTarget", flags)!;
-        Assert.Equal(expected, before.Invoke(vm, new object[] { request, frames, 5d, segment }));
-        typeof(MainWindowViewModel).GetField("_intervalSegment", flags)!.SetValue(vm, segment);
-        var navigation = typeof(MainWindowViewModel).GetMethod("FrameIsSafe", flags)!;
-        Assert.Equal(expected, navigation.Invoke(vm, new object[] { 5d }));
-        Assert.Equal(start, segment.SafeStartSeconds);
-        Assert.Equal(end, segment.SafeEndSeconds);
-        Assert.Equal(5d, frames[0].Xts);
-        Assert.Null(frames[0].Xdur);
+        var header = Y4mHeader.Parse("YUV4MPEG2 W2 H2 F30:1 Ip A1:1 C420");
+        long run = scope.NewRunId();
+        using (var first = scope.Create(header, lowerBoundary ? 1005 : 1005 - 1d / 30, 1d / 30,
+            new byte[] { 20, 20, 20, 20, 128, 128 }, run, "試験の読取"))
+        using (var second = scope.Create(header, lowerBoundary ? 1005 + 1d / 30 : 1005, 1d / 30,
+            new byte[] { 42, 42, 42, 42, 128, 128 }, run, "試験の読取"))
+        {
+            cache.StoreSegment(request, [first.Frame, second.Frame], new(1000, 2, true),
+                lowerBoundary ? 5 + error : 4, lowerBoundary ? 6 : 5 - error);
+        }
+        var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
+        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend, backend,
+            null, cache, (frame, token) => Task.FromResult(Enumerable.Repeat(frame.RawPixels[0],
+                frame.Header.Width * frame.Header.Height * 4).ToArray()), owned: dependencies)
+        {
+            EncoderPath = request.EncoderPath, InputPath = request.InputFile, InputArgsText = "--avhw",
+            CurrentSeconds = lowerBoundary ? 5 + 1d / 30 : 5 - 1d / 30, CompareMode = PreviewCompareMode.SideBySide,
+        };
+        try
+        {
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            vm.StepFrameCommand.Execute(lowerBoundary ? -1 : 1);
+            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            Assert.Equal(expected, Math.Abs(vm.CurrentSeconds - 5) < 0.0000001);
+            Assert.Equal(expected, vm.ErrorText == null);
+            if (expected)
+            {
+                using var after = Assert.IsType<WriteableBitmap>(vm.PreviewImage).Lock();
+                using var before = Assert.IsType<WriteableBitmap>(vm.BeforeImage).Lock();
+                byte wanted = lowerBoundary ? (byte)20 : (byte)42;
+                Assert.Equal(wanted, Marshal.ReadByte(after.Address));
+                Assert.Equal(wanted, Marshal.ReadByte(before.Address));
+            }
+        }
+        finally
+        {
+            try { await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang); }
+            finally { Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", previous); }
+        }
+        Assert.True(scope.Capture().IsEmpty);
     }
 
-    private sealed class UnusedBackend : IPreviewBackend
+    private sealed class MissingBackend : IPreviewBackend, IRawOwnedBackend
     {
-        public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("このテストではエンコーダを起動しない。");
+        public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
+            => throw new InvalidOperationException("所有権のない経路は使えません。");
+
+        public Task<PreviewRunResult> RunOwnedAsync(PreviewRequest request, IRawOwnedSink sink,
+            RawOwnershipScope scope, CancellationToken token = default)
+            => Task.FromResult(new PreviewRunResult(4, "安全域外"));
+
         public ValueTask AbortAsync() => ValueTask.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    private sealed class Services : IViewModelServices, IDisposable
-    {
-        private readonly string _directory = Path.Combine(Path.GetTempPath(), $"viewer-safe-{Guid.NewGuid():N}");
-        public Services() => Directory.CreateDirectory(_directory);
-        public string SettingsPath => Path.Combine(_directory, "settings.json");
-        public Task<string?> BrowseEncoderAsync() => Task.FromResult<string?>(null);
-        public Task<string?> BrowseInputAsync() => Task.FromResult<string?>(null);
-        public Task<string?> ChooseSaveFiltersAsync() => Task.FromResult<string?>(null);
-        public Task<string?> ChooseLoadFiltersAsync() => Task.FromResult<string?>(null);
-        public Task CopyTextAsync(string text) => Task.CompletedTask;
-        public void Dispose() => Directory.Delete(_directory, true);
     }
 }

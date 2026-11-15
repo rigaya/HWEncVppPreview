@@ -69,4 +69,20 @@ public sealed class ActiveOverlapTests
         Assert.Null(cache.GetSegment(stream));
         Assert.NotNull(cache.GetSegment(closed.SegmentId));
     }
+    [Fact]
+    public void 受信中の区間と後から届いた区間が重なっても最後の画素まで表示できる()
+    {
+        var request = Request(15);
+        var cache = new FrameCache();
+        long active = cache.BeginSegment(request, new(1000, 9, true), 10);
+        cache.PinCurrent(active, 10);
+        cache.Append(active, Frame(0));
+        cache.StoreSegment(Request(-15), Frames(), new(1000, 9, true), 10, 10 + 6 * Step);
+        for (int i = 1; i < 6; i++) cache.Append(active, Frame(i));
+        cache.CompleteSegment(active, true);
+
+        // 操作完了後に取得できる画素を、入力時に独立して決めた値と比較する。
+        var result = cache.GetNavigationFrames(request);
+        Assert.Equal(new byte[] { 0, 1, 2, 3, 4, 5 }, result.Select(frame => frame.Frame.Data[0]));
+    }
 }

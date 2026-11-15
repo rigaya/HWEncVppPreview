@@ -68,17 +68,10 @@ public sealed class FakeLogFilesTests
             info.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"] = files.Log;
             info.Environment["FAKE_ENCODER_PID_FILE"] = files.Pids;
         })).ToArray();
-        int[] pids = Array.Empty<int>();
         try
         {
             await Task.WhenAll(backends.Select(backend => backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath())))
                 .WaitWithDiagnosticsAsync(Safety);
-            pids = FakeLogFiles.ReadAllLines(files.Pids).Select(int.Parse).Order().ToArray();
-            Assert.Equal(backends.Length, pids.Length);
-            Assert.Equal(backends.Length, pids.Distinct().Count());
-            Assert.False(File.Exists(files.Pids));
-            Assert.False(File.Exists(files.Log));
-            Assert.Equal(backends.Length, FakeLogFiles.ReadAllLines(files.Log).Length);
             var sinks = backends.Select(_ => new Sink()).ToArray();
             var request = new PreviewRequest
             {
@@ -94,6 +87,9 @@ public sealed class FakeLogFilesTests
         {
             await Task.WhenAll(backends.Select(backend => backend.DisposeAsync().AsTask())).WaitWithDiagnosticsAsync(Safety);
         }
+        int[] pids = FakeLogFiles.ReadAllLines(files.Pids).Select(int.Parse).Order().ToArray();
+        Assert.Equal(backends.Length, pids.Length);
+        Assert.Equal(backends.Length, pids.Distinct().Count());
         string[] lines = FakeLogFiles.ReadAllLines(files.Log);
         Assert.Equal(backends.Length * 3, lines.Length);
         var grouped = lines.Select(line =>

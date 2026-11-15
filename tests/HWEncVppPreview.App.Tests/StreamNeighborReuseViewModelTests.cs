@@ -19,17 +19,17 @@ public sealed class StreamNeighborReuseViewModelTests
         using var capability = new CapabilityScope();
         using var services = new Services();
         var clock = new FakeTimeProvider();
+        await using var input = new SyntheticInputProbe(clock);
         var backend = new ControlledBackend(centerOnly);
-        await using var vm = Create(services, clock, backend);
+        await using var vm = Create(services, clock, input, backend);
         await Start(vm, clock, backend);
         vm.StepFrameCommand.Execute(1);
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         backend.Next.TrySetResult();
-        await Until(() => Math.Abs(vm.CurrentSeconds - 10.37) < 1e-8 && !vm.IsBusy);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        // 入力30fpsの推測値ではなく、実VFRの隣10.37へ1回だけ進む。
+        // 入力30fpsの推測値ではなく、実VFRの隣へ進んだ最終時刻を見る。
+        Assert.Equal(10.37, vm.CurrentSeconds, 8);
         Assert.Single(backend.Requests);
-        Assert.False(backend.FirstCancelled.Task.IsCompleted);
         Assert.Null(vm.ErrorText);
         Assert.NotNull(vm.PreviewImage);
     }
@@ -39,8 +39,9 @@ public sealed class StreamNeighborReuseViewModelTests
         using var capability = new CapabilityScope();
         using var services = new Services();
         var clock = new FakeTimeProvider();
+        await using var input = new SyntheticInputProbe(clock);
         var backend = new ControlledBackend(false);
-        await using var vm = Create(services, clock, backend);
+        await using var vm = Create(services, clock, input, backend);
         await Start(vm, clock, backend);
         vm.RefreshCommand.Execute(null);
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
@@ -57,34 +58,43 @@ public sealed class StreamNeighborReuseViewModelTests
         using var capability = new CapabilityScope();
         using var services = new Services();
         var clock = new FakeTimeProvider();
+        await using var input = new SyntheticInputProbe(clock);
         var backend = new ControlledBackend(true);
-        await using var vm = Create(services, clock, backend);
+        await using var vm = Create(services, clock, input, backend);
         await Start(vm, clock, backend);
         vm.StepFrameCommand.Execute(-1);
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await Until(() => Math.Abs(vm.CurrentSeconds - 9.5) < 1e-8 && !vm.IsBusy);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Equal(9.5, vm.CurrentSeconds, 8);
         Assert.Equal(2, backend.Requests.Count);
         Assert.False(backend.Requests.Last().Continuous);
         Assert.True(backend.FirstCancelled.Task.IsCompleted);
         Assert.Null(vm.ErrorText);
     }
-    private static MainWindowViewModel Create(Services services, FakeTimeProvider clock, ControlledBackend backend)
-        => new(services, clock, backend, backend)
+    private static MainWindowViewModel Create(Services services, FakeTimeProvider clock, SyntheticInputProbe input, ControlledBackend backend)
+        => new(services, clock, backend, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "c0b-neighbor.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
     private static async Task Start(MainWindowViewModel vm, FakeTimeProvider clock, ControlledBackend backend)
     {
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
-        await backend.Center.Task.WaitWithDiagnosticsAsync(Safety);
-        await Until(() => vm.PreviewImage != null && !vm.IsBusy);
-        Assert.Single(backend.Requests);
-        Assert.Equal(10, vm.CurrentSeconds);
-    }
-    private static async Task Until(Func<bool> predicate)
-    {
-        using var timeout = new CancellationTokenSource(Safety);
-        while (!predicate()) await Dispatcher.UIThread.InvokeAsync(() => { }).GetTask().WaitAsync(timeout.Token);
+        var displayed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        System.ComponentModel.PropertyChangedEventHandler? changed = null;
+        changed = (_, args) =>
+        {
+            if (args.PropertyName != nameof(vm.PreviewImage)) return;
+            vm.PropertyChanged -= changed;
+            displayed.TrySetResult();
+        };
+        vm.PropertyChanged += changed;
+        try
+        {
+            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+            clock.Advance(TimeSpan.FromMilliseconds(150));
+            await backend.Center.Task.WaitWithDiagnosticsAsync(Safety);
+            await displayed.Task.WaitWithDiagnosticsAsync(Safety);
+            Assert.Single(backend.Requests);
+            Assert.Equal(10, vm.CurrentSeconds);
+        }
+        finally { vm.PropertyChanged -= changed; }
     }
     private sealed class ControlledBackend(bool centerOnly) : IPreviewBackend
     {

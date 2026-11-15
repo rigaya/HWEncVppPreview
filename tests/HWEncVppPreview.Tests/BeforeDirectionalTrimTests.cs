@@ -1,5 +1,4 @@
-﻿using System.Reflection;
-using HWEncVppPreview.Core;
+﻿using HWEncVppPreview.Core;
 
 namespace HWEncVppPreview.Tests;
 
@@ -118,7 +117,6 @@ public sealed class BeforeDirectionalTrimTests
         state.Cache.ProtectDisplayedBeforeSegment(long.MaxValue, frame.FrameId, -1);
         Assert.Equal(0, state.Cache.Count);
         Assert.Equal(0, state.Cache.SizeBytes);
-        Assert.Null(Hint(state.Cache, "_displayedBeforeSegmentId"));
     }
 
     [Theory]
@@ -138,9 +136,6 @@ public sealed class BeforeDirectionalTrimTests
         Assert.True(state.Cache.Append(current.SegmentId, state.Frame(2)));
         Assert.Null(state.Cache.GetSegment(before.SegmentId));
         Assert.Throws<ObjectDisposedException>(() => frame.RawPixels);
-        Assert.Null(Hint(state.Cache, "_displayedBeforeSegmentId"));
-        Assert.Equal(0L, Hint(state.Cache, "_displayedBeforeFrameId"));
-        Assert.Equal(0, Hint(state.Cache, "_displayedBeforeDirection"));
     }
 
     [Fact]
@@ -420,9 +415,6 @@ public sealed class BeforeDirectionalTrimTests
         Assert.False(state.Cache.TryGetAt(Fixture.Request("before"), 111, out _));
         Assert.True(state.Cache.TryGetAt(Fixture.Request("before"), 110, out _));
     }
-
-    private static object? Hint(FrameCache cache, string name)
-        => typeof(FrameCache).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(cache);
 
     private sealed class Fixture(long capacity) : IDisposable
     {

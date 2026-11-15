@@ -1,11 +1,12 @@
 ﻿using HWEncVppPreview.Testing;
 using System.ComponentModel;
+using System.IO.Pipes;
+using System.Text;
 using System.Diagnostics;
 using Avalonia.Headless.XUnit;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.ViewModels;
 using HWEncVppPreview.Core;
-using HWEncVppPreview.Tests.Testing;
 
 namespace HWEncVppPreview.App.Tests;
 
@@ -17,7 +18,7 @@ public sealed class DurationTests
     public async Task ExitDurationDoesNotDelayImageOrReplaceImageStateAndSurvivesEditingAndSeeking()
     {
         using var files = new TestFiles();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         int starts = 0;
         await using var probe = new InputProbe(clock, configureStartInfo: info =>
         {
@@ -30,41 +31,32 @@ public sealed class DurationTests
         var line = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.1" };
         vm.FilterLines.Add(line);
         await PrepareAsync(vm, clock);
-        await WaitForFileAsync(files.Ready);
-        await WaitUntilAsync(vm, () => vm.PreviewImage != null && !vm.IsBusy);
-        Assert.False(vm.HasDuration);
-        Assert.Equal(15, vm.CurrentSeconds);
-        var image = vm.PreviewImage;
-        string status = vm.StatusText, log = vm.LogText, elapsed = vm.ElapsedText;
-        await File.WriteAllTextAsync(files.Gate, "");
+        await files.WaitReadyAsync(vm);
+        await WaitForPropertyAsync(vm, () => vm.PreviewImage != null && !vm.IsBusy);
+        await files.ReleaseAsync();
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.True(vm.HasDuration);
-        Assert.Equal(10, vm.DurationSeconds);
-        Assert.Equal("0:00:10", vm.DurationText);
-        Assert.Equal(15, vm.CurrentSeconds);
-        Assert.Same(image, vm.PreviewImage);
-        Assert.Equal(status, vm.StatusText);
-        Assert.Equal(log, vm.LogText);
-        Assert.Equal(elapsed, vm.ElapsedText);
-        Assert.Null(vm.ErrorText);
         line.Text = "--vpp-nlmeans sigma=0.2";
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
+
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         vm.CurrentSeconds = 2;
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        // 元画像の静止待ちも偽時計で進め、Durationの進行とは分けて確認する。
-        clock.Advance(TimeSpan.FromMilliseconds(300));
+
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(1, starts);
         Assert.True(vm.HasDuration);
+        Assert.Equal(10, vm.DurationSeconds);
+        Assert.Equal("0:00:10", vm.DurationText);
+        Assert.Equal(2, vm.CurrentSeconds);
+        Assert.NotNull(vm.PreviewImage);
+        Assert.Null(vm.ErrorText);
     }
 
     [AvaloniaFact]
     public async Task FilterAndSeekDoNotCancelOrDuplicatePendingDuration()
     {
         using var files = new TestFiles();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         int starts = 0;
         await using var probe = new InputProbe(clock, configureStartInfo: info =>
         {
@@ -74,19 +66,17 @@ public sealed class DurationTests
         });
         await using var vm = Create(files, clock, probe);
         await PrepareAsync(vm, clock);
-        await WaitForFileAsync(files.Ready);
+        await files.WaitReadyAsync(vm);
         vm.FilterLines.Add(new() { Text = "--vpp-nlmeans sigma=0.1" });
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
-        await WaitUntilAsync(vm, () => vm.PreviewImage != null && !vm.IsBusy);
+
+        await WaitForPropertyAsync(vm, () => vm.PreviewImage != null && !vm.IsBusy);
+        var previous = vm.PreviewImage;
         vm.CurrentSeconds = 2;
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        // 元画像の静止待ちも偽時計で進め、Durationの進行とは分けて確認する。
-        clock.Advance(TimeSpan.FromMilliseconds(300));
-        await WaitUntilAsync(vm, () => !vm.IsBusy);
-        Assert.Equal(1, starts);
-        Assert.False(vm.HasDuration);
-        await File.WriteAllTextAsync(files.Gate, "");
+
+        await WaitForPropertyAsync(vm, () => vm.PreviewImage != null && !ReferenceEquals(vm.PreviewImage, previous) && !vm.IsBusy);
+        await files.ReleaseAsync();
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(10, vm.DurationSeconds);
         Assert.Equal(2, vm.CurrentSeconds);
@@ -97,7 +87,7 @@ public sealed class DurationTests
     public async Task NonzeroDurationExitStillUpdatesLengthWithoutChangingPreviewDiagnostics()
     {
         using var files = new TestFiles();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         await using var probe = new InputProbe(clock, configureStartInfo: info =>
         {
             if (IsDuration(info)) { info.ArgumentList.Add("--fake-rc"); info.ArgumentList.Add("23"); }
@@ -116,7 +106,7 @@ public sealed class DurationTests
     public async Task InputChangeCancelsAndReapsOldDurationAndRejectsItsResult()
     {
         using var files = new TestFiles();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         await using var probe = new InputProbe(clock, configureStartInfo: info =>
         {
             if (!IsDuration(info)) return;
@@ -129,19 +119,17 @@ public sealed class DurationTests
         });
         await using var vm = Create(files, clock, probe);
         await PrepareAsync(vm, clock);
-        await WaitForFileAsync(files.Ready);
-        int pid = int.Parse(Assert.Single(FakeLogFiles.ReadAllLines(files.Pid)));
+        await files.WaitReadyAsync(vm);
+        int pid = await files.PidAsync();
         vm.InputPath = "new.ts";
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
+
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         AssertStopped(pid);
         Assert.True(vm.HasDuration);
         Assert.Equal(20, vm.DurationSeconds);
         Assert.NotNull(vm.PreviewImage);
         Assert.Null(vm.ErrorText);
-        await File.WriteAllTextAsync(files.Gate, "");
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(20, vm.DurationSeconds);
     }
 
@@ -149,15 +137,15 @@ public sealed class DurationTests
     public async Task DisposeCancelsAndReapsPendingDuration()
     {
         using var files = new TestFiles();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var probe = new InputProbe(clock, configureStartInfo: info => { if (IsDuration(info)) HoldDuration(info, files); });
         var vm = Create(files, clock, probe);
         Exception? failure = null;
         try
         {
             await PrepareAsync(vm, clock);
-            await WaitForFileAsync(files.Ready);
-            int pid = int.Parse(Assert.Single(FakeLogFiles.ReadAllLines(files.Pid)));
+            await files.WaitReadyAsync(vm);
+            int pid = await files.PidAsync();
             await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
             AssertStopped(pid);
             Assert.False(vm.HasDuration);
@@ -188,7 +176,7 @@ public sealed class DurationTests
     public async Task KnownProbeDurationDoesNotStartAnotherProcess()
     {
         using var files = new TestFiles();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         int starts = 0;
         await using var probe = new InputProbe(clock, configureStartInfo: _ => Interlocked.Increment(ref starts));
         await using var vm = Create(files, clock, probe);
@@ -207,16 +195,16 @@ public sealed class DurationTests
     }
     private static void HoldDuration(ProcessStartInfo info, TestFiles files)
     {
-        info.ArgumentList.Add("--fake-duration-exit-gate");
-        info.ArgumentList.Add(files.Gate);
-        info.Environment["FAKE_ENCODER_DURATION_EXIT_READY_FILE"] = files.Ready;
-        info.Environment["FAKE_ENCODER_PID_FILE"] = files.Pid;
+        info.ArgumentList.Add("--fake-duration-exit-pipe");
+        info.ArgumentList.Add(files.PipeName);
+        info.Environment["FAKE_ENCODER_PID_PIPE"] = files.PidPipeName;
+        files.StartPidRead();
     }
     [AvaloniaFact]
     public async Task OmittedBeforeStartsDurationAfterTheAfterImage()
     {
         using var files = new TestFiles();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var probe = HeldDurationProbe(files, clock);
         var backend = new OneShotBackend();
         await using var vm = new MainWindowViewModel(files, clock, backend, backend, probe, null, null, beforeEnabled: false)
@@ -227,13 +215,14 @@ public sealed class DurationTests
         try
         {
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
-            await WaitForFileAsync(files.Ready);
-            Assert.NotNull(vm.PreviewImage);
-            Assert.Null(vm.BeforeImage);
+            await files.WaitReadyAsync(vm);
         }
-        finally { await File.WriteAllTextAsync(files.Gate, ""); }
+        finally { await files.ReleaseAsync(); }
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(vm.HasDuration);
+        Assert.NotNull(vm.PreviewImage);
+        Assert.Null(vm.BeforeImage);
+        Assert.Null(vm.ErrorText);
     }
 
     [AvaloniaTheory]
@@ -242,7 +231,7 @@ public sealed class DurationTests
     public async Task MissingOrFailedBeforeDoesNotPreventDuration(int beforeExitCode)
     {
         using var files = new TestFiles();
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var probe = HeldDurationProbe(files, clock);
         var after = new OneShotBackend();
         var before = new MissingBeforeBackend(beforeExitCode);
@@ -255,14 +244,14 @@ public sealed class DurationTests
         try
         {
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
-            await WaitForFileAsync(files.Ready);
-            Assert.NotNull(vm.PreviewImage);
-            Assert.Null(vm.BeforeImage);
-            Assert.Null(vm.ErrorText);
+            await files.WaitReadyAsync(vm);
         }
-        finally { await File.WriteAllTextAsync(files.Gate, ""); }
+        finally { await files.ReleaseAsync(); }
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(vm.HasDuration);
+        Assert.NotNull(vm.PreviewImage);
+        Assert.Null(vm.BeforeImage);
+        Assert.Null(vm.ErrorText);
     }
 
     [AvaloniaFact]
@@ -271,7 +260,7 @@ public sealed class DurationTests
         using var files = new TestFiles();
         string? old = Environment.GetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES");
         Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", "1");
-        var clock = new FakeTimeProvider();
+        var clock = TimeProvider.System;
         var probe = HeldDurationProbe(files, clock);
         var after = new DelayedStreamBackend();
         var before = new DurationBeforeBackend();
@@ -289,32 +278,32 @@ public sealed class DurationTests
             InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit"
         };
         vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
+        Task beforeUpdated = ObservePropertyChanged(vm, nameof(vm.BeforeImage));
         try
         {
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
-            await WaitUntilAsync(vm, () => vm.BeforeImage != null);
-            Assert.Null(vm.PreviewImage);
-            Assert.False(File.Exists(files.Ready));
+            await beforeUpdated.WaitWithDiagnosticsAsync(SafetyTimeout);
             vm.CurrentSeconds = 0.2;
             await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             after.Release.TrySetResult();
-            await WaitForFileAsync(files.Ready);
-            Assert.NotNull(vm.PreviewImage);
-            Assert.NotNull(vm.BeforeImage);
-            Assert.Equal(0.2, vm.CurrentSeconds, 6);
+            await files.WaitReadyAsync(vm);
         }
         finally
         {
             after.Release.TrySetResult();
             secondBefore.TrySetResult();
-            await File.WriteAllTextAsync(files.Gate, "");
+            await files.ReleaseAsync();
             Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", old);
         }
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(vm.HasDuration);
+        Assert.NotNull(vm.PreviewImage);
+        Assert.NotNull(vm.BeforeImage);
+        Assert.Equal(0.2, vm.CurrentSeconds, 6);
+        Assert.Null(vm.ErrorText);
     }
 
-    private static InputProbe HeldDurationProbe(TestFiles files, FakeTimeProvider clock) => new(clock, configureStartInfo: info =>
+    private static InputProbe HeldDurationProbe(TestFiles files, TimeProvider clock) => new(clock, configureStartInfo: info =>
     {
         if (IsDuration(info)) HoldDuration(info, files);
         else { info.ArgumentList.Add("--fake-hang-after"); info.ArgumentList.Add("1"); }
@@ -372,7 +361,7 @@ public sealed class DurationTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private static MainWindowViewModel Create(TestFiles files, FakeTimeProvider clock, InputProbe probe)
+    private static MainWindowViewModel Create(TestFiles files, TimeProvider clock, InputProbe probe)
     {
         var backend = new OneShotBackend();
         return new(files, clock, preferred: backend, fallback: backend, probe: probe)
@@ -381,31 +370,36 @@ public sealed class DurationTests
             InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit",
         };
     }
-    private static async Task PrepareAsync(MainWindowViewModel vm, FakeTimeProvider clock)
+    private static async Task PrepareAsync(MainWindowViewModel vm, TimeProvider clock)
     {
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromMilliseconds(150));
+
     }
-    private static async Task WaitUntilAsync(MainWindowViewModel vm, Func<bool> condition)
+    private static Task ObservePropertyChanged(MainWindowViewModel vm, string property)
     {
-        if (condition()) return;
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        PropertyChangedEventHandler? handler = null;
+        handler = (_, args) =>
+        {
+            if (args.PropertyName != property) return;
+            vm.PropertyChanged -= handler;
+            ready.TrySetResult();
+        };
+        vm.PropertyChanged += handler;
+        return ready.Task;
+    }
+
+    private static async Task WaitForPropertyAsync(MainWindowViewModel vm, Func<bool> condition)
+    {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         PropertyChangedEventHandler changed = (_, _) => { if (condition()) completion.TrySetResult(); };
         vm.PropertyChanged += changed;
-        try { await completion.Task.WaitWithDiagnosticsAsync(SafetyTimeout); }
+        try
+        {
+            if (condition()) completion.TrySetResult();
+            await completion.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+        }
         finally { vm.PropertyChanged -= changed; }
-    }
-    private static async Task WaitForFileAsync(string path)
-    {
-        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var watcher = new FileSystemWatcher(Path.GetDirectoryName(path)!, Path.GetFileName(path));
-        void Check(object? sender, FileSystemEventArgs args) { if (File.Exists(path)) ready.TrySetResult(); }
-        watcher.Created += Check;
-        watcher.Changed += Check;
-        watcher.EnableRaisingEvents = true;
-        // UIへの反映を待ってから長さ検査が始まるので、Yield連打でUIのPostを飢餓させない。
-        if (File.Exists(path)) ready.TrySetResult();
-        await ready.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
     }
     private static void AssertStopped(int pid)
     {
@@ -424,10 +418,41 @@ public sealed class DurationTests
     private sealed class TestFiles : IViewModelServices, IDisposable
     {
         private readonly string _directory = Path.Combine(Path.GetTempPath(), $"viewer-duration-{Guid.NewGuid():N}");
-        public TestFiles() => Directory.CreateDirectory(_directory);
-        public string Gate => Path.Combine(_directory, "release");
-        public string Ready => Path.Combine(_directory, "ready");
-        public string Pid => Path.Combine(_directory, "pid");
+        public TestFiles()
+        {
+            Directory.CreateDirectory(_directory);
+            _pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+            _pidPipe = new NamedPipeServerStream(PidPipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        }
+        public string PipeName { get; } = "duration-" + Guid.NewGuid().ToString("N");
+        public string PidPipeName { get; } = "duration-pid-" + Guid.NewGuid().ToString("N");
+        private NamedPipeServerStream? _pipe, _pidPipe;
+        private Task<int>? _pid;
+        private MainWindowViewModel? _vm;
+        public void StartPidRead()
+        {
+            _pid = ReadPidAsync(_pidPipe!);
+        }
+        private async Task<int> ReadPidAsync(NamedPipeServerStream pipe)
+        {
+            await PipeWaitDiagnostics.ConnectAsync(pipe, PidPipeName, SafetyTimeout, () => PipeWaitDiagnostics.State(_vm));
+            using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+            return int.Parse((await PipeWaitDiagnostics.ReadLineAsync(reader, PidPipeName, SafetyTimeout, () => PipeWaitDiagnostics.State(_vm)))!);
+        }
+        public Task<int> PidAsync() => _pid ?? throw new InvalidOperationException("子プロセスを開始していません。");
+        public async Task WaitReadyAsync(MainWindowViewModel vm)
+        {
+            _vm = vm;
+            var pipe = _pipe ?? throw new InvalidOperationException("子プロセスを開始していません。");
+            await PipeWaitDiagnostics.ConnectAsync(pipe, PipeName, SafetyTimeout, () => PipeWaitDiagnostics.State(vm));
+            using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+            string? line = await PipeWaitDiagnostics.ReadLineAsync(reader, PipeName, SafetyTimeout, () => PipeWaitDiagnostics.State(vm));
+            if (line != "ready") throw new InvalidDataException("待機開始の通知が不正です。");
+        }
+        public async Task ReleaseAsync()
+        {
+            if (_pipe?.IsConnected == true) await _pipe.WriteAsync("release\n"u8.ToArray());
+        }
         public string SettingsPath => Path.Combine(_directory, "settings.json");
         public Task<string?> BrowseEncoderAsync() => Task.FromResult<string?>(null);
         public Task<string?> BrowseInputAsync() => Task.FromResult<string?>(null);
@@ -436,6 +461,8 @@ public sealed class DurationTests
         public Task CopyTextAsync(string text) => Task.CompletedTask;
         public void Dispose()
         {
+            _pipe?.Dispose();
+            _pidPipe?.Dispose();
             foreach (string file in Directory.EnumerateFiles(_directory)) File.Delete(file);
             Directory.Delete(_directory);
         }

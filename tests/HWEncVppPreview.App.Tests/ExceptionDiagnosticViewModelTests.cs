@@ -1,5 +1,4 @@
-﻿using System.Reflection;
-using Avalonia.Headless.XUnit;
+﻿using Avalonia.Headless.XUnit;
 using HWEncVppPreview.App.ViewModels;
 using HWEncVppPreview.Core;
 
@@ -16,14 +15,13 @@ public sealed class ExceptionDiagnosticViewModelTests
         try
         {
             UiLanguage.Set(language);
-            await using var vm = new MainWindowViewModel();
             Exception exception;
             try { throw new IOException("native root message"); }
             catch (IOException root) { exception = root; }
             for (int index = 0; index < 9; index++) exception = new InvalidOperationException($"wrapper {index}", exception);
             string diagnostics = string.Join("\n", Enumerable.Range(0, 12).Select(index => $"stderr {index}"));
-            typeof(MainWindowViewModel).GetMethod("ShowExceptionError", BindingFlags.NonPublic | BindingFlags.Instance)!
-                .Invoke(vm, ["failure", diagnostics, exception]);
+            await using var vm = FailureViewModelFixture.Create(diagnostics, -1, exception);
+            await FailureViewModelFixture.RunAsync(vm);
             Assert.Contains(label, vm.ErrorText);
             Assert.Contains(label, vm.LogText);
             foreach (string line in ExceptionDiagnostics.Lines(exception))

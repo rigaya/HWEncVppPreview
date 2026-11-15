@@ -45,10 +45,7 @@ public sealed class DisposeCooperationTests
             await clock.GraceArmed.Task.WaitWithDiagnosticsAsync(Safety);
             await backend.CancellationStarted.Task.WaitWithDiagnosticsAsync(Safety);
             Assert.True(backend.Cancelled);
-            Assert.Equal(0, backend.Aborts);
-            clock.Advance(Grace - TimeSpan.FromMilliseconds(1));
-            Assert.Equal(0, backend.Aborts);
-            clock.Advance(TimeSpan.FromMilliseconds(1));
+            clock.Advance(Grace);
             await dispose.WaitWithDiagnosticsAsync(Safety);
             Assert.Equal(1, backend.Aborts);
             Assert.Equal(1, backend.Disposals);

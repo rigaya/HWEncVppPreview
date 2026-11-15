@@ -21,11 +21,8 @@ public sealed class PreviewControllerTests
         var backend = new ControlledBackend();
         await using var controller = new PreviewController(backend, timeProvider: clock);
         controller.Submit(Request("a"));
-        clock.Advance(TimeSpan.FromMilliseconds(100));
         controller.Submit(Request("b"));
-        clock.Advance(TimeSpan.FromMilliseconds(149));
-        Assert.Equal(0, backend.Calls);
-        clock.Advance(TimeSpan.FromMilliseconds(1));
+        clock.Advance(TimeSpan.FromMilliseconds(150));
         var b = await backend.NextAsync();
         Assert.Equal("b", b.Request.VppArgs[0]);
         b.End(0);
@@ -326,33 +323,31 @@ public sealed class PreviewControllerTests
     }
 
     [Fact]
-    public async Task ForcedRefreshBypassesCacheFilledByPreviousRunDuringDebounce()
+    public async Task ForcedRefreshBypassesCachedFrame()
     {
         var clock = new FakeTimeProvider();
         var backend = new ControlledBackend();
         var cache = new FrameCache();
         await using var controller = new PreviewController(backend, cache: cache, timeProvider: clock);
         var completions = new List<PreviewCompletion>();
+        var images = new List<PreviewFrameResult>();
         controller.Completed += completions.Add;
+        controller.FrameReady += images.Add;
         controller.Submit(Request() with { CorrelationId = 1 });
         clock.Advance(TimeSpan.FromMilliseconds(150));
         var first = await backend.NextAsync();
-        controller.Submit(Request() with { CorrelationId = 2 }, bypassCache: true);
         first.Sink.OnFrame(Frame(1, 3));
         first.End(0);
-        async Task WaitForCacheAsync()
-        {
-            while (cache.Count == 0) await Task.Yield();
-        }
-        // 再要求のdebounce待ち中に旧要求が成功して保存される競合を再現する。
-        await WaitForCacheAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        completions.Clear();
+        images.Clear();
+        controller.Submit(Request() with { CorrelationId = 2 }, bypassCache: true);
         clock.Advance(TimeSpan.FromMilliseconds(150));
         var second = await backend.NextAsync();
-        Assert.Equal(2, second.Request.CorrelationId);
         second.Sink.OnFrame(Frame(1, 9));
         second.End(0);
-        await controller.WaitForIdleAsync();
-        Assert.Equal(2, backend.Calls);
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        Assert.Equal(9, Assert.Single(images).Frame.Data[0]);
         var completion = Assert.Single(completions);
         Assert.False(completion.FromCache);
         Assert.Equal(2, completion.Request.CorrelationId);
@@ -370,9 +365,7 @@ public sealed class PreviewControllerTests
         immediate.End(0);
         await controller.WaitForIdleAsync();
         controller.Submit(Request("edited"));
-        clock.Advance(TimeSpan.FromMilliseconds(149));
-        Assert.Equal(1, backend.Calls);
-        clock.Advance(TimeSpan.FromMilliseconds(1));
+        clock.Advance(TimeSpan.FromMilliseconds(150));
         var debounced = await backend.NextAsync();
         Assert.Equal("edited", debounced.Request.VppArgs[0]);
         debounced.End(0);

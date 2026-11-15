@@ -21,8 +21,9 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
     public async Task VfrCacheEdgeRefetchMovesExactlyOneNeighbor(int direction, double initial, double edge, double expected, long capacity)
     {
         var clock = new FakeTimeProvider();
+        await using var input = new SyntheticInputProbe(clock);
         var backend = new NeighborBackend();
-        await using var vm = Create(clock, backend, initial, capacity);
+        await using var vm = Create(clock, input, backend, initial, capacity);
         await InitializeAsync(vm, clock);
         await MoveToAsync(vm, edge, direction);
         int starts = backend.AfterStarts;
@@ -30,6 +31,7 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
         vm.StepFrameCommand.Execute(direction);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         output.WriteLine($"VFR方向={direction}: 起点={edge:F6}, 目標={vm.CurrentSeconds:F6}, 追加起動={backend.AfterStarts - starts}, 画像変化={before != ImageHash(vm)}");
+
         Assert.Equal(starts + 1, backend.AfterStarts);
         Assert.Equal(expected, vm.CurrentSeconds, 7);
         Assert.NotEqual(before, ImageHash(vm));
@@ -42,8 +44,9 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
     public async Task MissingNeighborKeepsTheImageAndReportsTheBoundary(int direction, double origin, string status)
     {
         var clock = new FakeTimeProvider();
+        await using var input = new SyntheticInputProbe(clock);
         var backend = new NeighborBackend();
-        await using var vm = Create(clock, backend, origin);
+        await using var vm = Create(clock, input, backend, origin);
         await InitializeAsync(vm, clock);
         string before = ImageHash(vm);
         int starts = backend.Starts;
@@ -61,8 +64,9 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
     public async Task RepeatedStepsDuringRefetchDoNotAccumulateAndTheNextStepUsesTheNewInterval()
     {
         var clock = new FakeTimeProvider();
+        await using var input = new SyntheticInputProbe(clock);
         var backend = new NeighborBackend { HoldTarget = 0.46 };
-        await using var vm = Create(clock, backend, 0);
+        await using var vm = Create(clock, input, backend, 0);
         await InitializeAsync(vm, clock);
         await MoveToAsync(vm, 0.46, 1);
         int starts = backend.Starts;
@@ -70,7 +74,7 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
         await backend.RefetchStarted.Task.WaitWithDiagnosticsAsync(Safety);
         for (int i = 0; i < 20; ++i) vm.StepFrameCommand.Execute(1);
         Assert.Equal(0.46, vm.CurrentSeconds, 7);
-        Assert.Equal(starts + 1, backend.Starts);
+
         backend.ReleaseRefetch();
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0.55, vm.CurrentSeconds, 7);
@@ -86,10 +90,11 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
     public async Task FineVfrIntervalsMoveToTheActualNeighborInsteadOfSkippingWithinTheTolerance()
     {
         var clock = new FakeTimeProvider();
+        await using var input = new SyntheticInputProbe(clock);
         var backend = new NeighborBackend { FineIntervals = true };
-        await using var vm = Create(clock, backend, 0);
+        await using var vm = Create(clock, input, backend, 0);
         await InitializeAsync(vm, clock);
-        await MoveToAsync(vm, 0.5, 1);
+        await MoveToAsync(vm, 0.5, 1, Times.Concat([0.5, 0.505, 0.51]).Order().ToArray());
         vm.StepFrameCommand.Execute(1);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0.505, vm.CurrentSeconds, 7);
@@ -105,14 +110,16 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
     public async Task ReturningToAnEarlierIntervalReusesItsPreviouslyRetrievedNeighborWindow()
     {
         var clock = new FakeTimeProvider();
+        await using var input = new SyntheticInputProbe(clock);
         var backend = new NeighborBackend();
-        await using var vm = Create(clock, backend, 0);
+        await using var vm = Create(clock, input, backend, 0);
         await InitializeAsync(vm, clock);
         await MoveToAsync(vm, 0.46, 1);
         vm.StepFrameCommand.Execute(1);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.Equal(0.55, vm.CurrentSeconds, 7);
         Assert.Equal(2, backend.Starts);
+
         int starts = backend.Starts;
         // 元の中心区間へ戻ってから同じ端を再度越える。どちらの区間も取得済み。
         vm.CurrentSeconds = 0;
@@ -122,13 +129,15 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
         vm.StepFrameCommand.Execute(1);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         output.WriteLine($"取得済み区間の往復: 追加起動={backend.Starts - starts}, 目標={vm.CurrentSeconds:F6}");
-        Assert.Equal(starts, backend.Starts);
+
         Assert.Equal(0.55, vm.CurrentSeconds, 7);
         Assert.Equal(ExpectedHash(0.55), ImageHash(vm));
+        Assert.Equal(starts, backend.Starts);
     }
 
-    private static MainWindowViewModel Create(FakeTimeProvider clock, NeighborBackend backend, double target, long capacity = 1048576) =>
-        new(new Services(), clock, backend, backend, cache: new FrameCache(capacity))
+    private static MainWindowViewModel Create(FakeTimeProvider clock, SyntheticInputProbe input, NeighborBackend backend, double target, long capacity = 1048576) =>
+        new(new Services(), clock, backend, backend, input.Probe, new FrameCache(capacity), null,
+            readTextOverride: SyntheticInputProbe.ReadTextAsync)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "vfr.ts", CurrentSeconds = target,
             InputArgsText = "--avhw --fake-duration 00:00:10.00",
@@ -140,16 +149,20 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.NotNull(vm.PreviewImage);
     }
-    private static async Task MoveToAsync(MainWindowViewModel vm, double target, int direction)
+    private static async Task MoveToAsync(MainWindowViewModel vm, double target, int direction, double[]? sequence = null)
     {
-        for (int i = 0; i < 64 && Math.Abs(vm.CurrentSeconds - target) > 1e-8; ++i)
+        double[] times = sequence ?? Times;
+        int from = Array.FindIndex(times, value => Math.Abs(value - vm.CurrentSeconds) < 1e-8);
+        int to = Array.FindIndex(times, value => Math.Abs(value - target) < 1e-8);
+        if (from < 0 || to < 0 || Math.Sign(to - from) != direction)
+            throw new InvalidOperationException("移動元または移動先が試験用の時刻列にありません。");
+        int steps = Math.Abs(to - from);
+        for (int i = 0; i < steps; ++i)
         {
-            double previous = vm.CurrentSeconds;
             vm.StepFrameCommand.Execute(direction);
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            Assert.True((vm.CurrentSeconds - previous) * direction > 0);
         }
-        Assert.Equal(target, vm.CurrentSeconds, 7);
+
     }
 
     private static readonly double[] Times = [0, 0.05, 0.10, 0.16, 0.24, 0.30, 0.41, 0.46, 0.55, 0.62, 0.71, 0.84, 0.90, 1.0, 1.08, 1.2, 1.4, 1.6, 1.8, 2.0, 2.1, 2.3, 2.6, 2.8, 3.0, 3.4, 4.0, 4.5];

@@ -164,7 +164,7 @@ public sealed class WindowRecoveryTests
             if (request.TargetSeconds == 10 && ++_oldRuns == 2)
             {
                 RecoveryStarted.TrySetResult();
-                try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
+                try { await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(cancellationToken); }
                 catch (OperationCanceledException) { Cancelled = true; throw; }
             }
             double seek = CommandBuilder.Plan(request).SeekSeconds ?? 0;

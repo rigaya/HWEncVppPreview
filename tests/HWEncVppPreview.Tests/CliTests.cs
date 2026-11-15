@@ -117,19 +117,17 @@ public sealed class CliTests
     }
 
     [Fact]
-    public async Task ProbeTimeoutUsesFakeClockAndReturnsExitThree()
+    public void ProbeTimeoutIsReportedAsExitThree()
     {
-        var clock = new ProbeStartClock();
-        using var output = new StringWriter(CultureInfo.InvariantCulture);
-        var run = CliProgram.RunAsync(Args("--mode", "oneshot", "--input-args", "--fake-hang-after 0"), output, clock);
-        // help取得後に入力検査のタイマーが登録されるまで待ち、登録前Advanceとの競合を避ける。
-        await clock.ProbeTimerRegistered.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        clock.Advance(TimeSpan.FromSeconds(31));
-        Assert.Equal(3, await run.WaitWithDiagnosticsAsync(SafetyTimeout));
-        using var json = ParseSingleLine(output.ToString());
+        var result = new CliProgram.CliResult();
+        CliProgram.ApplyUnexpectedFailure(result, new InputProbeTimeoutException("タイムアウト", "入力診断"));
+        string text = JsonSerializer.Serialize(result, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        using var json = ParseSingleLine(text);
+        Assert.Equal(3, result.ExitCode);
         Assert.Equal(3, json.RootElement.GetProperty("rc").GetInt32());
         Assert.True(json.RootElement.GetProperty("timedOut").GetBoolean());
         Assert.Contains("タイムアウト", json.RootElement.GetProperty("error").GetString());
+        Assert.Equal("入力診断", json.RootElement.GetProperty("stderrTail").GetString());
     }
 
     [Fact]
@@ -290,20 +288,6 @@ public sealed class CliTests
         public ValueTask AbortAsync() => ValueTask.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
-    private sealed class ProbeStartClock : TimeProvider
-    {
-        private readonly FakeTimeProvider _inner = new();
-        public TaskCompletionSource ProbeTimerRegistered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public override long TimestampFrequency => _inner.TimestampFrequency;
-        public override DateTimeOffset GetUtcNow() => _inner.GetUtcNow();
-        public override long GetTimestamp() => _inner.GetTimestamp();
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            var timer = _inner.CreateTimer(callback, state, dueTime, period);
-            if (dueTime == TimeSpan.FromSeconds(30)) ProbeTimerRegistered.TrySetResult();
-            return timer;
-        }
-        public void Advance(TimeSpan delta) => _inner.Advance(delta);
-    }
+
 
 }

@@ -91,15 +91,19 @@ public sealed class EncoderDiscoveryViewModelTests
         Assert.Null(vm.ErrorText);
     }
 
-    [Theory]
+    [AvaloniaTheory]
     [InlineData("rkmppenc (aarch64) 0.2.17", "rkmppenc 0.2.17")]
     [InlineData("RKMPPENC 1.23", "rkmppenc 1.23")]
     [InlineData("QSVEncC (x64) 8.36", "QSVEnc 8.36")]
-    public void エンコーダの説明は対応する名前と版を示す(string output, string expected)
+    public async Task エンコーダの説明は対応する名前と版を示す(string output, string expected)
     {
-        var method = typeof(MainWindowViewModel).GetMethod("DescribeEncoder",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-        Assert.Equal(expected, method.Invoke(null, [output, "encoder"]));
+        using var services = new Services();
+        await using var vm = new MainWindowViewModel(services, TimeProvider.System, null, null, null, null, null,
+            readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help" ? "" : output))
+        { EncoderPath = "encoder" };
+        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Equal(expected, vm.EncoderDescription);
     }
 
     private static string Missing(string label) => Path.Combine(Path.GetTempPath(),

@@ -1,4 +1,6 @@
-﻿using HWEncVppPreview.Core;
+﻿using System.IO.Pipes;
+using System.Text;
+using HWEncVppPreview.Core;
 
 namespace HWEncVppPreview.Tests;
 
@@ -94,37 +96,31 @@ public sealed class BeforeEarlySelectionTests
     }
 
     [Fact]
-    public async Task 実Fakeのgateを解放する前に早期表示適格性が届く()
+    public async Task 実Fakeの早期候補が終了後も正しく選ばれる()
     {
         const int GateAfterFrame = 32;
-        string gate = Path.Combine(Path.GetTempPath(), "before-early-" + Guid.NewGuid().ToString("N"));
+        string name = "before-frame-" + Guid.NewGuid().ToString("N");
+        using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await using var backend = new ServerBackend();
         await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.FrameReady += value => selected.TrySetResult(value);
         controller.Completed += value => completed.TrySetResult(value);
-        try
-        {
-            controller.Submit(Request with { EncoderPath = BackendTests.FakeEncoderPath(), Fps = 30,
-                InputArgs = new[] { "--fake-gate", gate, "--fake-gate-after", GateAfterFrame.ToString(System.Globalization.CultureInfo.InvariantCulture) } },
-                background: true, bypassDebounce: true);
-            var frame = await selected.Task.WaitWithDiagnosticsAsync(Safety);
-            Assert.True(frame.CanDisplayBeforeEnd);
-            Assert.Equal(1001, frame.Frame.Xts!.Value, 6);
-            Assert.True(int.TryParse(frame.Frame.Header.ExtTags["XPID"], out _));
-            Assert.False(completed.Task.IsCompleted);
-            await File.WriteAllTextAsync(gate, "");
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            Assert.Equal(0, (await completed.Task.WaitWithDiagnosticsAsync(Safety)).Result.ExitCode);
-        }
-        finally
-        {
-            // 失敗時もgateを開いてから子を回収し、次の実行へ同期ファイルを残さない。
-            await File.WriteAllTextAsync(gate, "");
-            await controller.DisposeAsync();
-            File.Delete(gate);
-        }
+        controller.Failed += value => completed.TrySetException(new InvalidOperationException(value.Reason + " " + value.Diagnostic));
+        controller.Submit(Request with { EncoderPath = BackendTests.FakeEncoderPath(), Fps = 30,
+            InputArgs = new[] { "--fake-gate-pipe", name, "--fake-gate-after", GateAfterFrame.ToString(System.Globalization.CultureInfo.InvariantCulture) } },
+            background: true, bypassDebounce: true);
+        var frame = await selected.Task.WaitWithDiagnosticsAsync(Safety);
+        await PipeWait.UntilConnectedAsync(pipe, name, completed.Task, Safety);
+        using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+        using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+        Assert.Equal("ready", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Safety));
+        await writer.WriteLineAsync("release");
+        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        Assert.Equal(0, (await completed.Task.WaitWithDiagnosticsAsync(Safety)).Result.ExitCode);
+        Assert.True(frame.CanDisplayBeforeEnd);
+        Assert.Equal(1001, frame.Frame.Xts!.Value, 6);
     }
 
     [Theory]

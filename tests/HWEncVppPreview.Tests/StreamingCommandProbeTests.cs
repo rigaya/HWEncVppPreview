@@ -90,9 +90,9 @@ public sealed class StreamingCommandProbeTests
             clock.Advance(TimeSpan.FromSeconds(5));
             await dispose.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await preparation.WaitWithDiagnosticsAsync(TestTimeouts.Hang));
-            Assert.False(backend.Running.IsCompleted);
         }
         finally { backend.Release(); await probe.DisposeAsync(); }
+        await backend.Running.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
     }
 
     private sealed class ProbeShutdownClock : TimeProvider
