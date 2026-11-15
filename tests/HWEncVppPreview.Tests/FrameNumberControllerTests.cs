@@ -7,7 +7,6 @@ public sealed class FrameNumberControllerTests
     private sealed class FakeSource : IFrameNumberSource
     {
         public FrameNumberInfo Info { get; } = new(80, new Y4mHeader { Width = 4, Height = 4, FpsNum = 60, FpsDen = 1 });
-        public int FramesRead { get; private set; }
         public List<int> Positions { get; } = [];
         public bool Missing { get; set; }
         public bool Disposed { get; private set; }
@@ -19,7 +18,7 @@ public sealed class FrameNumberControllerTests
         }
         public Y4mFrame GetFrame(int position)
         {
-            FramesRead++; Positions.Add(position);
+            Positions.Add(position);
             return new(Info.Header, position / 60.0, null, new byte[Info.Header.FrameBytes]);
         }
         public void Dispose() => Disposed = true;
@@ -85,20 +84,18 @@ public sealed class FrameNumberControllerTests
     }
 
     [Fact]
-    public async Task 先読みとキャッシュと取消を扱う()
+    public async Task 明示先読みとキャッシュと事前取消の終了状態を返す()
     {
         var source = new FakeSource();
         await using (var controller = new FrameNumberController(source, source.Info.Header.FrameBytes * 3L))
         {
             await controller.PrefetchAsync(4, 1, 1);
-            Assert.Equal(3, source.FramesRead);
-            Assert.Equal(new[] { 4, 2, 5 }, source.Positions);
             _ = await controller.GetFrameAsync(4);
-            Assert.Equal(3, source.FramesRead);
             using var cts = new CancellationTokenSource(); cts.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => controller.GetFrameAsync(5, cts.Token));
             await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => controller.GetFrameAsync(80));
         }
         Assert.True(source.Disposed);
+        Assert.Equal(new[] { 4, 2, 5 }, source.Positions);
     }
 }

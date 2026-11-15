@@ -33,6 +33,7 @@ public sealed class AvisynthFrameSource : IFrameNumberSource
 
     private readonly object _gate = new();
     private readonly nint _library;
+    private readonly nint _avisynth;
     private readonly DeleteContext _delete;
     private readonly GetError _error;
     private readonly GetFrameNative _frame;
@@ -47,9 +48,12 @@ public sealed class AvisynthFrameSource : IFrameNumberSource
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentException.ThrowIfNullOrWhiteSpace(avsPath);
         string libraryPath = Path.Combine(Path.GetFullPath(directory), OperatingSystem.IsWindows() ? "Amatsukaze.dll" : "libAmatsukaze.so");
-        _library = NativeLibrary.Load(libraryPath);
         try
         {
+            // 同梱版と同じABIを使い、システムの別版を読み込まないようにする。
+            if (OperatingSystem.IsWindows())
+                _avisynth = NativeLibrary.Load(Path.Combine(Path.GetFullPath(directory), "AviSynth.dll"));
+            _library = NativeLibrary.Load(libraryPath);
             T Load<T>(string name) where T : Delegate => Marshal.GetDelegateForFunctionPointer<T>(NativeLibrary.GetExport(_library, name));
             var create = Load<CreateContext>("AMTContext_Create");
             _delete = Load<DeleteContext>("ATMContext_Delete");
@@ -79,7 +83,8 @@ public sealed class AvisynthFrameSource : IFrameNumberSource
         {
             if (_preview != 0) _close?.Invoke(_preview);
             if (_context != 0) _delete?.Invoke(_context);
-            NativeLibrary.Free(_library);
+            if (_library != 0) NativeLibrary.Free(_library);
+            if (_avisynth != 0) NativeLibrary.Free(_avisynth);
             throw;
         }
     }
@@ -126,6 +131,7 @@ public sealed class AvisynthFrameSource : IFrameNumberSource
             if (_preview != 0) { _close(_preview); _preview = 0; }
             if (_context != 0) { _delete(_context); _context = 0; }
             NativeLibrary.Free(_library);
+            if (_avisynth != 0) NativeLibrary.Free(_avisynth);
         }
     }
 }
