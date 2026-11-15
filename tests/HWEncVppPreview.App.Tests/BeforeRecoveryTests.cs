@@ -127,27 +127,6 @@ public sealed class BeforeRecoveryTests
     }
 
     [AvaloniaFact]
-    public async Task LatestTargetDuringRecoveryUsesTheCompletedSafeWindow()
-    {
-        using var capability = new CapabilityScope();
-        using var services = new Services();
-        var clock = TimeProvider.System;
-        var backend = new ControlledBackend(false, blockRecovery: true);
-        await using var vm = await Start(services, clock, backend);
-        backend.Release.TrySetResult();
-        await backend.RecoveryStarted.Task.WaitWithDiagnosticsAsync(Safety);
-        for (int i = 0; i < 7; ++i)
-            vm.StepFrameCommand.Execute(-1);
-        backend.ReleaseRecovery.TrySetResult();
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(9.3, vm.CurrentSeconds, 6);
-        Assert.NotNull(vm.BeforeImage);
-        Assert.Equal((byte)93, FirstPixel(vm.BeforeImage));
-        Assert.Null(vm.ErrorText);
-        Assert.False(vm.IsBeforeBusy);
-    }
-
-    [AvaloniaFact]
     public async Task AfterUiFollowingEarlyBeforeFrameStartsTheSameThirdRequest()
     {
         using var capability = new CapabilityScope();

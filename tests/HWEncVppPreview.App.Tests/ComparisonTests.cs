@@ -194,6 +194,7 @@ public sealed class ComparisonTests
         Assert.DoesNotContain("BEFORE_FAILURE", vm.LogText);
         Assert.Null(vm.ErrorText);
         Assert.False(vm.IsBusy);
+        Assert.False(vm.IsBeforeBusy);
     }
 
     [AvaloniaFact]

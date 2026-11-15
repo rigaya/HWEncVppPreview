@@ -51,6 +51,8 @@ public sealed partial class MainWindowViewModel
         try
         {
             var post = new OwnedUiPost(context, ownership, callback, this);
+            // Beforeの反映と破棄を静止待ちに含める。
+            if (post.Completion is { } completion) Track(completion);
             lock (_rawPostSync)
             {
                 if (_disposed) post.Dispose();
@@ -72,7 +74,8 @@ public sealed partial class MainWindowViewModel
     {
         if (!_usesOwnedRaw)
         {
-            _postToUi(callback);
+            if (context.Kind == RequestKind.Before) Track(PostAsync(callback));
+            else _postToUi(callback);
             return;
         }
         var post = CaptureRawPost(context, frames, callback);
@@ -112,6 +115,9 @@ public sealed partial class MainWindowViewModel
         private readonly object _sync = new();
         private IDisposable? _ownership = ownership;
         private Action? _callback = callback;
+        private readonly TaskCompletionSource? _completion = context.Kind == RequestKind.Before
+            ? new(TaskCreationOptions.RunContinuationsAsynchronously) : null;
+        public Task? Completion => _completion?.Task;
         public RequestContext Context { get; } = context;
         public void Execute()
         {
@@ -133,6 +139,7 @@ public sealed partial class MainWindowViewModel
             {
                 retained?.Dispose();
                 owner.ReleaseDetachedContext(Context);
+                _completion?.TrySetResult();
             }
         }
         public void Dispose() => Drop();
@@ -149,6 +156,7 @@ public sealed partial class MainWindowViewModel
             }
             lock (owner._rawPostSync) owner._rawPosts.Remove(this);
             retained?.Dispose();
+            if (dropped) _completion?.TrySetResult();
             return dropped;
         }
     }

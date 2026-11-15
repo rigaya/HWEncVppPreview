@@ -501,7 +501,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         DropRawPosts(candidate => ReferenceEquals(candidate, context));
         BeginReplay(context);
         long revision = Volatile.Read(ref context.DisplayRevision);
-        _postToUi(() =>
+        Action apply = () =>
         {
             if (!IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)) return;
             if (context.Kind == RequestKind.Before) { IsBeforeBusy = true; return; }
@@ -510,7 +510,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             _lastCompletedAfter = Math.Min(_lastCompletedAfter, context.Generation - 1);
             IsBusy = true;
             StatusText = AppMessages.Processing;
-        });
+        };
+        if (context.Kind == RequestKind.Before) Track(PostAsync(apply));
+        else _postToUi(apply);
     }
     private static void BeginReplay(RequestContext context)
     {
@@ -707,7 +709,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         context.Segment = null;
         string diagnostics = value.Diagnostic ?? value.Result?.StandardError ?? (value.Exception as PreviewBackendException)?.StandardError ?? context.Diagnostics;
         if (context.Kind == RequestKind.After) _afterRequests.TryRemove(context.Generation, out _);
-        _postToUi(() =>
+        Action apply = () =>
         {
             if (!IsCurrent(context)) return;
             context.Segment = null;
@@ -728,7 +730,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = AppMessages.BackendMode(context.Mode);
             ElapsedText = AppMessages.Elapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
             ShowExceptionError(value.Reason, diagnostics, value.Exception);
-        });
+        };
+        if (context.Kind == RequestKind.Before) Track(PostAsync(apply));
+        else _postToUi(apply);
     }
     private void DisplayFrame(Y4mFrame frame, RequestContext context)
     {
