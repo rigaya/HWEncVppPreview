@@ -123,6 +123,8 @@ public sealed class InputProbe : IAsyncDisposable
                 throw;
             }
             cancellation.Token.ThrowIfCancellationRequested();
+            // 破棄側の取消がリンク先へ伝わる前にbackendが終了しても、破棄を優先する。
+            lifetime.ThrowIfCancellationRequested();
             // 自己中断と外部のキャンセルは区別する。最初のフレーム取得後の自己中断だけを成功扱いにする。
             if (!sink.HasFrame && result.ExitCode != 0)
                 throw new InputProbeException(CoreText.InputProbeEncoderExited(result.ExitCode), result.ExitCode, result.StandardError);
@@ -321,7 +323,8 @@ public sealed class InputProbe : IAsyncDisposable
     {
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         var deadline = new CleanupDeadline(_clock, StopTimeout);
-        Task cancellation = Task.Run(async () => await _lifetime.CancelAsync().ConfigureAwait(false));
+        // backendの終了が先に見えてエラー扱いされないよう、取消要求だけ先に立てる。
+        Task cancellation = _lifetime.CancelAsync();
         Task backend = Task.Run(async () => await _backend.DisposeAsync().ConfigureAwait(false));
         KeyValuePair<Process, Task>[] processes;
         lock (_sync)
