@@ -319,8 +319,7 @@ public sealed partial class PreviewController
     private async Task RunStreamAsync(StreamingSession session, CancellationTokenSource scheduled, bool bypassDebounce)
     {
         bool entered = false;
-        IPreviewBackend backend;
-        lock (_sync) backend = _unsupported.Contains(session.PhysicalRequest.EncoderPath) ? _fallback : _preferred;
+        IPreviewBackend backend = _backend;
         try
         {
             await Task.Delay(bypassDebounce ? TimeSpan.Zero : _debounce, _clock, scheduled.Token).ConfigureAwait(false);
@@ -328,8 +327,7 @@ public sealed partial class PreviewController
             await _execution.WaitAsync(startToken.Token).ConfigureAwait(false);
             entered = true;
             session.Cancellation.Token.ThrowIfCancellationRequested();
-            bool? history;
-            (backend, history) = await PrepareBackendAsync(backend, session.InitialRequest, false, session.Cancellation.Token).ConfigureAwait(false);
+            bool? history = await backend.GetHistoryRequirementAsync(session.InitialRequest, session.Cancellation.Token).ConfigureAwait(false);
             var physical = PhysicalAfterRequest(session.InitialRequest with { DependsOnHistory = history }, false) with { Continuous = true };
             session.PhysicalRequest = physical;
             double seek = CommandBuilder.Plan(physical).SeekSeconds ?? 0;
@@ -425,29 +423,10 @@ public sealed partial class PreviewController
                     CoreText.EncoderExited(result.ExitCode), result)), true);
             }
 
-            async Task<PreviewRunResult> RunAsync()
+            Task<PreviewRunResult> RunAsync()
             {
-                try
-                {
-                    BeginForwardObservation(session, backend);
-                    return await RunTrackedBackendAsync(backend, session.PhysicalRequest, sink, session.Cancellation.Token).ConfigureAwait(false);
-                }
-                catch (PreviewServerNotSupportedException) when (_enableFallback && ReferenceEquals(backend, _preferred))
-                {
-                    lock (_sync) _unsupported.Add(session.PhysicalRequest.EncoderPath);
-                    backend = _fallback;
-                    _cache.RemoveSegment(session.SegmentId);
-                    physical = PhysicalAfterRequest(session.InitialRequest with { DependsOnHistory = null }, false) with { Continuous = true };
-                    session.PhysicalRequest = physical;
-                    seek = CommandBuilder.Plan(physical).SeekSeconds ?? 0;
-                    clock = new PreviewClockMap(physical.TimestampOriginSeconds, seek, true);
-                    session.SegmentId = _cache.BeginSegment(physical, clock, PreviewWarmupPolicy.SafeStartSeconds(physical, false));
-                    if (!session.IsForwardPrefetch) _cache.PinCurrent(session.SegmentId, session.LatestRequest.TargetSeconds);
-                    sink = new StreamSink(this, session, watchdog);
-                    watchdog.Touch();
-                    BeginForwardObservation(session, backend);
-                    return await RunTrackedBackendAsync(backend, session.PhysicalRequest, sink, session.Cancellation.Token).ConfigureAwait(false);
-                }
+                BeginForwardObservation(session, backend);
+                return RunTrackedBackendAsync(backend, session.PhysicalRequest, sink, session.Cancellation.Token);
             }
         }
         catch (OperationCanceledException) when (scheduled.IsCancellationRequested || session.Cancellation.IsCancellationRequested) { }

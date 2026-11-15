@@ -29,7 +29,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private string _currentTimeText = "0:00:00.000";
     private double _currentSeconds, _durationSeconds;
     private bool _hasDuration, _isBusy, _isLogOpen;
-    private string _durationText = "", _statusText = "", _logText = "", _backendModeText = "", _elapsedText = "", _inputInfoText = "";
+    private string _durationText = "", _statusText = "", _logText = "", _elapsedText = "", _inputInfoText = "";
     private string? _errorText;
     private readonly Action<Action> _postToUi;
     private readonly IViewModelServices _services;
@@ -63,24 +63,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private readonly HashSet<FilterLineViewModel> _observedLines = new();
 
     public MainWindowViewModel(IViewModelServices? services = null, TimeProvider? timeProvider = null,
-        IPreviewBackend? preferred = null, IPreviewBackend? fallback = null, InputProbe? probe = null, FrameCache? cache = null)
-        : this(services, timeProvider, preferred, fallback, probe, cache, null) { }
+        IPreviewBackend? backend = null, InputProbe? probe = null, FrameCache? cache = null)
+        : this(services, timeProvider, backend, probe, cache, null) { }
 
     /// <summary>偽時計による描画待ちの再現用に、画像変換だけを差し替える内部入口。</summary>
     internal MainWindowViewModel(IViewModelServices? services, TimeProvider? timeProvider,
-        IPreviewBackend? preferred, IPreviewBackend? fallback, InputProbe? probe, FrameCache? cache,
+        IPreviewBackend? backend, InputProbe? probe, FrameCache? cache,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter,
-        IPreviewBackend? backgroundPreferred = null, IPreviewBackend? backgroundFallback = null, bool beforeEnabled = true,
+        IPreviewBackend? backgroundBackend = null, bool beforeEnabled = true,
         OwnedPreviewDependencies? owned = null, TimeSpan? debounceOverride = null,
         Func<string, string, CancellationToken, Task<string>>? readTextOverride = null)
     {
         if (owned != null)
         {
-            ArgumentNullException.ThrowIfNull(preferred);
-            ArgumentNullException.ThrowIfNull(fallback);
-            if (preferred is not IRawOwnedBackend || fallback is not IRawOwnedBackend
-                || (backgroundPreferred != null && backgroundPreferred is not IRawOwnedBackend)
-                || (backgroundFallback != null && backgroundFallback is not IRawOwnedBackend))
+            ArgumentNullException.ThrowIfNull(backend);
+            if (backend is not IRawOwnedBackend
+                || (backgroundBackend != null && backgroundBackend is not IRawOwnedBackend))
                 throw new ArgumentException("所有権付きの画像を扱えるバックエンドが必要です。", nameof(owned));
             if (cache != null && !ReferenceEquals(cache.OwnershipScope, owned.Scope))
                 throw new ArgumentException("キャッシュと画像の所有範囲が一致しません。", nameof(cache));
@@ -88,8 +86,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _postToUi = owned?.PostToUi ?? (action => Dispatcher.UIThread.Post(action));
         _bgraPool = owned?.BgraPool ?? new BgraBufferPool();
         // rawを外へ渡し得る注入が1つでもあれば、VM全体を通常配列の経路へ固定する。
-        _usesOwnedRaw = owned != null || (preferred == null && fallback == null && backgroundPreferred == null
-            && backgroundFallback == null && cache == null && converter == null && probe == null);
+        _usesOwnedRaw = owned != null || (backend == null && backgroundBackend == null
+            && cache == null && converter == null && probe == null);
         _imageConverter = converter != null ? (frame, settings, token) => converter(frame, token) : null;
         _beforeEnabled = beforeEnabled;
         _services = services ?? new AvaloniaViewModelServices();
@@ -97,23 +95,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _inputEditDelay = debounceOverride ?? TimeSpan.FromMilliseconds(150);
         _readTextOverride = readTextOverride;
         _probe = probe ?? new InputProbe(_clock);
-        _borrowInputProbe = probe == null && preferred == null;
+        _borrowInputProbe = probe == null && backend == null;
         // 同じ長さなら読取が全体を上書きし、所有権が貸出中の画素を守るため、入力世代や形式では分けない。
         _rawOwnershipScope = owned?.Scope ?? (_usesOwnedRaw ? new RawOwnershipScope(new RawBufferPool()) : null);
         _cache = cache ?? (_rawOwnershipScope != null ? new FrameCache(_rawOwnershipScope) : new FrameCache());
-        var first = preferred ?? new ServerBackend(_clock);
-        var second = fallback ?? new OneShotBackend(timeProvider: _clock);
-        var observedFirst = new ObservedBackend(first, first is OneShotBackend ? "oneshot" : "server", this);
-        var observedSecond = ReferenceEquals(first, second) ? observedFirst : new ObservedBackend(second, "oneshot", this);
-        var beforeFirst = backgroundPreferred != null ? new ObservedBackend(backgroundPreferred, "server", this) :
-            preferred == null ? new ObservedBackend(new ServerBackend(_clock), "server", this) : observedFirst;
-        var beforeSecond = backgroundFallback != null ? new ObservedBackend(backgroundFallback, "oneshot", this) :
-            preferred == null ? new ObservedBackend(new OneShotBackend(timeProvider: _clock), "oneshot", this) : observedSecond;
+        var observed = new ObservedBackend(backend ?? new ServerBackend(_clock), this);
+        var before = backgroundBackend != null ? new ObservedBackend(backgroundBackend, this) :
+            backend == null ? new ObservedBackend(new ServerBackend(_clock), this) : observed;
         _controller = _rawOwnershipScope != null
-            ? new PreviewController(_rawOwnershipScope, observedFirst, observedSecond, _cache, _clock,
-                debounce: debounceOverride, backgroundBackend: beforeFirst, backgroundFallback: beforeSecond)
-            : new PreviewController(observedFirst, observedSecond, _cache, _clock,
-                debounce: debounceOverride, backgroundBackend: beforeFirst, backgroundFallback: beforeSecond);
+            ? new PreviewController(_rawOwnershipScope, observed, _cache, _clock,
+                debounce: debounceOverride, backgroundBackend: before)
+            : new PreviewController(observed, _cache, _clock,
+                debounce: debounceOverride, backgroundBackend: before);
         _controller.ReplayStarted += OnReplayStarted;
         if (_usesOwnedRaw)
         {
@@ -332,8 +325,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     public string? ErrorText { get => _errorText; set => SetProperty(ref _errorText, value); }
     public string LogText { get => _logText; set => SetProperty(ref _logText, value); }
     public bool IsLogOpen { get => _isLogOpen; set => SetProperty(ref _isLogOpen, value); }
-    /// <summary>例: "常駐" / "都度起動"。</summary>
-    public string BackendModeText { get => _backendModeText; set => SetProperty(ref _backendModeText, value); }
     /// <summary>例: "0.48秒"。</summary>
     public string ElapsedText { get => _elapsedText; set => SetProperty(ref _elapsedText, value); }
     /// <summary>例: "1440x1080 (SAR 4:3) 29.97fps"。</summary>
@@ -692,7 +683,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         }
         ErrorText = null;
         LogText = AppendBeforeFallbackDiagnostic(value.Result.StandardError);
-        if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = AppMessages.BackendMode(context.Mode);
         ElapsedText = AppMessages.Elapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
         if (context.Generation == Volatile.Read(ref _generation))
         {
@@ -727,7 +717,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (context.Generation != Volatile.Read(ref _generation)) return;
             if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
             _lastFailedAfter = context.Generation;
-            if (!string.IsNullOrEmpty(context.Mode)) BackendModeText = AppMessages.BackendMode(context.Mode);
             ElapsedText = AppMessages.Elapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
             ShowExceptionError(value.Reason, diagnostics, value.Exception);
         };
@@ -1235,10 +1224,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             lock (_segmentSync) return AcquireRawSegment(segment, frames, current, _segmentRaw, kind);
         }
-        public string Mode { get; set; } = "";
         public string Diagnostics { get; set; } = "";
     }
-    private sealed class ObservedBackend(IPreviewBackend inner, string mode, MainWindowViewModel owner) : IPreviewBackend, IRawOwnedBackend
+    private sealed class ObservedBackend(IPreviewBackend inner, MainWindowViewModel owner) : IPreviewBackend, IRawOwnedBackend
     {
         public Task InitializeEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
             => inner.InitializeEncoderAsync(encoderPath, cancellationToken);
@@ -1257,7 +1245,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             Func<CancellationToken, Task<PreviewRunResult>> run, CancellationToken cancellationToken)
         {
             var context = owner.ContextForPhysical(request);
-            if (context != null) context.Mode = mode;
             if (context?.Kind == RequestKind.Before) owner.ObserveBeforePhysical(context, request);
             using var cancellation = context?.BeforeCancellation == null ? null
                 : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, context.BeforeCancellation.Token);

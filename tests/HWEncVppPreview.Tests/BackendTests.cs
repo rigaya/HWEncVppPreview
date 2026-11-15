@@ -11,45 +11,6 @@ public sealed class BackendTests
     private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
     [Fact]
-    public async Task OneShotReadsFramesAndDrainsLargeStderr()
-    {
-        await using var backend = new OneShotBackend();
-        var sink = new RecordingSink();
-        var result = await backend.RunAsync(Request("--fake-stderr-bytes", "131072"), sink).WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.Equal(0, result.ExitCode);
-        Assert.False(result.IsCancelled);
-        Assert.Equal(4, sink.Frames.Count);
-        Assert.True(sink.OutputCount > 0);
-        Assert.True(result.StandardError.Length > 131072);
-        Assert.Equal(0, sink.Frames[0].Xts);
-        Assert.Equal(64 * 36 * 3 / 2, sink.Frames[0].Data.Length);
-        AssertStopped(sink.ProcessId);
-    }
-
-    [Fact]
-    public async Task OneShotReturnsExitCodeAndDiagnostics()
-    {
-        await using var backend = new OneShotBackend();
-        var result = await backend.RunAsync(Request("--fake-rc", "23"), new RecordingSink()).WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.Equal(23, result.ExitCode);
-        Assert.Contains("FAKE requested rc=23", result.StandardError);
-    }
-
-    [Fact]
-    public async Task OneShotCancellationKillsAndReapsProcess()
-    {
-        await using var backend = new OneShotBackend();
-        using var cancellation = new CancellationTokenSource();
-        var sink = new RecordingSink();
-        var running = backend.RunAsync(Request("--fake-hang-after", "1"), sink, cancellation.Token);
-        await sink.FirstFrame.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        cancellation.Cancel();
-        var result = await running.WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.True(result.IsCancelled);
-        AssertStopped(sink.ProcessId);
-    }
-
-    [Fact]
     public async Task ServerReusesProcessAndKeepsRequestsIndependent()
     {
         await using var backend = new ServerBackend();
@@ -67,30 +28,6 @@ public sealed class BackendTests
         Assert.False(a1.Frames[0].Data.SequenceEqual(b.Frames[0].Data));
         await backend.DisposeAsync();
         AssertStopped(a1.ProcessId);
-    }
-
-    [Fact]
-    public async Task BothBackendsProduceIdenticalFramesAndRelativeTimestamps()
-    {
-        await using var oneShot = new OneShotBackend();
-        await using var server = new ServerBackend();
-        var one = new RecordingSink();
-        var resident = new RecordingSink();
-        var request = Request() with
-        {
-            TargetSeconds = 10, PreMarginSeconds = 0.1,
-            VppArgs = new[] { "--vpp-nlmeans", "sigma=0.123" },
-        };
-        await oneShot.RunAsync(request, one).WaitWithDiagnosticsAsync(SafetyTimeout);
-        await server.RunAsync(request, resident).WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.Equal(one.Frames.Count, resident.Frames.Count);
-        Assert.Equal(0, resident.Frames[0].Xts);
-        Assert.Equal("9.9", resident.Frames[0].Header.ExtTags["XSEEK"]);
-        for (int i = 0; i < one.Frames.Count; i++)
-        {
-            Assert.Equal(one.Frames[i].Data, resident.Frames[i].Data);
-            Assert.Equal(one.Frames[i].Xts, resident.Frames[i].Xts);
-        }
     }
 
     [Fact]
@@ -251,7 +188,7 @@ public sealed class BackendTests
     [Fact]
     public async Task DroppedTimestampsArePreserved()
     {
-        await using var backend = new OneShotBackend();
+        await using var backend = new ServerBackend();
         var sink = new RecordingSink();
         var result = await backend.RunAsync(Request("--fake-step", "2"), sink).WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(0, result.ExitCode);
@@ -291,22 +228,6 @@ public sealed class BackendTests
         var next = new RecordingSink();
         Assert.Equal(0, (await backend.RunAsync(Request(), next).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
         Assert.NotEqual(first.ProcessId, next.ProcessId);
-    }
-
-    [Fact]
-    public async Task ControllerFallsBackWhenReadyIsInvalid()
-    {
-        await using var preferred = new ServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_READY_VERSION"] = "0");
-        await using var fallback = new OneShotBackend();
-        await using var controller = new PreviewController(backend: preferred, fallback: fallback, debounce: TimeSpan.Zero);
-        var completed = Channel.CreateUnbounded<PreviewCompletion>();
-        controller.Completed += result => completed.Writer.TryWrite(result);
-        controller.Submit(Request());
-        Assert.Equal(0, (await completed.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout)).Result.ExitCode);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        controller.Submit(Request() with { VppArgs = new[] { "--vpp-nlmeans", "sigma=0.2" } });
-        Assert.Equal(0, (await completed.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout)).Result.ExitCode);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
     }
 
     private static PreviewRequest Request(params string[] extra) => new()

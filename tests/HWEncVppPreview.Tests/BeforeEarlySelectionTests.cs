@@ -20,7 +20,7 @@ public sealed class BeforeEarlySelectionTests
     public async Task 単調な同一durationはEND前に適格な一枚を通知する()
     {
         var backend = new GatedBackend(new[] { Frame(0), Frame(.5), Frame(1), Frame(1.5) });
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.FrameReady += value => selected.TrySetResult(value);
@@ -57,7 +57,7 @@ public sealed class BeforeEarlySelectionTests
             _ => new[] { Frame(0), Frame(.5), Frame(.5), Frame(1.5) },
         };
         var backend = new GatedBackend(frames);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var images = new System.Collections.Concurrent.ConcurrentQueue<PreviewFrameResult>();
         controller.FrameReady += images.Enqueue;
         try
@@ -77,7 +77,7 @@ public sealed class BeforeEarlySelectionTests
     {
         var tail = Frame(2, 3);
         var backend = new GatedBackend(new[] { Frame(0), Frame(.5), Frame(1), Frame(1.5) }, tail);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         PreviewCompletion? completed = null;
         controller.FrameReady += value => selected.TrySetResult(value);
@@ -102,7 +102,7 @@ public sealed class BeforeEarlySelectionTests
         string name = "before-frame-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await using var backend = new ServerBackend();
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.FrameReady += value => selected.TrySetResult(value);
@@ -176,7 +176,7 @@ public sealed class BeforeEarlySelectionTests
         const double BaseDuration = .5;
         var tail = durationChanges ? Frame(2.25, .75) : Frame(2 + BaseDuration * OverBoundaryRatio);
         var backend = new GatedBackend(new[] { Frame(0), Frame(.5), Frame(1), Frame(1.5) }, tail);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.FrameReady += value => selected.TrySetResult(value);
@@ -199,7 +199,7 @@ public sealed class BeforeEarlySelectionTests
     private static async Task AssertEligibilityAsync(Y4mFrame[] frames, PreviewRequest request, bool eligible, Y4mFrame expected)
     {
         var backend = new GatedBackend(frames);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.FrameReady += value => selected.TrySetResult(value);

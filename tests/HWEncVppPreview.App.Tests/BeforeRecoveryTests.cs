@@ -20,7 +20,7 @@ public sealed class BeforeRecoveryTests
         using var services = new Services();
         var clock = TimeProvider.System;
         var backend = new ControlledBackend(moveWhileRunning);
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, null, null, EncodeTime, debounceOverride: TimeSpan.Zero)
+        await using var vm = new MainWindowViewModel(services, clock, backend, null, null, EncodeTime, debounceOverride: TimeSpan.Zero)
         { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         Task afterApplied = ObserveAfterApplied(vm);
@@ -62,7 +62,7 @@ public sealed class BeforeRecoveryTests
             }
             return await EncodeTime(frame, token);
         }
-        await using var vm = new MainWindowViewModel(services, TimeProvider.System, backend, backend, null, null, ConvertAsync,
+        await using var vm = new MainWindowViewModel(services, TimeProvider.System, backend, null, null, ConvertAsync,
             debounceOverride: TimeSpan.Zero)
         { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw", IsShowingBefore = true };
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
@@ -98,7 +98,7 @@ public sealed class BeforeRecoveryTests
         var clock = TimeProvider.System;
         var backend = new ControlledBackend(false, lateAfter: true);
         backend.Release.TrySetResult();
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, null, null, EncodeTime, debounceOverride: TimeSpan.Zero)
+        await using var vm = new MainWindowViewModel(services, clock, backend, null, null, EncodeTime, debounceOverride: TimeSpan.Zero)
         { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw", IsShowingBefore = true };
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
@@ -211,7 +211,7 @@ public sealed class BeforeRecoveryTests
     private static async Task<MainWindowViewModel> Start(Services services, TimeProvider clock, ControlledBackend backend,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter = null)
     {
-        var vm = new MainWindowViewModel(services, clock, backend, backend, null, null, converter ?? EncodeTime, debounceOverride: TimeSpan.Zero)
+        var vm = new MainWindowViewModel(services, clock, backend, null, null, converter ?? EncodeTime, debounceOverride: TimeSpan.Zero)
         { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         Task afterApplied = ObserveAfterApplied(vm);

@@ -14,7 +14,7 @@ public sealed class ColorInfoViewTests
     public async Task 表示画像の色とHDRの印を表示し言語と前後の切り替えに追従する()
     {
         string previous = UiLanguage.Preference;
-        await using var vm = new MainWindowViewModel(null, TimeProvider.System, new OneShotBackend(), null, null, null, null,
+        await using var vm = new MainWindowViewModel(null, TimeProvider.System, new ServerBackend(), null, null, null,
             debounceOverride: TimeSpan.Zero)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "fake.ts"
@@ -65,7 +65,7 @@ public sealed class ColorInfoViewTests
     [AvaloniaFact]
     public async Task SDRだけの表示では基準白の設定を出さない()
     {
-        await using var vm = new MainWindowViewModel(null, TimeProvider.System, new OneShotBackend(), null, null, null, null,
+        await using var vm = new MainWindowViewModel(null, TimeProvider.System, new ServerBackend(), null, null, null,
             debounceOverride: TimeSpan.Zero)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "fake.ts"

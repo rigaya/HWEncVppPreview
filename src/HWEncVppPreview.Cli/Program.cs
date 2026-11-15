@@ -95,13 +95,9 @@ public static class Program
         result.SeekSeconds = plan.SeekSeconds;
         result.Frames = plan.FrameCount;
         var recording = new Recording();
-        IPreviewBackend preferred = options.Mode == "oneshot"
-            ? new RecordingBackend(new OneShotBackend(), "oneshot", recording)
-            : new RecordingBackend(new ServerBackend(timeProvider: clock), "server", recording);
-        IPreviewBackend fallback = options.Mode == "auto"
-            ? new RecordingBackend(new OneShotBackend(), "oneshot", recording) : preferred;
-        await using var controller = new PreviewController(preferred, fallback, cache: new FrameCache(0),
-            timeProvider: clock, debounce: TimeSpan.Zero, watchdog: options.Watchdog, enableFallback: options.Mode == "auto");
+        IPreviewBackend backend = new RecordingBackend(new ServerBackend(timeProvider: clock), recording);
+        await using var controller = new PreviewController(backend, cache: new FrameCache(0),
+            timeProvider: clock, debounce: TimeSpan.Zero, watchdog: options.Watchdog);
         PreviewFrameResult? selected = null;
         PreviewCompletion? completion = null;
         PreviewFailure? failure = null;
@@ -131,7 +127,6 @@ public static class Program
             double seek = actualPlan.SeekSeconds ?? 0;
             result.PlannedSafeStartSeconds = seek > 0 ? seek + physical.WarmupSeconds : 0;
         }
-        result.Mode = recording.Mode;
         result.FrameCount = recording.Frames.Count;
         var header = recording.Header;
         if (header != null)
@@ -215,7 +210,6 @@ public static class Program
 
     private sealed class Recording
     {
-        public string? Mode { get; set; }
         public PreviewRequest? PhysicalRequest { get; set; }
         public Y4mHeader? Header { get; set; }
         public List<Y4mFrame> Frames { get; } = new();
@@ -223,13 +217,12 @@ public static class Program
     }
 
     /// <summary>バックエンドへ透過的に委譲し、Controllerが選んだ画像と区間全体を対応付ける。</summary>
-    private sealed class RecordingBackend(IPreviewBackend inner, string mode, Recording recording) : IPreviewBackend
+    private sealed class RecordingBackend(IPreviewBackend inner, Recording recording) : IPreviewBackend
     {
         public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
             => inner.GetHistoryRequirementAsync(request, cancellationToken);
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
         {
-            recording.Mode = mode;
             recording.PhysicalRequest = request;
             recording.Header = null;
             recording.Frames.Clear();
@@ -255,7 +248,6 @@ public static class Program
         public double PreMargin { get; private set; } = 2;
         public double PostMargin { get; private set; } = 0.5;
         public TimeSpan Watchdog { get; private set; } = TimeSpan.FromSeconds(30);
-        public string Mode { get; private set; } = "auto";
         public string[] VppArgs { get; private set; } = Array.Empty<string>();
         public string[] InputArgs { get; private set; } = Array.Empty<string>();
         public string? Dump { get; private set; }
@@ -287,7 +279,6 @@ public static class Program
                         try { options.Watchdog = TimeSpan.FromSeconds(seconds); }
                         catch (OverflowException exception) { throw new ArgumentException("watchdogの秒数が大きすぎます", exception); }
                         break;
-                    case "--mode": options.Mode = value; break;
                     case "--dump": options.Dump = value; break;
                     case "--dump-y4m": options.DumpY4m = value; break;
                     default: throw new ArgumentException($"不明な引数です: {option}");
@@ -295,7 +286,6 @@ public static class Program
             }
             if (string.IsNullOrWhiteSpace(options.Encoder) || string.IsNullOrWhiteSpace(options.Input) || !hasTime)
                 throw new ArgumentException("--enc、--input、--timeが必要です");
-            if (options.Mode is not ("auto" or "server" or "oneshot")) throw new ArgumentException("--modeはauto/server/oneshotのいずれかです");
             return options;
         }
 
@@ -325,7 +315,6 @@ public static class Program
     internal sealed class CliResult
     {
         public int Rc { get; set; }
-        public string? Mode { get; set; }
         public int? SelectedIndex { get; set; }
         public double? SelectedXts { get; set; }
         public bool TargetNotReached { get; set; }

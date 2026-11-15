@@ -72,7 +72,7 @@ public sealed class StreamNeighborReuseViewModelTests
         Assert.Null(vm.ErrorText);
     }
     private static MainWindowViewModel Create(Services services, FakeTimeProvider clock, SyntheticInputProbe input, ControlledBackend backend)
-        => new(services, clock, backend, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        => new(services, clock, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "c0b-neighbor.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
     private static async Task Start(MainWindowViewModel vm, FakeTimeProvider clock, ControlledBackend backend)
     {

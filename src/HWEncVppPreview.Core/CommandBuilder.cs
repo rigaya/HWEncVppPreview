@@ -95,13 +95,8 @@ public static class CommandBuilder
         return new PreviewPlan(seek, actualMb, frames);
     }
 
-    /// <summary>都度起動用の引数。出力関係 (-c raw --y4m-timestamp -o -) を含む。</summary>
-    public static string[] BuildOneShot(PreviewRequest req) => Build(req, includeOutput: true);
-
-    /// <summary>常駐サーバ用の引数。出力関係はサーバが付けるので含めない (含めるとサーバがエラーにする)。</summary>
-    public static string[] BuildServer(PreviewRequest req) => Build(req, includeOutput: false);
-
-    private static string[] Build(PreviewRequest req, bool includeOutput)
+    /// <summary>常駐サーバ用の引数。出力関係はサーバが付ける。</summary>
+    public static string[] BuildServer(PreviewRequest req)
     {
         var plan = Plan(req);
         var args = new List<string>();
@@ -118,10 +113,6 @@ public static class CommandBuilder
         {
             args.Add("--frames");
             args.Add(plan.FrameCount.ToString(CultureInfo.InvariantCulture));
-        }
-        if (includeOutput)
-        {
-            args.AddRange(new[] { "-c", "raw", "--y4m-timestamp", "-o", "-" });
         }
         args.AddRange(req.VppArgs);
         // --y4m-timestamp(2026-08)を前提にしているため、color(2025-05)も必ず使える。

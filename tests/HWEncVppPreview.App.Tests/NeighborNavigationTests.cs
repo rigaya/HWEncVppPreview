@@ -136,7 +136,7 @@ public sealed class NeighborNavigationTests(ITestOutputHelper output)
     }
 
     private static MainWindowViewModel Create(FakeTimeProvider clock, SyntheticInputProbe input, NeighborBackend backend, double target, long capacity = 1048576) =>
-        new(new Services(), clock, backend, backend, input.Probe, new FrameCache(capacity), null,
+        new(new Services(), clock, backend, input.Probe, new FrameCache(capacity), null,
             readTextOverride: SyntheticInputProbe.ReadTextAsync)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "vfr.ts", CurrentSeconds = target,

@@ -16,7 +16,7 @@ public sealed class SnapshotRetentionViewModelTests
         var cache = new FrameCache(scope);
         var backend = new OwnedInjectionViewModelTests.OwnedBackend();
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend, backend,
+        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend,
             null, cache, (frame, token) => Task.FromResult(Enumerable.Repeat((byte)42, frame.Header.Width * frame.Header.Height * 4).ToArray()),
             beforeEnabled: false, owned: dependencies)
         {

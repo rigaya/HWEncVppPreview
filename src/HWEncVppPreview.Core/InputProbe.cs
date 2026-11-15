@@ -64,7 +64,7 @@ public sealed class InputProbe : IAsyncDisposable
         _clock = timeProvider ?? TimeProvider.System;
         _timeout = timeout ?? TimeSpan.FromSeconds(30);
         if (_timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
-        _backend = new OneShotBackend(configureStartInfo, _clock, StopTimeout);
+        _backend = new ServerBackend(_clock, configureStartInfo: configureStartInfo, stopTimeout: StopTimeout);
         _configureStartInfo = configureStartInfo;
     }
 

@@ -252,7 +252,7 @@ internal static class Program
             }
             await Console.Error.WriteLineAsync($"RGYPREVIEW BEGIN id={request.Id}");
             await WriteLineAsync($"RGYPREVIEW BEGIN id={request.Id}");
-            int rc = await EncodeAsync(request.Args, cancellation.Token);
+            int rc = await EncodeAsync(request.Args, cancellation.Token, serverMode: true);
             await Console.Error.WriteLineAsync($"RGYPREVIEW END id={request.Id} rc={rc}");
             await WriteLineAsync($"RGYPREVIEW END id={request.Id} rc={rc}");
             lock (Sync)
@@ -301,7 +301,7 @@ internal static class Program
         await WriteLineAsync($"RGYPREVIEW PROBE id={request.Id} history={history} rc={rc}");
     }
 
-    private static async Task<int> EncodeAsync(string[] args, CancellationToken cancellationToken)
+    private static async Task<int> EncodeAsync(string[] args, CancellationToken cancellationToken, bool serverMode = false)
     {
         if (args.Contains("--y4m", StringComparer.Ordinal))
         {
@@ -492,7 +492,8 @@ internal static class Program
                 await Output.WriteAsync(data);
                 await Output.FlushAsync();
             }
-            if (durationAtExit)
+            // 終了時出力はプロセスの終了時だけで、常駐サーバの要求終了時には出さない。
+            if (durationAtExit && !serverMode)
             {
                 if (Value(args, "--fake-duration-exit-pipe") is string exitPipe)
                 {

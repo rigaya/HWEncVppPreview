@@ -6,10 +6,10 @@ public sealed partial class PreviewController
     internal event Action<OwnedPreviewEnvelope>? OwnedFrameReady;
     internal event Action<OwnedPreviewEnvelope>? OwnedCompleted;
     internal event Action<OwnedPreviewEnvelope>? OwnedSegmentUpdated;
-    internal PreviewController(RawOwnershipScope scope, IPreviewBackend? backend = null, IPreviewBackend? fallback = null,
-        FrameCache? cache = null, TimeProvider? timeProvider = null, TimeSpan? debounce = null, TimeSpan? watchdog = null, bool enableFallback = true,
-        IPreviewBackend? backgroundBackend = null, IPreviewBackend? backgroundFallback = null, TimeSpan? disposeGrace = null, TimeSpan? disposeTimeout = null)
-        : this(backend, fallback, cache ?? new FrameCache(scope), timeProvider, debounce, watchdog, enableFallback, backgroundBackend, backgroundFallback, disposeGrace, disposeTimeout)
+    internal PreviewController(RawOwnershipScope scope, IPreviewBackend? backend = null, FrameCache? cache = null,
+        TimeProvider? timeProvider = null, TimeSpan? debounce = null, TimeSpan? watchdog = null,
+        IPreviewBackend? backgroundBackend = null, TimeSpan? disposeGrace = null, TimeSpan? disposeTimeout = null)
+        : this(backend, cache ?? new FrameCache(scope), timeProvider, debounce, watchdog, backgroundBackend, disposeGrace, disposeTimeout)
     {
         _rawScope = scope;
         if (!ReferenceEquals(_cache.OwnershipScope, scope))

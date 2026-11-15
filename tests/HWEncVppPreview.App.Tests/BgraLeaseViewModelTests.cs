@@ -14,7 +14,7 @@ public sealed class BgraLeaseViewModelTests
         var scope = new RawOwnershipScope();
         var backend = new OwnedInjectionViewModelTests.OwnedBackend();
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action), pool);
-        return new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), null, backend, backend,
+        return new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), null, backend,
             null, new FrameCache(scope), null, owned: dependencies);
     }
     [AvaloniaFact]
@@ -89,7 +89,7 @@ public sealed class BgraLeaseViewModelTests
             foreach (var action in actions) Dispatcher.UIThread.Post(action);
         }
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, Post, pool);
-        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend, backend,
+        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend,
             null, new FrameCache(scope), null, beforeEnabled: false, owned: dependencies)
         {
             EncoderPath = OwnedInjectionViewModelTests.FakeEncoderPath(), InputPath = "a.ts", InputArgsText = "--avhw"

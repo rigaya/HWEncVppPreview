@@ -284,8 +284,7 @@ VPP Options:
         try
         {
             var clock = TimeProvider.System;
-            int starts = 0;
-            await using var vm = new MainWindowViewModel(services, clock, new OneShotBackend(_ => ++starts), null, null, null, null, debounceOverride: TimeSpan.Zero)
+            await using var vm = new MainWindowViewModel(services, clock, new ServerBackend(), null, null, null, debounceOverride: TimeSpan.Zero)
             { EncoderPath = FakeEncoderPath(), InputPath = "fake input.ts" };
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);

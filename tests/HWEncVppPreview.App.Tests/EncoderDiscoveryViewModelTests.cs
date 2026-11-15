@@ -98,7 +98,7 @@ public sealed class EncoderDiscoveryViewModelTests
     public async Task エンコーダの説明は対応する名前と版を示す(string output, string expected)
     {
         using var services = new Services();
-        await using var vm = new MainWindowViewModel(services, TimeProvider.System, null, null, null, null, null,
+        await using var vm = new MainWindowViewModel(services, TimeProvider.System, null, null, null, null,
             readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help" ? "" : output))
         { EncoderPath = "encoder" };
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);

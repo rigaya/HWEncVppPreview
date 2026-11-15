@@ -27,7 +27,7 @@ VPP Options:
         string previous = UiLanguage.Preference;
         MainWindow? window = null;
         var backend = new OwnedInjectionViewModelTests.OwnedBackend();
-        await using var vm = new MainWindowViewModel(null, TimeProvider.System, backend, backend, null, null, null,
+        await using var vm = new MainWindowViewModel(null, TimeProvider.System, backend, null, null, null,
             readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help" ? Help : "FakeEncoder"))
         { EncoderPath = "fake" };
         try

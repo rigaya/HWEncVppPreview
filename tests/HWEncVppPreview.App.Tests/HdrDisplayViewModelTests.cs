@@ -112,7 +112,7 @@ public sealed class HdrDisplayViewModelTests
     private static MainWindowViewModel Create(Services services, FramesBackend backend, TimeProvider clock,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter = null)
     {
-        var vm = new MainWindowViewModel(services, clock, backend, backend, null, null, converter)
+        var vm = new MainWindowViewModel(services, clock, backend, null, null, converter)
         { EncoderPath = FakeEncoderPath(), InputPath = "hdr.ts", InputArgsText = "--avhw --fake-duration 00:00:10.00" };
         vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
         return vm;

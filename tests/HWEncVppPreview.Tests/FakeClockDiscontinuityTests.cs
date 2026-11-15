@@ -9,11 +9,9 @@ public sealed class FakeClockDiscontinuityTests
     private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
     [Theory]
-    [InlineData(false, "--fake-clock-backstep-at")]
-    [InlineData(true, "--fake-clock-backstep-at")]
-    [InlineData(false, "--fake-clock-jump-at")]
-    [InlineData(true, "--fake-clock-jump-at")]
-    public async Task ClockFaultAffectsOnlyPassthroughAndRecoveryKeepsPixels(bool server, string fault)
+    [InlineData("--fake-clock-backstep-at")]
+    [InlineData("--fake-clock-jump-at")]
+    public async Task ClockFaultAffectsOnlyPassthroughAndRecoveryKeepsPixels(string fault)
     {
         string[] common = ["--frames", "6", "--seek", "0:00:01.000", "--fake-origin-seconds", "1000"];
         string[][] requests =
@@ -22,7 +20,7 @@ public sealed class FakeClockDiscontinuityTests
             [.. common, "--timestamp-passthrough", fault, "4"],
             [.. common, fault, "4"],
         ];
-        var runs = server ? await ReadServerAsync(requests) : await ReadOneShotsAsync(requests);
+        var runs = await ReadServerAsync(requests);
         Assert.All(runs, frames => Assert.Equal(6, frames.Count));
         for (int i = 0; i < 6; ++i)
         {
@@ -43,31 +41,11 @@ public sealed class FakeClockDiscontinuityTests
     [Fact]
     public async Task ExistingOriginFlagCanRepresentNearWrapWithoutClockFaults()
     {
-        var runs = await ReadOneShotsAsync(
+        var runs = await ReadServerAsync(
             [["--frames", "6", "--timestamp-passthrough", "--fake-origin-seconds", "95443.7"]]);
         Assert.Equal(95443.7, runs[0][0].Xts!.Value, 7);
         for (int i = 1; i < runs[0].Count; ++i)
             Assert.True(runs[0][i].Xts > runs[0][i - 1].Xts);
-    }
-
-    private static async Task<List<List<Y4mFrame>>> ReadOneShotsAsync(string[][] requests)
-    {
-        var result = new List<List<Y4mFrame>>();
-        foreach (string[] arguments in requests)
-        {
-            await using var child = Start(arguments);
-            var reading = Task.Run(() =>
-            {
-                var reader = new Y4mReader(child.Process.StandardOutput.BaseStream);
-                var frames = new List<Y4mFrame>();
-                while (reader.ReadFrame() is { } frame) frames.Add(frame);
-                return frames;
-            });
-            await Task.WhenAll(reading, child.Process.WaitForExitAsync()).WaitWithDiagnosticsAsync(SafetyTimeout);
-            Assert.Equal(0, child.Process.ExitCode);
-            result.Add(await reading);
-        }
-        return result;
     }
 
     private static async Task<List<List<Y4mFrame>>> ReadServerAsync(string[][] requests)

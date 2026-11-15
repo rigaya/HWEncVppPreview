@@ -9,9 +9,9 @@ public sealed class FakeStreamingTests
     private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
     [Fact]
-    public async Task MissingFrameLimitStreamsUntilInputEndInOneShotMode()
+    public async Task MissingFrameLimitStreamsUntilInputEndInServerMode()
     {
-        var run = await ReadOneShotAsync("--seek", "0:00:00.100", "--timestamp-passthrough",
+        var run = await ReadServerFramesAsync("--seek", "0:00:00.100", "--timestamp-passthrough",
             "--fake-origin-seconds", "1000", "--fake-input-end", "0.300");
         Assert.Equal(0, run.ExitCode);
         Assert.Equal(6, run.Frames.Count);
@@ -22,9 +22,9 @@ public sealed class FakeStreamingTests
     [Fact]
     public async Task PassthroughUsesTheSamePixelsAndClockAcrossSeeks()
     {
-        var first = await ReadOneShotAsync("--frames", "6", "--seek", "0:00:01.000",
+        var first = await ReadServerFramesAsync("--frames", "6", "--seek", "0:00:01.000",
             "--timestamp-passthrough", "--fake-origin-seconds", "250");
-        var next = await ReadOneShotAsync("--frames", "6", "--seek", "0:00:01.033333333",
+        var next = await ReadServerFramesAsync("--frames", "6", "--seek", "0:00:01.033333333",
             "--timestamp-passthrough", "--fake-origin-seconds", "250");
         Assert.Equal(0, first.ExitCode);
         Assert.Equal(0, next.ExitCode);
@@ -49,9 +49,9 @@ public sealed class FakeStreamingTests
             "--fake-origin-seconds", "1000", "--fake-no-xdur",
         };
         if (rate != null) arguments.AddRange(["--fake-output-rate", rate]);
-        var absolute = await ReadOneShotAsync(arguments.ToArray());
+        var absolute = await ReadServerFramesAsync(arguments.ToArray());
         arguments.Add("--fake-zero-origin");
-        var relative = await ReadOneShotAsync(arguments.ToArray());
+        var relative = await ReadServerFramesAsync(arguments.ToArray());
         Assert.Equal(0, absolute.ExitCode);
         Assert.Equal(0, relative.ExitCode);
         Assert.Equal(absolute.Frames.Count, relative.Frames.Count);
@@ -69,8 +69,8 @@ public sealed class FakeStreamingTests
     [Fact]
     public async Task RelativeLegacyRequestsKeepTheirOriginalPixelNumbering()
     {
-        var head = await ReadOneShotAsync("--frames", "3");
-        var later = await ReadOneShotAsync("--frames", "3", "--seek", "0:00:10.000");
+        var head = await ReadServerFramesAsync("--frames", "3");
+        var later = await ReadServerFramesAsync("--frames", "3", "--seek", "0:00:10.000");
         Assert.Equal(3, head.Frames.Count);
         Assert.Equal(3, later.Frames.Count);
         Assert.Equal(0, later.Frames[0].Xts);
@@ -150,19 +150,24 @@ public sealed class FakeStreamingTests
         await process.StandardInput.FlushAsync();
     }
 
-    private static async Task<(int ExitCode, IReadOnlyList<Y4mFrame> Frames)> ReadOneShotAsync(params string[] arguments)
+    private static async Task<(int ExitCode, IReadOnlyList<Y4mFrame> Frames)> ReadServerFramesAsync(params string[] arguments)
     {
-        await using var child = Start(arguments);
-        var read = Task.Run<IReadOnlyList<Y4mFrame>>(() =>
+        await using var child = Start("--preview-server");
+        var reader = new PreviewProtocolReader(child.Process.StandardOutput.BaseStream);
+        Assert.IsType<PreviewReady>(await NextAsync(reader));
+        await SendAsync(child.Process, new { cmd = "run", id = 1, args = arguments });
+        var frames = new List<Y4mFrame>();
+        int rc;
+        while (true)
         {
-            using var stream = new BufferedStream(child.Process.StandardOutput.BaseStream, 1 << 16);
-            var frames = new List<Y4mFrame>();
-            var reader = new Y4mReader(stream);
-            while (reader.ReadFrame() is { } frame) frames.Add(frame);
-            return frames;
-        });
-        await Task.WhenAll(read, child.Process.WaitForExitAsync()).WaitWithDiagnosticsAsync(SafetyTimeout);
-        return (child.Process.ExitCode, await read);
+            var item = await NextAsync(reader);
+            if (item is PreviewFrame frame) frames.Add(frame.Frame);
+            if (item is PreviewEnd end) { rc = end.Rc; break; }
+        }
+        await SendAsync(child.Process, new { cmd = "quit" });
+        await child.Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        Assert.Equal(0, child.Process.ExitCode);
+        return (rc, frames);
     }
 
     private static ChildProcess Start(params string[] arguments) => Start(arguments, false);

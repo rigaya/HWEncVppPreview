@@ -89,14 +89,12 @@ public sealed class OwnedProcessLifetimeViewModelTests
         Assert.Null(session.Vm.ErrorText);
     }
 
-    [AvaloniaTheory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task 実serverとoneshotの取消後は新しい入力を表示できる(bool oneShot)
+    [AvaloniaFact]
+    public async Task 実serverの取消後は新しい入力を表示できる()
     {
         string name = "owned-body-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        await using var session = OwnedProcessSession.Create(oneShot: oneShot, beforeEnabled: false);
+        await using var session = OwnedProcessSession.Create(beforeEnabled: false);
         await session.InitializeAsync();
         await session.WaitIdleAsync();
         session.Vm.InputArgsText = "--avhw --fake-body-pipe " + name;

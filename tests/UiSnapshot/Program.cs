@@ -31,7 +31,7 @@ static MainWindowViewModel CreateDesignSample(bool loadHelp = false)
 {
     var metadataBackend = new SnapshotMetadataBackend();
     var vm = loadHelp
-        ? new MainWindowViewModel(null, TimeProvider.System, metadataBackend, metadataBackend, new InputProbe(metadataBackend, TimeProvider.System), null, null,
+        ? new MainWindowViewModel(null, TimeProvider.System, metadataBackend, new InputProbe(metadataBackend, TimeProvider.System), null, null,
             readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help"
                 ? File.ReadAllText(HelpDataPath("qsvenc-h1.txt")) : "QSVEnc 8.35"))
         : new MainWindowViewModel();
@@ -51,7 +51,6 @@ static MainWindowViewModel CreateDesignSample(bool loadHelp = false)
     vm.DurationSeconds = 6750;
     vm.HasDuration = true;
     vm.DurationText = "1:52:30";
-    vm.BackendModeText = AppMessages.Server;
     vm.ElapsedText = AppMessages.Elapsed(0.48);
     vm.InputInfoText = "1440x1080 (SAR 4:3)  29.97fps";
     vm.StatusText = AppMessages.Done;

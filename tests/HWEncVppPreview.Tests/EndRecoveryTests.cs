@@ -17,7 +17,7 @@ public sealed class EndRecoveryTests
     public async Task NaturalEndUsesLastFrameDespiteLongerContainerDuration(bool continuous, bool background)
     {
         var backend = new EndBackend(10);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewFailure? failure = null;
         PreviewCompletion? completed = null;
         PreviewFrameResult? image = null;
@@ -44,7 +44,7 @@ public sealed class EndRecoveryTests
     public async Task EmptySeekBacktracksWithABoundedBudget(bool continuous, bool background)
     {
         var backend = new EndBackend(10);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewFailure? failure = null;
         PreviewFrameResult? image = null;
         controller.Failed += value => failure = value;
@@ -63,7 +63,7 @@ public sealed class EndRecoveryTests
     public async Task ExhaustedEmptyInputFailsWithoutLooping()
     {
         var backend = new EndBackend(0);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request(100));
@@ -76,7 +76,7 @@ public sealed class EndRecoveryTests
     public async Task FrameLimitNearUnderstatedDurationDoesNotBecomeAnInputEnd()
     {
         var backend = new EndBackend(20);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewCompletion? completion = null;
         PreviewFrameResult? image = null;
         controller.Completed += value => completion = value;
@@ -94,7 +94,7 @@ public sealed class EndRecoveryTests
     public async Task EndConfirmationStopsAsSoonAsTheTargetIsSafelyAvailable()
     {
         var backend = new EndBackend(2000, firstLimit: 3);
-        await using var controller = new PreviewController(backend, backend, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewFailure? failure = null;
         PreviewCompletion? completion = null;
         controller.Failed += value => failure = value;

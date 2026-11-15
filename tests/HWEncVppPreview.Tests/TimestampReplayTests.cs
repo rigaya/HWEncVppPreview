@@ -13,13 +13,11 @@ public sealed class TimestampReplayTests
     };
 
     [Theory]
-    [InlineData(false, false, "--fake-clock-backstep-at")]
-    [InlineData(false, true, "--fake-clock-jump-at")]
-    [InlineData(true, false, "--fake-clock-jump-at")]
-    [InlineData(true, true, "--fake-clock-backstep-at")]
-    public async Task ImmediateIdleWaitIncludesAutomaticLegacyReplay(bool resident, bool continuous, string fault)
+    [InlineData(false, "--fake-clock-jump-at")]
+    [InlineData(true, "--fake-clock-backstep-at")]
+    public async Task ImmediateIdleWaitIncludesAutomaticLegacyReplay(bool continuous, string fault)
     {
-        var backend = new RecordingBackend(resident ? new ServerBackend() : new OneShotBackend());
+        var backend = new RecordingBackend(new ServerBackend());
         await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         var images = new List<PreviewFrameResult>();
         var completions = new List<PreviewCompletion>();
@@ -110,7 +108,7 @@ public sealed class TimestampReplayTests
     [Fact]
     public async Task NearWrapOriginStartsWithPassOffAndKeepsNumericOrigin()
     {
-        var backend = new RecordingBackend(new OneShotBackend());
+        var backend = new RecordingBackend(new ServerBackend());
         await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewCompletion? complete = null;
         controller.Completed += value => complete = value;
@@ -221,7 +219,7 @@ public sealed class TimestampReplayTests
         controller.Submit(request);
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         var physical = backend.Requests[^1];
-        Assert.DoesNotContain("--timestamp-passthrough", CommandBuilder.BuildOneShot(physical));
+        Assert.DoesNotContain("--timestamp-passthrough", CommandBuilder.BuildServer(physical));
         Assert.Contains("--timestamp-passthrough", request.InputArgs);
         Assert.Contains("--timestamp-passthrough", request.VppArgs);
         Assert.NotNull(completed);

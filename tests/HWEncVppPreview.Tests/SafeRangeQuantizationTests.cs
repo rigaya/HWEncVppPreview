@@ -8,7 +8,7 @@ public sealed class SafeRangeQuantizationTests
     public async Task RoundedDecimateTailKeepsExactTargetSelectable()
     {
         var backend = new QuantizedBackend();
-        await using var controller = new PreviewController(backend, backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
         PreviewFrameResult? selected = null;
         PreviewCompletion? completed = null;
         PreviewFailure? failed = null;
@@ -131,7 +131,7 @@ public sealed class SafeRangeQuantizationTests
             new Y4mFrame(header, Math.Round(origin + 2 + index / fps, 6, MidpointRounding.AwayFromZero),
                 durations ? Math.Round(1 / fps, 6, MidpointRounding.AwayFromZero) : null, new byte[6])).ToArray();
         var backend = new QuantizedBackend(frames);
-        await using var controller = new PreviewController(backend, backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
         PreviewFrameResult? selected = null;
         PreviewFailure? failed = null;
         controller.FrameReady += value => selected = value;
@@ -153,7 +153,7 @@ public sealed class SafeRangeQuantizationTests
         var last = frames[^1];
         frames[^1] = new(last.Header, 5.45833, null, last.Data);
         var backend = new QuantizedBackend(frames);
-        await using var controller = new PreviewController(backend, backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
         PreviewFrameResult? selected = null;
         PreviewFailure? failed = null;
         controller.FrameReady += value => selected = value;
@@ -178,7 +178,7 @@ public sealed class SafeRangeQuantizationTests
         var frames = timestamps.Select((timestamp, index) => new Y4mFrame(header, timestamp,
             durations[index], Enumerable.Repeat((byte)index, 6).ToArray())).ToArray();
         var backend = new QuantizedBackend(frames);
-        await using var controller = new PreviewController(backend, backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(backend, cache: new FrameCache(0), debounce: TimeSpan.Zero);
         PreviewFrameResult? selected = null;
         controller.FrameReady += value => selected = value;
         controller.Submit(Request());

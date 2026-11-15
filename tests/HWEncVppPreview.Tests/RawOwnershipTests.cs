@@ -249,7 +249,7 @@ public sealed class RawOwnershipTests
         var scope = new RawOwnershipScope();
         var cache = new FrameCache(scope, 128);
         var backend = new OwnedBackend();
-        await using var controller = new PreviewController(scope, backend, backend, cache, debounce: TimeSpan.Zero, backgroundBackend: backend, backgroundFallback: backend);
+        await using var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero, backgroundBackend: backend);
         int publicEvents = 0;
         OwnedPreviewEnvelope? queued = null;
 #if !DEBUG
@@ -286,7 +286,7 @@ public sealed class RawOwnershipTests
         var scope = new RawOwnershipScope();
         var cache = new FrameCache(scope, 18);
         var backend = new OwnedBackend(burst: true);
-        await using var controller = new PreviewController(scope, backend, backend, cache, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
         RawFrameLease? selected = null;
         int completedCount = 0;
         PreviewFailure? failure = null;
@@ -327,7 +327,7 @@ public sealed class RawOwnershipTests
         var scope = new RawOwnershipScope();
         var cache = new FrameCache(scope, 128);
         var backend = new OwnedBackend(replayFirst: true);
-        await using var controller = new PreviewController(scope, backend, backend, cache, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
         OwnedPreviewEnvelope? held = null;
         PreviewFailure? failure = null;
         controller.OwnedCompleted += value => held = value.Retain("UiPost");
@@ -356,14 +356,12 @@ public sealed class RawOwnershipTests
         Assert.Equal(3, scope.Capture().FinalReleases);
     }
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task RealReaderBackendsRetainOnlyTheAcceptedSinkFrames(bool resident, bool failCallback)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RealReaderBackendsRetainOnlyTheAcceptedSinkFrames(bool failCallback)
     {
         var scope = new RawOwnershipScope();
-        await using IPreviewBackend backend = resident ? new ServerBackend() : new OneShotBackend();
+        await using IPreviewBackend backend = new ServerBackend();
         using var sink = new OwnedRecordingSink(failCallback);
         var request = Request with
         {
@@ -412,7 +410,7 @@ public sealed class RawOwnershipTests
         var scope = new RawOwnershipScope();
         var cache = new FrameCache(scope, 4096);
         var backend = new OwnedStreamingBackend();
-        await using var controller = new PreviewController(scope, backend, backend, cache, debounce: TimeSpan.Zero);
+        await using var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
         OwnedPreviewEnvelope? held = null;
         controller.OwnedFrameReady += value =>
         {

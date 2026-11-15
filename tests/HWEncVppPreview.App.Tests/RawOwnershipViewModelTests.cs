@@ -17,7 +17,7 @@ public sealed class RawOwnershipViewModelTests
         var cache = new FrameCache(scope);
         var backend = new HdrOwnedBackend();
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend, backend,
+        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend,
             null, cache, null, owned: dependencies)
         {
             EncoderPath = OwnedInjectionViewModelTests.FakeEncoderPath(), InputPath = "owned-hdr.ts", InputArgsText = "--avhw",

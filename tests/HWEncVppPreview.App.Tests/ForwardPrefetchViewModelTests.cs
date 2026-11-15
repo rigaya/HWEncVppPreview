@@ -16,7 +16,7 @@ public sealed class ForwardPrefetchViewModelTests
     {
         using var capability = new CapabilityScope(); using var services = new Services();
         var backend = new Backend();
-        await using var vm = new MainWindowViewModel(services, TimeProvider.System, backend, backend, null, null,
+        await using var vm = new MainWindowViewModel(services, TimeProvider.System, backend, null, null,
             (frame, token) => Task.FromResult(Enumerable.Repeat(frame.Data[0], frame.Header.Width * frame.Header.Height * 4).ToArray()),
             debounceOverride: TimeSpan.Zero)
         { EncoderPath = FakeEncoderPath(), InputPath = "c2-prefetch.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };

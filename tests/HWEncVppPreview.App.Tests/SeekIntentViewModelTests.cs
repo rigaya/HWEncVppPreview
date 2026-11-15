@@ -100,7 +100,7 @@ public sealed class SeekIntentViewModelTests
             Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", "1");
             _input = new SyntheticInputProbe(Clock);
         }
-        public MainWindowViewModel Create() => new(_services, Clock, Backend, Backend, _input.Probe, null, null,
+        public MainWindowViewModel Create() => new(_services, Clock, Backend, _input.Probe, null, null,
             readTextOverride: SyntheticInputProbe.ReadTextAsync)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "seek-intent.ts", CurrentSeconds = 100,

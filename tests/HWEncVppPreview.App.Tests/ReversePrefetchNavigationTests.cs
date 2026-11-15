@@ -161,7 +161,7 @@ public sealed class ReversePrefetchNavigationTests
                 _processAttempted = true;
                 throw new InvalidOperationException("この試験ではプロセスを起動しません。");
             });
-            Vm = new MainWindowViewModel(_services, Clock, Backend, Backend, probe, null, null,
+            Vm = new MainWindowViewModel(_services, Clock, Backend, probe, null, null,
                 beforeEnabled: false, readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help"
                     ? "  --timestamp-passthrough  入力時刻を保持する。\n  --opencl-task-threads <int>  待機スレッド数。\n" : "FakeEncoder"))
             { EncoderPath = "fake", InputPath = "reverse-prefetch.ts", CurrentSeconds = seconds,

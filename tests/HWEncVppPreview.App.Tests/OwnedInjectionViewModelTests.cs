@@ -17,7 +17,7 @@ public sealed class OwnedInjectionViewModelTests
         var cache = new FrameCache(scope);
         var backend = new OwnedBackend();
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        var vm = new MainWindowViewModel(new Services(), null, backend, backend, null, cache,
+        var vm = new MainWindowViewModel(new Services(), null, backend, null, cache,
             (frame, token) => Task.FromResult(Enumerable.Repeat((byte)42, frame.Header.Width * frame.Header.Height * 4).ToArray()),
             beforeEnabled: false, owned: dependencies)
         {
@@ -60,7 +60,7 @@ public sealed class OwnedInjectionViewModelTests
                 frame.Header.Width * frame.Header.Height * 4).ToArray();
         }
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        var vm = new MainWindowViewModel(new Services(), null, backend, backend, null, cache, ConvertAsync,
+        var vm = new MainWindowViewModel(new Services(), null, backend, null, cache, ConvertAsync,
             beforeEnabled: false, owned: dependencies)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "owned-injection.ts", InputArgsText = "--avhw"
@@ -94,7 +94,7 @@ public sealed class OwnedInjectionViewModelTests
         var cache = new FrameCache(scope, 64 * 36 * 3L / 2 * cacheFrames);
         var backend = new TraceBackend();
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        var vm = new MainWindowViewModel(new Services(), TimeProvider.System, backend, backend, null, cache,
+        var vm = new MainWindowViewModel(new Services(), TimeProvider.System, backend, null, cache,
             (frame, token) => Task.FromResult(Enumerable.Repeat(frame.RawPixels[0], frame.Header.Width * frame.Header.Height * 4).ToArray()),
             beforeEnabled: false, owned: dependencies)
         {
@@ -186,7 +186,7 @@ public sealed class OwnedInjectionViewModelTests
         var scope = new RawOwnershipScope();
         var backend = new OwnedBackend();
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        Assert.Throws<ArgumentException>(() => new MainWindowViewModel(new Services(), null, backend, backend, null,
+        Assert.Throws<ArgumentException>(() => new MainWindowViewModel(new Services(), null, backend, null,
             new FrameCache(new RawOwnershipScope()), null, owned: dependencies));
     }
 
@@ -196,7 +196,7 @@ public sealed class OwnedInjectionViewModelTests
         var scope = new RawOwnershipScope();
         var backend = new LegacyBackend();
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        Assert.Throws<ArgumentException>(() => new MainWindowViewModel(new Services(), null, backend, backend, null,
+        Assert.Throws<ArgumentException>(() => new MainWindowViewModel(new Services(), null, backend, null,
             new FrameCache(scope), null, owned: dependencies));
     }
 

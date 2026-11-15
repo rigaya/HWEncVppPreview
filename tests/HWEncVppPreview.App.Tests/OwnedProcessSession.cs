@@ -28,10 +28,10 @@ internal sealed class OwnedProcessSession : IAsyncDisposable
     private string CommandPath => Path.Combine(DirectoryPath, "commands.jsonl");
 
     internal static OwnedProcessSession Create(string inputArgs = "--avhw", string? filterText = null,
-        double target = 10, bool oneShot = false, bool beforeEnabled = true, string? durationPipe = null)
-        => new(inputArgs, filterText, target, oneShot, beforeEnabled, durationPipe);
+        double target = 10, bool beforeEnabled = true, string? durationPipe = null)
+        => new(inputArgs, filterText, target, beforeEnabled, durationPipe);
 
-    private OwnedProcessSession(string inputArgs, string? filterText, double target, bool oneShot, bool beforeEnabled, string? durationPipe)
+    private OwnedProcessSession(string inputArgs, string? filterText, double target, bool beforeEnabled, string? durationPipe)
     {
         Directory.CreateDirectory(DirectoryPath);
         SetEnvironment("FAKE_ENCODER_PREVIEW_CAPABILITIES", "1");
@@ -42,10 +42,8 @@ internal sealed class OwnedProcessSession : IAsyncDisposable
         SetEnvironment("FAKE_ENCODER_PID_FILE", PidPath);
         SetEnvironment("FAKE_ENCODER_COMMAND_LOG_FILE", CommandPath);
         Cache = new FrameCache(Scope);
-        IPreviewBackend first = oneShot ? new OneShotBackend() : new ServerBackend();
-        IPreviewBackend fallback = oneShot ? first : new OneShotBackend();
-        IPreviewBackend? beforeFirst = beforeEnabled ? (oneShot ? new OneShotBackend() : new ServerBackend()) : null;
-        IPreviewBackend? beforeFallback = beforeEnabled ? (oneShot ? beforeFirst : new OneShotBackend()) : null;
+        IPreviewBackend first = new ServerBackend();
+        IPreviewBackend? beforeFirst = beforeEnabled ? new ServerBackend() : null;
         var owned = new MainWindowViewModel.OwnedPreviewDependencies(Scope, Post);
         InputProbe? probe = durationPipe == null ? null : new InputProbe(configureStartInfo: info =>
         {
@@ -57,7 +55,7 @@ internal sealed class OwnedProcessSession : IAsyncDisposable
             }
         });
         Vm = new MainWindowViewModel(new Services(Path.Combine(DirectoryPath, "settings.json")), TimeProvider.System,
-            first, fallback, probe, Cache, null, backgroundPreferred: beforeFirst, backgroundFallback: beforeFallback,
+            first, probe, Cache, null, backgroundBackend: beforeFirst,
             beforeEnabled: beforeEnabled, owned: owned, debounceOverride: TimeSpan.Zero)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "owned-process.ts", InputArgsText = inputArgs,
@@ -134,14 +132,14 @@ internal sealed class OwnedProcessSession : IAsyncDisposable
         return bytes;
     }
 
-    // プロセス終了後のrun引数だけを取得し、probeやcancelは数えない。
+    // 入力検査のrunも常駐経由になるため、表示用runだけを数える。
     internal string[][] CompletedRuns() => FakeLogFiles.ReadAllLines(CommandPath).Select(line =>
     {
         using var json = System.Text.Json.JsonDocument.Parse(line);
         return json.RootElement.Clone();
     }).Where(root => root.GetProperty("cmd").GetString() == "run")
         .Select(root => root.GetProperty("args").EnumerateArray().Select(item => item.GetString()!).ToArray())
-        .Where(args => args.Contains(Vm.InputPath)).ToArray();
+        .Where(args => args.Contains(Vm.InputPath) && !args.Contains("input=debug")).ToArray();
 
     internal static string FakeEncoderPath()
     {

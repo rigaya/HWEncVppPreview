@@ -38,7 +38,7 @@ public sealed class SafeBoundaryViewModelTests
                 lowerBoundary ? 5 + error : 4, lowerBoundary ? 6 : 5 - error);
         }
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend, backend,
+        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend,
             null, cache, (frame, token) => Task.FromResult(Enumerable.Repeat(frame.RawPixels[0],
                 frame.Header.Width * frame.Header.Height * 4).ToArray()), owned: dependencies)
         {

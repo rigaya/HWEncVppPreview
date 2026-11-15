@@ -20,9 +20,9 @@ public sealed class ActiveStreamOverlapViewModelTests
         var scope = new RawOwnershipScope();
         var cache = new FrameCache(scope);
         var owned = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        var vm = new MainWindowViewModel(null, clock, foreground, foreground, input.Probe, cache,
+        var vm = new MainWindowViewModel(null, clock, foreground, input.Probe, cache,
             (frame, _) => Task.FromResult(Enumerable.Repeat(frame.RawPixels[0], frame.Header.Width * frame.Header.Height * 4).ToArray()),
-            backgroundPreferred: background, backgroundFallback: background, owned: owned, debounceOverride: TimeSpan.Zero,
+            backgroundBackend: background, owned: owned, debounceOverride: TimeSpan.Zero,
             readTextOverride: (_, arg, _) => Task.FromResult(arg == "--help" ? "  --timestamp-passthrough input timestamps\n" : "FakeEncoder"))
         { EncoderPath = "fake", InputPath = "fake.ts", CurrentSeconds = 10 };
         byte resultPixel = 0;

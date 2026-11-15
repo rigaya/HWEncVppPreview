@@ -21,7 +21,7 @@ public sealed class InputDebounceTests
             throw new InvalidOperationException("この試験ではプロセスを起動しません。");
         });
         await using var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), clock,
-            backend, backend, probe, null, null, beforeEnabled: false,
+            backend, probe, null, null, beforeEnabled: false,
             readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help" ? "" : "FakeEncoder"))
         {
             EncoderPath = "fake", InputPath = "initial.ts", InputArgsText = "", CurrentSeconds = 0,

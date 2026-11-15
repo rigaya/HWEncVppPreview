@@ -115,7 +115,7 @@ public sealed class CliHelpCheckTests
         yield return new object[] { new[] { "--check-help", "--help-file", "" } };
         yield return new object[] { new[] { "--check-help", "--check-help", "--help-file", "b" } };
         yield return new object[] { new[] { "--check-help", "--help-file", "a", "--help-file", "b" } };
-        yield return new object[] { new[] { "--check-help", "--help-file", "a", "--mode", "oneshot" } };
+        yield return new object[] { new[] { "--check-help", "--help-file", "a", "--mode", "server" } };
         foreach (string value in new[] { "0", "-1", "NaN", "Infinity", "1e100" })
             yield return new object[] { new[] { "--check-help", "--help-file", "a", "--watchdog-seconds", value } };
     }

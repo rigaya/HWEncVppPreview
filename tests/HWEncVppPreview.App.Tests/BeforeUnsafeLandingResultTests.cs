@@ -19,9 +19,9 @@ public sealed class BeforeUnsafeLandingResultTests
         var after = new ControlledBackend(afterLate);
         var before = new ControlledBackend(true);
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, after, after,
+        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, after,
             null, cache, (frame, token) => Task.FromResult(Enumerable.Repeat(frame.RawPixels[0],
-                frame.Header.Width * frame.Header.Height * 4).ToArray()), before, before, owned: dependencies)
+                frame.Header.Width * frame.Header.Height * 4).ToArray()), before, owned: dependencies)
         {
             EncoderPath = OwnedInjectionViewModelTests.FakeEncoderPath(), InputPath = "before-result.ts",
             InputArgsText = "--avhw", CurrentSeconds = .1, CompareMode = PreviewCompareMode.SideBySide,

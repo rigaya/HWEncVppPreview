@@ -206,8 +206,8 @@ public sealed class DurationTests
         using var files = new TestFiles();
         var clock = TimeProvider.System;
         var probe = HeldDurationProbe(files, clock);
-        var backend = new OneShotBackend();
-        await using var vm = new MainWindowViewModel(files, clock, backend, backend, probe, null, null, beforeEnabled: false)
+        var backend = new ServerBackend();
+        await using var vm = new MainWindowViewModel(files, clock, backend, probe, null, null, beforeEnabled: false)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "no-before.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit"
@@ -233,9 +233,9 @@ public sealed class DurationTests
         using var files = new TestFiles();
         var clock = TimeProvider.System;
         var probe = HeldDurationProbe(files, clock);
-        var after = new OneShotBackend();
+        var after = new ServerBackend();
         var before = new MissingBeforeBackend(beforeExitCode);
-        await using var vm = new MainWindowViewModel(files, clock, after, after, probe, null, null, before, before)
+        await using var vm = new MainWindowViewModel(files, clock, after, probe, null, null, before)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "missing-before.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit"
@@ -272,7 +272,7 @@ public sealed class DurationTests
                 await secondBefore.Task.WaitAsync(token);
             return YuvToBgra.Convert(frame);
         }
-        await using var vm = new MainWindowViewModel(files, clock, after, after, probe, null, ConvertAsync, before, before)
+        await using var vm = new MainWindowViewModel(files, clock, after, probe, null, ConvertAsync, before)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "cross-generation.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit"
@@ -363,8 +363,8 @@ public sealed class DurationTests
 
     private static MainWindowViewModel Create(TestFiles files, TimeProvider clock, InputProbe probe)
     {
-        var backend = new OneShotBackend();
-        return new(files, clock, preferred: backend, fallback: backend, probe: probe)
+        var backend = new ServerBackend();
+        return new(files, clock, backend: backend, probe: probe)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "old.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit",

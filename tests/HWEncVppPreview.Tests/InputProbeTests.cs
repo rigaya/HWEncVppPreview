@@ -14,8 +14,9 @@ public sealed class InputProbeTests
     [Fact]
     public async Task ReadsInputFormatWithFrameLimitAndCachesByArgumentValues()
     {
-        var commands = new List<string[]>();
-        await using var probe = new InputProbe(configureStartInfo: info => commands.Add(info.ArgumentList.ToArray()));
+        var backend = new RecordingProbeBackend();
+        var commands = backend.Commands;
+        await using var probe = new InputProbe(backend, TimeProvider.System);
         InputInfo first = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", new[] { "--avhw" }).WaitWithDiagnosticsAsync(SafetyTimeout);
         InputInfo cached = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", new List<string> { "--avhw" }).WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Same(first, cached);
@@ -30,25 +31,25 @@ public sealed class InputProbeTests
         Assert.Equal(8, first.BitDepth);
         Assert.Equal("420jpeg", first.ColorSpaceTag);
         var command = Assert.Single(commands);
-        Assert.Equal(new[] { "--avhw", "--log-level", "input=debug", "-i", "input.ts", "--frames", "300", "-c", "raw", "--y4m-timestamp", "-o", "-", "--log-opt", "color=false" }, command);
+        Assert.Equal(new[] { "--avhw", "--log-level", "input=debug", "-i", "input.ts", "--frames", "300", "--log-opt", "color=false" }, command);
     }
 
     [Fact]
     public async Task CacheKeyIncludesEncoderInputAndAdditionalArgumentsAndCopiesLists()
     {
-        int starts = 0;
-        await using var probe = new InputProbe(configureStartInfo: _ => ++starts);
+        var backend = new RecordingProbeBackend();
+        await using var probe = new InputProbe(backend, TimeProvider.System);
         string encoder = BackendTests.FakeEncoderPath();
         var arguments = new List<string> { "--avhw" };
         await probe.ProbeAsync(encoder, "first.ts", arguments).WaitWithDiagnosticsAsync(SafetyTimeout);
         arguments[0] = "--avsw";
         await probe.ProbeAsync(encoder, "first.ts", new[] { "--avhw" }).WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.Equal(1, starts);
+        Assert.Single(backend.Commands);
         await probe.ProbeAsync(encoder, "first.ts", arguments).WaitWithDiagnosticsAsync(SafetyTimeout);
         await probe.ProbeAsync(encoder, "other.ts", arguments).WaitWithDiagnosticsAsync(SafetyTimeout);
         string alternate = Path.GetDirectoryName(encoder) + Path.DirectorySeparatorChar + "." + Path.DirectorySeparatorChar + Path.GetFileName(encoder);
         await probe.ProbeAsync(alternate, "other.ts", arguments).WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.Equal(4, starts);
+        Assert.Equal(4, backend.Commands.Count);
     }
 
     [Fact]
@@ -65,22 +66,16 @@ public sealed class InputProbeTests
     [Fact]
     public async Task EncoderErrorContainsExitCodeAndDiagnosticsAndIsNotCached()
     {
-        int starts = 0;
-        await using var probe = new InputProbe(configureStartInfo: info =>
-        {
-            ++starts;
-            // フレームを出す前の失敗を再現する。最初のフレーム取得後は自己中断が成功扱いになるため。
-            int index = info.ArgumentList.IndexOf("--frames");
-            info.ArgumentList[index + 1] = "0";
-        });
+        var backend = new RecordingProbeBackend();
+        await using var probe = new InputProbe(backend, TimeProvider.System);
         for (int i = 0; i < 2; ++i)
         {
             var error = await Assert.ThrowsAsync<InputProbeException>(() =>
-                probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-rc", "23" }).WaitWithDiagnosticsAsync(SafetyTimeout));
+                probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-rc", "23", "--fake-input-end", "0" }).WaitWithDiagnosticsAsync(SafetyTimeout));
             Assert.Equal(23, error.ExitCode);
             Assert.Contains("FAKE requested rc=23", error.StandardError);
         }
-        Assert.Equal(2, starts);
+        Assert.Equal(2, backend.Commands.Count);
     }
 
     [Fact]
@@ -94,6 +89,7 @@ public sealed class InputProbeTests
         int pid = await ReadPidFromPipeAsync(pipe, pipeName, operation);
         InputInfo input = await operation.WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(30, input.Fps);
+        await probe.DisposeAsync();
         AssertStopped(pid);
     }
 
@@ -109,20 +105,15 @@ public sealed class InputProbeTests
     [Fact]
     public async Task NoFrameCannotPopulateTheCacheEvenWithSuccessfulExit()
     {
-        int starts = 0;
-        await using var probe = new InputProbe(configureStartInfo: info =>
-        {
-            ++starts;
-            int index = info.ArgumentList.IndexOf("--frames");
-            info.ArgumentList[index + 1] = "0";
-        });
+        var backend = new RecordingProbeBackend();
+        await using var probe = new InputProbe(backend, TimeProvider.System);
         for (int i = 0; i < 2; ++i)
         {
             var error = await Assert.ThrowsAsync<InputProbeException>(() =>
-                probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts").WaitWithDiagnosticsAsync(SafetyTimeout));
+                probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", ["--fake-input-end", "0"]).WaitWithDiagnosticsAsync(SafetyTimeout));
             Assert.Equal(-1, error.ExitCode);
         }
-        Assert.Equal(2, starts);
+        Assert.Equal(2, backend.Commands.Count);
     }
 
     [Fact]

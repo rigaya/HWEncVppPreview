@@ -88,7 +88,7 @@ public sealed class ComparisonTests
 
         await afterApplied.WaitWithDiagnosticsAsync(SafetyTimeout);
         string afterImage = ImageHash(vm.PreviewImage!);
-        string status = vm.StatusText, log = vm.LogText, elapsed = vm.ElapsedText, mode = vm.BackendModeText;
+        string status = vm.StatusText, log = vm.LogText, elapsed = vm.ElapsedText;
         Assert.Contains("AFTER", log);
         clock.Advance(TimeSpan.FromSeconds(1));
         before.Release.TrySetResult();
@@ -99,7 +99,6 @@ public sealed class ComparisonTests
         Assert.Equal(status, vm.StatusText);
         Assert.Equal(log, vm.LogText);
         Assert.Equal(elapsed, vm.ElapsedText);
-        Assert.Equal(mode, vm.BackendModeText);
         Assert.False(vm.IsBusy);
         Assert.False(vm.IsBeforeBusy);
         Assert.Null(vm.ErrorText);
@@ -473,7 +472,7 @@ public sealed class ComparisonTests
     }
 
     private static MainWindowViewModel Create(TestServices services, FakeTimeProvider clock, RecordingBackend backend) =>
-        new(services, clock, backend, backend, new InputProbe(new ProbeBackend(), clock, _ => { services.ProcessAttempted = true; throw new InvalidOperationException("実プロセスは使用しません。"); }), null, null,
+        new(services, clock, backend, new InputProbe(new ProbeBackend(), clock, _ => { services.ProcessAttempted = true; throw new InvalidOperationException("実プロセスは使用しません。"); }), null, null,
             readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help" ? "  --vpp-nlmeans [params]\n" : "FakeEncoder"))
         {
             EncoderPath = FakeEncoderPath(), InputPath = "fake input.ts", CurrentSeconds = 0.3,

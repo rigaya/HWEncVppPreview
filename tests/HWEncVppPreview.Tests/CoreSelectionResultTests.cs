@@ -20,7 +20,7 @@ public sealed class CoreSelectionResultTests
         cache.StoreSegment(request, producers.Select(item => item.Frame).ToArray(), new(1000, 0, true), 0, 4);
         foreach (var producer in producers) producer.Dispose();
         var backend = new UnusedBackend();
-        var controller = new PreviewController(scope, backend, backend, cache, debounce: TimeSpan.Zero);
+        var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
         byte[]? image = null;
         controller.OwnedFrameReady += envelope =>
         {
@@ -42,7 +42,7 @@ public sealed class CoreSelectionResultTests
         var scope = new RawOwnershipScope();
         var cache = new FrameCache(scope, 4096);
         var backend = new StreamBackend();
-        var controller = new PreviewController(scope, backend, backend, cache, debounce: TimeSpan.Zero);
+        var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.OwnedFrameReady += envelope =>
         {
@@ -67,7 +67,7 @@ public sealed class CoreSelectionResultTests
         var scope = new RawOwnershipScope();
         var cache = new FrameCache(scope, 4096);
         var backend = new StreamBackend(failAfterEviction: true);
-        var controller = new PreviewController(scope, backend, backend, cache, debounce: TimeSpan.Zero);
+        var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
         var failed = new TaskCompletionSource<PreviewFailure>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.OwnedFrameReady += _ => cache.Clear();
         controller.Failed += failure => failed.TrySetResult(failure);
@@ -89,7 +89,7 @@ public sealed class CoreSelectionResultTests
         var scope = new RawOwnershipScope();
         var cache = new FrameCache(scope, 4096);
         var backend = new RestartBackend();
-        var controller = new PreviewController(scope, backend, backend, cache, debounce: TimeSpan.Zero);
+        var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
         var latest = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.OwnedFrameReady += envelope =>
         {

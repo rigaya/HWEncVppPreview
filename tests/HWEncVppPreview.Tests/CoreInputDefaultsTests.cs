@@ -9,15 +9,16 @@ public sealed class CoreInputDefaultsTests
     {
         var request = new PreviewRequest { InputFile = "input.avs", Fps = 30 };
         Assert.Empty(request.InputArgs);
-        Assert.DoesNotContain("--avhw", CommandBuilder.BuildOneShot(request));
         Assert.DoesNotContain("--avhw", CommandBuilder.BuildServer(request));
     }
 
     [Fact]
     public async Task 画像と長さの検査はnullと空の入力引数で同じキャッシュを使う()
     {
-        var commands = new List<string[]>();
-        await using var probe = new InputProbe(configureStartInfo: start => commands.Add(start.ArgumentList.ToArray()));
+        var backend = new RecordingProbeBackend();
+        var starts = new List<string[]>();
+        await using var probe = new InputProbe(backend, TimeProvider.System, start => starts.Add(start.ArgumentList.ToArray()));
+        var commands = backend.Commands;
         var capabilities = new PreviewCapabilities(VpyAssumeScriptDir: true);
         string encoder = BackendTests.FakeEncoderPath();
         var image = await probe.ProbeAsync(encoder, "image.vpy", capabilities: capabilities)
@@ -29,8 +30,9 @@ public sealed class CoreInputDefaultsTests
             .WaitWithDiagnosticsAsync(TestTimeouts.Hang));
         Assert.Null(await probe.ProbeDurationAsync(encoder, "duration.vpy", Array.Empty<string>(), capabilities: capabilities)
             .WaitWithDiagnosticsAsync(TestTimeouts.Hang));
-        Assert.Equal(2, commands.Count);
-        Assert.All(commands, args =>
+        Assert.Single(commands);
+        Assert.Single(starts);
+        Assert.All(commands.Concat(starts), args =>
         {
             Assert.DoesNotContain("--avhw", args);
             Assert.Contains("--vpy-assume-script-dir", args);

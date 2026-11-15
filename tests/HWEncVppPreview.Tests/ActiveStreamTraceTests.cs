@@ -10,8 +10,8 @@ public sealed class ActiveStreamTraceTests
         var stream = new SparseStream();
         var finite = new FiniteWindow();
         var cache = new FrameCache();
-        var controller = new PreviewController(stream, stream, cache, debounce: TimeSpan.Zero,
-            backgroundBackend: finite, backgroundFallback: finite);
+        var controller = new PreviewController(stream, cache, debounce: TimeSpan.Zero,
+            backgroundBackend: finite);
         var backgroundDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var latest = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.Completed += result => { if (result.Request.CorrelationId == 2) backgroundDone.TrySetResult(); };

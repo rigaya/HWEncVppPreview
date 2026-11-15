@@ -117,18 +117,11 @@ public sealed class NavigationTests
         using var pipe = new System.IO.Pipes.NamedPipeServerStream(pipeName, System.IO.Pipes.PipeDirection.InOut,
             1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
         await using var backend = new ControlledBackend();
-        await using var probe = new InputProbe(TimeProvider.System, configureStartInfo: start =>
-        {
-            // 入力検査を停止し、移動要求を受け付けてから失敗を返す。
-            int frames = start.ArgumentList.IndexOf("--frames");
-            start.ArgumentList[frames + 1] = "0";
-            start.ArgumentList.Add("--fake-rc"); start.ArgumentList.Add("23");
-            start.ArgumentList.Add("--fake-duration-at-exit");
-            start.ArgumentList.Add("--fake-duration-exit-pipe"); start.ArgumentList.Add(pipeName);
-        });
-        await using var vm = new MainWindowViewModel(new Services(), TimeProvider.System, backend, backend,
+        await using var probe = new InputProbe(TimeProvider.System);
+        await using var vm = new MainWindowViewModel(new Services(), TimeProvider.System, backend,
             probe, new FrameCache(0), ControlledConverter.ConvertNow)
-        { EncoderPath = FakeEncoderPath(), InputPath = "navigation probe input.ts" };
+        { EncoderPath = FakeEncoderPath(), InputPath = "navigation probe input.ts",
+            InputArgsText = "--frames 0 --fake-rc 23 --fake-frame-pipe " + pipeName };
         Task initialize = vm.InitializeAsync(false);
         await PipeWaitDiagnostics.ConnectAsync(pipe, pipeName, Safety, () => PipeWaitDiagnostics.State(vm), initialize);
         using var reader = new StreamReader(pipe, System.Text.Encoding.UTF8, leaveOpen: true);
@@ -153,16 +146,10 @@ public sealed class NavigationTests
         using var pipe = new System.IO.Pipes.NamedPipeServerStream(pipeName, System.IO.Pipes.PipeDirection.InOut,
             1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
         await using var backend = new ControlledBackend();
-        await using var probe = new InputProbe(TimeProvider.System, configureStartInfo: start =>
-        {
-            int frames = start.ArgumentList.IndexOf("--frames");
-            start.ArgumentList[frames + 1] = "0";
-            start.ArgumentList.Add("--fake-rc");
-            start.ArgumentList.Add("23");
-        });
-        await using var vm = new MainWindowViewModel(new Services(), TimeProvider.System, backend, backend,
+        await using var probe = new InputProbe(TimeProvider.System);
+        await using var vm = new MainWindowViewModel(new Services(), TimeProvider.System, backend,
             probe, new FrameCache(0), ControlledConverter.ConvertNow)
-        { EncoderPath = FakeEncoderPath(), InputPath = "navigation failed probe.ts" };
+        { EncoderPath = FakeEncoderPath(), InputPath = "navigation failed probe.ts", InputArgsText = "--frames 0 --fake-rc 23" };
         Task initialize = vm.InitializeAsync(false);
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             PipeWaitDiagnostics.ConnectAsync(pipe, pipeName, Safety, () => PipeWaitDiagnostics.State(vm), initialize));
@@ -208,7 +195,7 @@ public sealed class NavigationTests
 
         private Fixture(bool beforeEnabled)
         {
-            Vm = new MainWindowViewModel(new Services(), TimeProvider.System, Backend, Backend,
+            Vm = new MainWindowViewModel(new Services(), TimeProvider.System, Backend,
                 _input.Probe, new FrameCache(0), Converter.ConvertAsync, beforeEnabled: beforeEnabled,
                 debounceOverride: TimeSpan.Zero, readTextOverride: SyntheticInputProbe.ReadTextAsync)
             { EncoderPath = "fake", InputPath = "navigation input.ts", InputArgsText = "--fake-duration 00:00:10.00" };

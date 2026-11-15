@@ -54,8 +54,8 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
 
     private static MainWindowViewModel Create(Services services, TimeProvider clock, Action started)
     {
-        var backend = new OneShotBackend(_ => started());
-        var vm = new MainWindowViewModel(services, clock, backend, backend, null, null, null, debounceOverride: TimeSpan.Zero)
+        var backend = new CountingBackend(started);
+        var vm = new MainWindowViewModel(services, clock, backend, null, null, null, debounceOverride: TimeSpan.Zero)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "frame rate input.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00",
@@ -63,6 +63,22 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
         // 入力検査は30fpsのまま、フィルタ後のヘッダだけを60fpsにする。
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--fake-output-rate double --fake-no-xdur" });
         return vm;
+    }
+
+    private sealed class CountingBackend(Action started) : IPreviewBackend
+    {
+        private readonly ServerBackend _inner = new();
+        public Task InitializeEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
+            => _inner.InitializeEncoderAsync(encoderPath, cancellationToken);
+        public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
+            => _inner.GetHistoryRequirementAsync(request, cancellationToken);
+        public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
+        {
+            started();
+            return _inner.RunAsync(request, sink, cancellationToken);
+        }
+        public ValueTask AbortAsync() => _inner.AbortAsync();
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 
     private static async Task InitializeAsync(MainWindowViewModel vm, TimeProvider clock)

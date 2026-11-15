@@ -18,7 +18,7 @@ public sealed class StreamMetadataReadTests
         var scope = new RawOwnershipScope();
         var cache = new FrameCache(scope, 96);
         var backend = new Backend(false);
-        var controller = new PreviewController(scope, backend, backend, cache, debounce: TimeSpan.Zero);
+        var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
         controller.Submit(Request);
         await backend.Paused.Task.WaitWithDiagnosticsAsync(Safety);
         await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
@@ -35,7 +35,7 @@ public sealed class StreamMetadataReadTests
         var cache = new FrameCache(scope, 4096);
         var backend = new Backend(true);
         var failed = new TaskCompletionSource<PreviewFailure>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var controller = new PreviewController(scope, backend, backend, cache, debounce: TimeSpan.Zero);
+        var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
         controller.Failed += value => failed.TrySetResult(value);
         controller.Submit(Request);
         var failure = await failed.Task.WaitWithDiagnosticsAsync(Safety);

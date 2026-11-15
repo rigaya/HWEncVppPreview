@@ -18,7 +18,7 @@ public sealed class StreamingNavigationTests
         using var services = new Services();
         var clock = TimeProvider.System;
         var backend = new GapNavigationBackend();
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, null, null,
+        await using var vm = new MainWindowViewModel(services, clock, backend, null, null,
             (frame, token) => Task.FromResult(Enumerable.Repeat(frame.Data[0], frame.Header.Width * frame.Header.Height * 4).ToArray()))
         { EncoderPath = FakeEncoderPath(), InputPath = "gap-navigation.ts", CurrentSeconds = 103, InputArgsText = "--avhw" };
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
@@ -60,7 +60,7 @@ public sealed class StreamingNavigationTests
         var background = new ConcurrentQueue<PreviewRequest>();
         var first = new RecordingBackend(foreground);
         var second = new RecordingBackend(background);
-        await using var vm = new MainWindowViewModel(services, clock, first, first, input.Probe, null, null, second, second, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        await using var vm = new MainWindowViewModel(services, clock, first, input.Probe, null, null, second, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "warmup.ts", CurrentSeconds = 10,
             InputArgsText = "--avhw", IsShowingBefore = true };
         if (filter.Length > 0) vm.FilterLines.Add(new FilterLineViewModel { Text = filter });
@@ -70,8 +70,8 @@ public sealed class StreamingNavigationTests
         var after = Assert.Single(foreground);
         Assert.Equal(warmup, after.WarmupSeconds);
         Assert.Equal(seek, CommandBuilder.Plan(after).SeekSeconds);
+        Assert.True(vm.ErrorText == null, vm.ErrorText + "\n" + vm.LogText);
         Assert.NotNull(vm.PreviewImage);
-        Assert.Null(vm.ErrorText);
         if (filter.Length > 0)
         {
             // 時間方向のAfterでも、空フィルタのBeforeへ暖機を引き継がない。
@@ -99,7 +99,7 @@ public sealed class StreamingNavigationTests
         var requests = new ConcurrentQueue<PreviewRequest>();
         var displayed = new ConcurrentQueue<double?>();
         var backend = new RecordingBackend(requests);
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, null,
+        await using var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null,
             (frame, token) => { displayed.Enqueue(frame.Xts); return Task.FromResult(YuvToBgra.Convert(frame)); }, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "stream.ts", CurrentSeconds = 10,
             InputArgsText = "--avhw --fake-duration 00:01:00.00" };
@@ -152,7 +152,7 @@ public sealed class StreamingNavigationTests
         await using var input = new SyntheticInputProbe(clock);
         var requests = new ConcurrentQueue<PreviewRequest>();
         var backend = new RecordingBackend(requests);
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        await using var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "legacy.ts", CurrentSeconds = 15 };
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
@@ -184,7 +184,7 @@ public sealed class StreamingNavigationTests
         var background = new ConcurrentQueue<PreviewRequest>();
         var first = new RecordingBackend(foreground);
         var second = new RecordingBackend(background);
-        await using var vm = new MainWindowViewModel(services, clock, first, first, input.Probe, null, null, second, second, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        await using var vm = new MainWindowViewModel(services, clock, first, input.Probe, null, null, second, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "unfiltered-concurrent.ts", CurrentSeconds = 5,
             InputArgsText = "--avhw --fake-duration 00:01:00.00"
@@ -211,7 +211,7 @@ public sealed class StreamingNavigationTests
         var background = new ConcurrentQueue<PreviewRequest>();
         var first = new RecordingBackend(foreground);
         var second = new RecordingBackend(background);
-        await using var vm = new MainWindowViewModel(services, clock, first, first, input.Probe, null, null, second, second, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        await using var vm = new MainWindowViewModel(services, clock, first, input.Probe, null, null, second, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "before.ts", CurrentSeconds = 5,
             InputArgsText = "--avhw --fake-duration 00:01:00.00", IsShowingBefore = true };
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.01" });
@@ -247,12 +247,12 @@ public sealed class StreamingNavigationTests
         var beforeDisplay = new ConcurrentQueue<double>();
         var first = new RecordingBackend(foreground);
         var second = new RecordingBackend(background, frame => beforeFrames.TryAdd(frame, 0));
-        await using var vm = new MainWindowViewModel(services, clock, first, first, input.Probe, null,
+        await using var vm = new MainWindowViewModel(services, clock, first, input.Probe, null,
             (frame, token) =>
             {
                 if (beforeFrames.ContainsKey(frame) && frame.Xts is double timestamp) beforeDisplay.Enqueue(timestamp - 1000);
                 return Task.FromResult(YuvToBgra.Convert(frame));
-            }, second, second, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+            }, second, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "before-window.ts", CurrentSeconds = 10,
             InputArgsText = "--avhw --fake-duration 00:01:00.00"
                 + (outputRate == null ? "" : " --fake-output-rate " + outputRate), IsShowingBefore = true };
@@ -286,9 +286,7 @@ public sealed class StreamingNavigationTests
         var clock = TimeProvider.System;
         var foreground = new DisposalProbeBackend(clock);
         var background = new DisposalProbeBackend(clock);
-        var fallback = new OneShotBackend();
-        var backgroundFallback = new OneShotBackend();
-        var vm = new MainWindowViewModel(services, clock, foreground, fallback, null, null, null, background, backgroundFallback,
+        var vm = new MainWindowViewModel(services, clock, foreground, null, null, null, background,
             debounceOverride: TimeSpan.Zero)
         { EncoderPath = FakeEncoderPath(), InputPath = "dispose-paused.ts", CurrentSeconds = 60,
             InputArgsText = "--avhw --fake-duration 00:02:00.00", IsShowingBefore = true };
@@ -323,7 +321,7 @@ public sealed class StreamingNavigationTests
         var clock = new VmShutdownClock();
         await using var input = new SyntheticInputProbe(clock);
         var backend = new UnresponsiveVmBackend();
-        var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "dispose-unresponsive.ts" };
         Task? dispose = null;
         try
@@ -361,7 +359,7 @@ public sealed class StreamingNavigationTests
         var converting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var converted = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         Y4mFrame? pending = null;
-        var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, null,
+        var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null,
             (frame, token) => { pending = frame; converting.TrySetResult(); return converted.Task; }, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "dispose-converter.ts" };
         Task? dispose = null;
@@ -415,7 +413,7 @@ public sealed class StreamingNavigationTests
         var clock = new VmShutdownClock();
         await using var input = new SyntheticInputProbe(clock);
         var backend = new SingleFrameVmBackend();
-        var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "dispose-ui-pump.ts" };
         Task? dispose = null;
         try
@@ -451,7 +449,7 @@ public sealed class StreamingNavigationTests
         await using var input = new SyntheticInputProbe(clock);
         var requests = new ConcurrentQueue<PreviewRequest>();
         var backend = new RecordingBackend(requests);
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        await using var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "end.ts", CurrentSeconds = target,
             InputArgsText = "--avhw --fake-duration 00:00:03.00 --fake-input-end 3" };
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
@@ -473,7 +471,7 @@ public sealed class StreamingNavigationTests
         await using var input = new SyntheticInputProbe(clock);
         var foreground = new RecordingBackend(new());
         var background = new BlockingFirstBeforeBackend();
-        await using var vm = new MainWindowViewModel(services, clock, foreground, foreground, input.Probe, null, null, background, background, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        await using var vm = new MainWindowViewModel(services, clock, foreground, input.Probe, null, null, background, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "before-cancel.ts", CurrentSeconds = 5,
             InputArgsText = "--avhw --fake-duration 00:01:00.00", IsShowingBefore = true };
         var filter = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.01" };
@@ -516,7 +514,7 @@ public sealed class StreamingNavigationTests
         var requests = new ConcurrentQueue<PreviewRequest>();
         var converted = new ConcurrentQueue<byte>();
         var backend = new PhasePrefetchBackend(requests);
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, cache,
+        await using var vm = new MainWindowViewModel(services, clock, backend, input.Probe, cache,
             (frame, token) => { converted.Enqueue(frame.Data[0]); return Task.FromResult(YuvToBgra.Convert(frame)); }, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = request.InputFile, CurrentSeconds = 1 };
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
@@ -575,7 +573,7 @@ public sealed class StreamingNavigationTests
             Enumerable.Range(23, 9).Select(index => PhaseFrame(index, 0)).ToArray(), new(1000, 0, true), 1, 30.0 / 24));
         var requests = new ConcurrentQueue<PreviewRequest>();
         var backend = new RecordingBackend(requests);
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, cache, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        await using var vm = new MainWindowViewModel(services, clock, backend, input.Probe, cache, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = request.InputFile, CurrentSeconds = 1 };
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
@@ -620,7 +618,7 @@ public sealed class StreamingNavigationTests
         var old = Assert.IsType<PreviewSegmentSnapshot>(cache.StoreSegment(request, frames, new(1000, 0, true), 9, 12));
         var requests = new ConcurrentQueue<PreviewRequest>();
         var backend = new RecordingBackend(requests);
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, cache, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        await using var vm = new MainWindowViewModel(services, clock, backend, input.Probe, cache, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = request.InputFile, CurrentSeconds = 10 };
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         clock.Advance(TimeSpan.FromMilliseconds(150));
@@ -672,7 +670,7 @@ public sealed class StreamingNavigationTests
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         int conversions = 0, applied = 0;
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, null,
+        await using var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null,
             async (frame, token) =>
             {
                 if (Interlocked.Increment(ref conversions) == 1)
@@ -747,7 +745,7 @@ public sealed class StreamingNavigationTests
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         int conversions = 0;
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, null,
+        await using var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null,
             async (frame, token) =>
             {
                 if (Interlocked.Increment(ref conversions) == 1)
@@ -787,7 +785,7 @@ public sealed class StreamingNavigationTests
         await using var input = new SyntheticInputProbe(clock);
         var requests = new ConcurrentQueue<PreviewRequest>();
         var backend = new RecordingBackend(requests);
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        await using var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "near-wrap.ts", CurrentSeconds = 10,
             InputArgsText = "--avhw --fake-origin-seconds 95443.5" };
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
@@ -828,7 +826,7 @@ public sealed class StreamingNavigationTests
         var foreground = new RecordingBackend(foregroundRequests);
         var background = new BeforeFaultBackend(protocolFailure);
         var afterImage = new TaskCompletionSource<Avalonia.Media.Imaging.Bitmap>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var vm = new MainWindowViewModel(services, clock, foreground, foreground, input.Probe, null, null, background, background, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        await using var vm = new MainWindowViewModel(services, clock, foreground, input.Probe, null, null, background, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "before-only.ts", CurrentSeconds = 10, IsShowingBefore = true };
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.01" });
         vm.PropertyChanged += (_, args) =>
@@ -1030,7 +1028,7 @@ public sealed class StreamingNavigationTests
 
     private sealed class BlockingFirstBeforeBackend : IPreviewBackend
     {
-        private readonly OneShotBackend _inner = new();
+        private readonly ServerBackend _inner = new();
         private int _calls;
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1056,7 +1054,11 @@ public sealed class StreamingNavigationTests
             => Task.FromResult<bool?>(request.InputArgs.Any(value => value.StartsWith("--fake-", StringComparison.Ordinal))
                 || request.VppArgs.Any(value => value is "--vpp-kfm" or "--vpp-nlmeans"));
 
-        private readonly OneShotBackend _inner = new();
+        private readonly ServerBackend _inner = new(configureStartInfo: info =>
+        {
+            info.Environment["FAKE_ENCODER_PROBE_SUPPORTED"] = "1";
+            info.Environment["FAKE_ENCODER_PROBE_HISTORY"] = "0";
+        });
         public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
         { requests.Enqueue(request); return _inner.RunAsync(request, observe == null ? sink : new ObservingSink(sink, observe), cancellationToken); }
         public ValueTask AbortAsync() => _inner.AbortAsync();

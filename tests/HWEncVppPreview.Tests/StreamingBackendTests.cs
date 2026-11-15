@@ -11,12 +11,10 @@ public sealed class StreamingBackendTests
 {
     private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ReadingStopsAtDemandGateAndResumesWithoutLosingFrames(bool resident)
+    [Fact]
+    public async Task ReadingStopsAtDemandGateAndResumesWithoutLosingFrames()
     {
-        await using IPreviewBackend backend = CreateBackend(resident);
+        await using IPreviewBackend backend = new ServerBackend();
         var sink = new GatedSink();
         Task<PreviewRunResult> run = backend.RunAsync(Request(), sink);
         await sink.Paused.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
@@ -32,15 +30,12 @@ public sealed class StreamingBackendTests
         Assert.False(result.IsCancelled);
         Assert.Equal(4, sink.FrameCount);
         for (int i = 0; i < sink.FrameCount; ++i) Assert.Equal(i / 30d, sink.Timestamps[i], 7);
-        if (!resident) AssertStopped(sink.ProcessId);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task CancellationUnblocksDemandGateEvenWhenSinkIgnoresToken(bool resident)
+    [Fact]
+    public async Task CancellationUnblocksDemandGateEvenWhenSinkIgnoresToken()
     {
-        await using IPreviewBackend backend = CreateBackend(resident);
+        await using IPreviewBackend backend = new ServerBackend();
         using var cancellation = new CancellationTokenSource();
         var sink = new GatedSink();
         Task<PreviewRunResult> run = backend.RunAsync(Request("--fake-hang-after", "1"), sink, cancellation.Token);
@@ -52,26 +47,20 @@ public sealed class StreamingBackendTests
         Assert.True(result.IsCancelled);
         Assert.Equal(1, sink.FrameCount);
         Assert.Equal(gatedCalls, sink.BeforeReadCalls);
-        if (resident)
-        {
-            // 止まっていた読取りを再開してENDを排出できれば、同じプロセスを再利用できる。
-            Assert.Equal(-12, result.ExitCode);
-            var recovery = new OpenSink();
-            Assert.Equal(0, (await backend.RunAsync(Request(), recovery).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
-            Assert.Equal(sink.ProcessId, recovery.ProcessId);
-            Assert.Equal(4, recovery.FrameCount);
-        }
-        else AssertStopped(sink.ProcessId);
+        // 止まっていた読取りを再開してENDを排出できれば、同じプロセスを再利用できる。
+        Assert.Equal(-12, result.ExitCode);
+        var recovery = new OpenSink();
+        Assert.Equal(0, (await backend.RunAsync(Request(), recovery).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.Equal(sink.ProcessId, recovery.ProcessId);
+        Assert.Equal(4, recovery.FrameCount);
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public async Task AbortAndDisposeReleasePausedReadTask(bool resident, bool dispose)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AbortAndDisposeReleasePausedReadTask(bool dispose)
     {
-        await using IPreviewBackend backend = CreateBackend(resident);
+        await using IPreviewBackend backend = new ServerBackend();
         var sink = new GatedSink();
         Task<PreviewRunResult> run = backend.RunAsync(Request("--fake-hang-after", "1"), sink);
         await sink.Paused.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
@@ -146,12 +135,10 @@ public sealed class StreamingBackendTests
         Assert.Equal(4, recovery.FrameCount);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ContinuousOutputCanPauseResumeThenCancel(bool resident)
+    [Fact]
+    public async Task ContinuousOutputCanPauseResumeThenCancel()
     {
-        await using IPreviewBackend backend = CreateBackend(resident);
+        await using IPreviewBackend backend = new ServerBackend();
         using var cancellation = new CancellationTokenSource();
         var sink = new GatedSink(stopAfterFrames: 3, stop: cancellation.Cancel);
         var request = Request() with { Continuous = true };
@@ -163,8 +150,7 @@ public sealed class StreamingBackendTests
         PreviewRunResult result = await run.WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(result.IsCancelled);
         Assert.Equal(3, sink.FrameCount);
-        if (resident) Assert.Equal(-12, result.ExitCode);
-        else AssertStopped(sink.ProcessId);
+        Assert.Equal(-12, result.ExitCode);
     }
 
     [Fact]
@@ -264,46 +250,6 @@ public sealed class StreamingBackendTests
         }
     }
 
-    [Fact]
-    public async Task OneShotReapsInheritedPipeAfterChildIsReleased()
-    {
-        string pipeName = "oneshot-child-" + Guid.NewGuid().ToString("N");
-        using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        var backend = new OneShotBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_HOLD_OUTPUT_PIPE"] = pipeName);
-        Process? child = null;
-        StreamWriter? writer = null;
-        bool released = false;
-        try
-        {
-            var sink = new OpenSink();
-            Task<PreviewRunResult> run = backend.RunAsync(Request(), sink);
-            await PipeWait.UntilConnectedAsync(pipe, pipeName, run, SafetyTimeout);
-            using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-            writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-            string pid = await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout) ?? throw new EndOfStreamException();
-            child = Process.GetProcessById(int.Parse(pid, System.Globalization.CultureInfo.InvariantCulture));
-            await writer.WriteLineAsync("release");
-            released = true;
-            Assert.Equal("0", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
-            await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-            Assert.Equal(0, (await run.WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
-            await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-            AssertStopped(sink.ProcessId);
-        }
-        finally
-        {
-            if (!released && writer != null) await writer.WriteLineAsync("release");
-            if (child != null)
-            {
-                await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-                child.Dispose();
-            }
-            await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-            writer?.Dispose();
-        }
-    }
-
-    private static IPreviewBackend CreateBackend(bool resident) => resident ? new ServerBackend() : new OneShotBackend();
 
     private static PreviewRequest Request(params string[] extra) => new()
     {

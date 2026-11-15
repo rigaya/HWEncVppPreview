@@ -34,8 +34,8 @@ public sealed class ViewModelTests
             InputArgsText = "--fake-duration 00:00:10.00" + (durationAtExit ? " --fake-duration-at-exit" : ""),
         }.Save(services.SettingsPath);
         var commands = new List<string[]>();
-        var backend = new OneShotBackend(info => commands.Add(info.ArgumentList.ToArray()));
-        await using var vm = new MainWindowViewModel(services, preferred: backend, fallback: backend);
+        var backend = new ServerBackend(configureStartInfo: info => commands.Add(info.ArgumentList.ToArray()));
+        await using var vm = new MainWindowViewModel(services, backend: backend);
         await vm.InitializeAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(expectedTime, vm.CurrentSeconds);
@@ -43,7 +43,7 @@ public sealed class ViewModelTests
         Assert.Null(vm.ErrorText);
         Assert.NotNull(vm.PreviewImage);
         Assert.NotEmpty(commands);
-        if (expectedTime == 0) Assert.DoesNotContain("--seek", commands[0]);
+        Assert.Contains("--preview-server", commands[0]);
     }
 
     [AvaloniaFact]
@@ -78,19 +78,16 @@ public sealed class ViewModelTests
     {
         using var services = new TestServices();
         var clock = TimeProvider.System;
-        int starts = 0;
-        await using var vm = Create(services, clock, new OneShotBackend(_ => ++starts));
+        await using var vm = Create(services, clock, new ServerBackend());
         var line = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.1" };
         vm.FilterLines.Add(line);
         vm.SelectedFilterLine = line;
         await InitializeAsync(vm, clock);
         string first = ImageHash(vm);
         Assert.Contains("--vpp-nlmeans", vm.HelpText);
-        // 初回はフィルタ後と、空のVPP引数で取得するフィルタ前の2回。
 
         line.Text = "--vpp-nlmeans sigma=0.2";
         await RunPreparedAsync(vm, clock);
-        // フィルタ前の同一区間はキャッシュから再利用する。
 
         Assert.NotEqual(first, ImageHash(vm));
         line.IsEnabled = false;
@@ -98,7 +95,6 @@ public sealed class ViewModelTests
 
         line.IsEnabled = true;
         await RunPreparedAsync(vm, clock);
-        // 完了区間がキャッシュされていれば、再度有効にしても追加起動しない。
 
     }
 
@@ -107,8 +103,7 @@ public sealed class ViewModelTests
     {
         using var services = new TestServices();
         var clock = TimeProvider.System;
-        int starts = 0;
-        await using var vm = Create(services, clock, new OneShotBackend(_ => ++starts));
+        await using var vm = Create(services, clock, new ServerBackend());
         vm.CurrentSeconds = 0.3;
         await InitializeAsync(vm, clock);
         string first = ImageHash(vm);
@@ -131,8 +126,7 @@ public sealed class ViewModelTests
     {
         using var services = new TestServices();
         var clock = TimeProvider.System;
-        int starts = 0;
-        await using var vm = Create(services, clock, new OneShotBackend(_ => ++starts));
+        await using var vm = Create(services, clock, new ServerBackend());
         await InitializeAsync(vm, clock);
         vm.BeginSeekDrag();
         vm.CurrentSeconds = 2;
@@ -193,7 +187,7 @@ public sealed class ViewModelTests
             Assert.DoesNotContain("--vpp-edgelevel", services.ClipboardText);
             await vm.SaveSettingsAsync(1200, 780);
         }
-        await using (var restored = new MainWindowViewModel(services, clock, null, null, null, null, null, debounceOverride: TimeSpan.Zero))
+        await using (var restored = new MainWindowViewModel(services, clock, null, null, null, null, debounceOverride: TimeSpan.Zero))
         {
             await restored.InitializeAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
 
@@ -250,7 +244,7 @@ public sealed class ViewModelTests
         var clock = TimeProvider.System;
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var probe = new InputProbe(clock, configureStartInfo: _ => started.TrySetResult());
-        await using var vm = new MainWindowViewModel(services, clock, null, null, probe, null, null, debounceOverride: TimeSpan.Zero)
+        await using var vm = new MainWindowViewModel(services, clock, null, probe, null, null, debounceOverride: TimeSpan.Zero)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "old input.ts", InputArgsText = "--fake-hang-after 0",
         };
@@ -319,8 +313,7 @@ public sealed class ViewModelTests
     {
         using var services = new TestServices();
         var clock = TimeProvider.System;
-        int starts = 0;
-        await using var vm = Create(services, clock, new OneShotBackend(_ => Interlocked.Increment(ref starts)));
+        await using var vm = Create(services, clock, new ServerBackend());
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.NotNull(vm.PreviewImage);
@@ -363,7 +356,7 @@ public sealed class ViewModelTests
     }
 
     private static MainWindowViewModel Create(TestServices services, TimeProvider clock, IPreviewBackend? backend = null) =>
-        new(services, clock, backend, null, null, null, null, debounceOverride: TimeSpan.Zero)
+        new(services, clock, backend, null, null, null, debounceOverride: TimeSpan.Zero)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "fake input.ts",
             InputArgsText = "--avhw --fake-duration 00:00:10.00",

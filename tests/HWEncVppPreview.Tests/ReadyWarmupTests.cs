@@ -24,10 +24,9 @@ public sealed class HistoryProbeTests
         });
 
     private static async Task<PreviewSegmentSnapshot> RunAsync(IPreviewBackend backend, bool continuous = false,
-        bool background = false, bool enableFallback = true, PreviewRequest? request = null)
+        bool background = false, PreviewRequest? request = null)
     {
-        await using var controller = new PreviewController(backend, new OneShotBackend(), debounce: TimeSpan.Zero,
-            backgroundBackend: backend, enableFallback: enableFallback);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero, backgroundBackend: backend);
         PreviewSegmentSnapshot? segment = null;
         controller.SegmentUpdated += value => segment = value.Segment;
         controller.Completed += value => segment = value.Segment ?? segment;
@@ -86,16 +85,6 @@ public sealed class HistoryProbeTests
         { InputArgs = new[] { "--avhw", "--vpp-kfm" }, VppArgs = Array.Empty<string>() });
         Assert.Equal(2, segment.PhysicalRequest.WarmupSeconds);
         Assert.Equal(8, CommandBuilder.Plan(segment.PhysicalRequest).SeekSeconds);
-    }
-
-    [Fact]
-    public async Task OneShotHasNoProbeAndKeepsTwoSeconds()
-    {
-        var backend = new OneShotBackend();
-        Assert.Null(await ((IPreviewBackend)backend).GetHistoryRequirementAsync(Request()));
-        var segment = await RunAsync(backend);
-        Assert.Equal(2, segment.PhysicalRequest.WarmupSeconds);
-        Assert.Equal(7, CommandBuilder.Plan(segment.PhysicalRequest).SeekSeconds);
     }
 
     [Fact]
@@ -168,51 +157,16 @@ public sealed class HistoryProbeTests
         Assert.False(history);
     }
 
-    [Theory]
-    [InlineData("RGYPREVIEW PROBE id={id} history=2 rc=0")]
-    [InlineData("RGYPREVIEW PROBE id={id} history=+0 rc=0")]
-    [InlineData("RGYPREVIEW PROBE id={id} history=0")]
-    [InlineData("RGYPREVIEW PROBE id=99999999 history=0 rc=0")]
-    [InlineData("RGYPREVIEW PROBE id={id} history=1 history=0 rc=0")]
-    [InlineData("RGYPREVIEW BEGIN id={id}")]
-    public async Task MalformedProbeDropsSessionAndUsesAutoFallback(string reply)
-    {
-        var backend = Backend(start => start.Environment["FAKE_ENCODER_PROBE_REPLY"] = reply);
-        var segment = await RunAsync(backend);
-        Assert.Equal(2, segment.PhysicalRequest.WarmupSeconds);
-        Assert.Equal(7, CommandBuilder.Plan(segment.PhysicalRequest).SeekSeconds);
-    }
-
     [Fact]
-    public async Task ProbeTimeoutDropsSessionAndUsesAutoFallback()
-    {
-        var backend = Backend(start => start.Environment["FAKE_ENCODER_PROBE_NONE"] = "1", TimeSpan.FromMilliseconds(100));
-        Assert.Equal(2, (await RunAsync(backend)).PhysicalRequest.WarmupSeconds);
-    }
-
-    [Fact]
-    public async Task ProbeFailureWithoutFallbackIsReported()
+    public async Task ProbeFailureIsReported()
     {
         await using var backend = Backend(start => start.Environment["FAKE_ENCODER_PROBE_REPLY"] = "broken");
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero, enableFallback: false);
+        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request());
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Timeout);
         Assert.IsType<PreviewServerNotSupportedException>(failure?.Exception);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task UnsupportedReadyAndStartFailureKeepAutoFallback(bool startFailure)
-    {
-        var backend = new ServerBackend(configureStartInfo: start =>
-        {
-            if (startFailure) start.FileName = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-            else start.Environment["FAKE_ENCODER_READY_VERSION"] = "0";
-        });
-        Assert.Equal(2, (await RunAsync(backend)).PhysicalRequest.WarmupSeconds);
     }
 
     [Fact]

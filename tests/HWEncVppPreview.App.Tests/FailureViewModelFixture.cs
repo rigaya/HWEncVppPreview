@@ -9,7 +9,7 @@ internal static class FailureViewModelFixture
     internal static MainWindowViewModel Create(string diagnostics, int exitCode, Exception? exception = null)
     {
         var backend = new FailureBackend(diagnostics, exitCode, exception);
-        return new MainWindowViewModel(new Services(), TimeProvider.System, backend, backend)
+        return new MainWindowViewModel(new Services(), TimeProvider.System, backend)
         {
             EncoderPath = FakeEncoderPath(), InputPath = "diagnostics.ts", InputArgsText = "--avhw"
         };

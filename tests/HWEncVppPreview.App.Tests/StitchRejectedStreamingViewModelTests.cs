@@ -29,7 +29,7 @@ public sealed class StitchRejectedStreamingViewModelTests
         cache.StoreSegment(request, Frames(OldPixels), new(1000, 0, true), 9, 12);
         var backend = new ControlledBackend();
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Avalonia.Threading.Dispatcher.UIThread.Post(action));
-        await using var vm = new MainWindowViewModel(services, clock, backend, backend, null, cache,
+        await using var vm = new MainWindowViewModel(services, clock, backend, null, cache,
             (frame, token) =>
             {
                 byte[] result = new byte[frame.Header.Width * frame.Header.Height * 4];

@@ -56,7 +56,7 @@ public sealed class RealClockFallbackTests
                     for (int i = 0; i < item.Steps; ++i)
                         await PerformAsync("left", -1, () => vm.StepFrameCommand.Execute(-1));
                 }
-                PerfTrace.Write("clock.case.end", new { item.Id, vm.CurrentSeconds, vm.StatusText, vm.ErrorText, vm.BackendModeText, image = vm.PreviewImage != null });
+                PerfTrace.Write("clock.case.end", new { item.Id, vm.CurrentSeconds, vm.StatusText, vm.ErrorText, image = vm.PreviewImage != null });
             }
             catch (Exception exception)
             {

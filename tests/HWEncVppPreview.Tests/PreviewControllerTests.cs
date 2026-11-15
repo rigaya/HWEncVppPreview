@@ -170,27 +170,6 @@ public sealed class PreviewControllerTests
     }
 
     [Fact]
-    public async Task UnsupportedServerFallsBackOncePerEncoder()
-    {
-        var preferred = new UnsupportedBackend();
-        var fallback = new ControlledBackend();
-        await using var controller = new PreviewController(preferred, fallback, debounce: TimeSpan.Zero);
-        foreach (string option in new[] { "a", "b" })
-        {
-            controller.Submit(Request(option));
-            var run = await fallback.NextAsync();
-            run.End(0);
-            await controller.WaitForIdleAsync();
-        }
-        Assert.Equal(1, preferred.Calls);
-        controller.Submit(Request("c") with { EncoderPath = "other" });
-        var other = await fallback.NextAsync();
-        other.End(0);
-        await controller.WaitForIdleAsync();
-        Assert.Equal(2, preferred.Calls);
-    }
-
-    [Fact]
     public async Task DisposeAbortsActiveRequestAndRejectsSubmit()
     {
         var clock = new DisposeGraceClock();

@@ -89,7 +89,7 @@ public sealed class NoTimestampRollingViewModelTests
     }
 
     private static MainWindowViewModel Create(Services services, Backend backend, FrameCache cache)
-        => new(services, TimeProvider.System, backend, backend, null, cache,
+        => new(services, TimeProvider.System, backend, null, cache,
             (frame, token) => Task.FromResult(Enumerable.Repeat(frame.Data[0], frame.Header.Width * frame.Header.Height * 4).ToArray()))
         { EncoderPath = FakeEncoderPath(), InputPath = "no-xts-rolling.ts", InputArgsText = "--avhw", CurrentSeconds = 10,
             CompareMode = PreviewCompareMode.SideBySide };

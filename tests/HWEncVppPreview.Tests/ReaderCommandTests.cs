@@ -30,8 +30,8 @@ public sealed class ReaderCommandTests
         bool colorAuto, bool vpy)
     {
         var request = Request(extension, inputArgs);
-        foreach (string[] args in new[] { CommandBuilder.BuildOneShot(request), CommandBuilder.BuildServer(request) })
         {
+            var args = CommandBuilder.BuildServer(request);
             foreach (string option in ColorOptions)
             {
                 Assert.Equal(colorAuto, args.Contains(option));
@@ -52,8 +52,8 @@ public sealed class ReaderCommandTests
     public void readerはエンコーダと同じく最後の明示指定を使う(string first, string last, bool colorAuto, bool vpy)
     {
         var request = Request(".vpy", [first, last]);
-        foreach (string[] args in new[] { CommandBuilder.BuildOneShot(request), CommandBuilder.BuildServer(request) })
         {
+            var args = CommandBuilder.BuildServer(request);
             foreach (string option in ColorOptions) Assert.Equal(colorAuto, args.Contains(option));
             Assert.Equal(vpy, args.Contains("--vpy-assume-script-dir"));
             Assert.True(Array.IndexOf(args, first) < Array.IndexOf(args, last));
@@ -70,17 +70,16 @@ public sealed class ReaderCommandTests
     {
         var capabilities = CommandBuilder.CapabilitiesFromHelp(new HelpIndex(text));
         Assert.Equal(supported, capabilities.VpyAssumeScriptDir);
-        foreach (string[] args in new[] { CommandBuilder.BuildOneShot(Request(".vpy", []) with { Capabilities = capabilities }),
-            CommandBuilder.BuildServer(Request(".vpy", []) with { Capabilities = capabilities }) })
-            Assert.Equal(supported, args.Contains("--vpy-assume-script-dir"));
+        string[] args = CommandBuilder.BuildServer(Request(".vpy", []) with { Capabilities = capabilities });
+        Assert.Equal(supported, args.Contains("--vpy-assume-script-dir"));
     }
 
     [Fact]
     public void 非avformat入力でも利用者の明示した色指定は保持する()
     {
         var request = Request(".avs", ["--device", "1", "--colormatrix", "bt709", "--colorrange", "full"]);
-        foreach (string[] args in new[] { CommandBuilder.BuildOneShot(request), CommandBuilder.BuildServer(request) })
         {
+            var args = CommandBuilder.BuildServer(request);
             Assert.Equal("bt709", args[Array.IndexOf(args, "--colormatrix") + 1]);
             Assert.Equal("full", args[Array.IndexOf(args, "--colorrange") + 1]);
             Assert.DoesNotContain("auto", args);
@@ -92,8 +91,9 @@ public sealed class ReaderCommandTests
     [InlineData(".vpy", true)]
     public async Task 入力検査にもreaderごとの自動指定を適用する(string extension, bool vpy)
     {
-        var commands = new List<string[]>();
-        await using var probe = new InputProbe(configureStartInfo: start => commands.Add(start.ArgumentList.ToArray()));
+        var backend = new RecordingProbeBackend();
+        var commands = backend.Commands;
+        await using var probe = new InputProbe(backend, TimeProvider.System);
         await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input" + extension,
             Array.Empty<string>(), capabilities: Capabilities).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         string[] args = Assert.Single(commands);
