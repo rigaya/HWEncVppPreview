@@ -17,8 +17,7 @@ internal static class NativeExtractionCleanup
         IReadOnlyList<string>? extractionBases = null)
     {
         if (!isSingleFile) return null;
-        // 検索一覧には実行ファイルの場所も入る。親名が一致しても、既定の .net と
-        // DOTNET_BUNDLE_EXTRACT_BASE_DIR の外は展開先ではないので捨てる。
+        // 検索一覧には実行ファイルの場所も入る。親名が一致しても、既定の .net の外は展開先ではないので捨てる。
         IReadOnlyList<string> bases = extractionBases ?? ExtractionBases();
         var candidates = (nativeSearchDirectories ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
             .Select(NormalizeDirectory).Where(path => IsUnderBase(path, bases) && CacheParent(path) != null).Cast<string>()
@@ -27,14 +26,9 @@ internal static class NativeExtractionCleanup
     }
 
     internal static IReadOnlyList<string> ExtractionBases()
-        => ExtractionBases(Environment.GetEnvironmentVariable("DOTNET_BUNDLE_EXTRACT_BASE_DIR"), DefaultExtractionRoot());
-
-    internal static IReadOnlyList<string> ExtractionBases(string? configuredBase, string? defaultRoot)
     {
-        var bases = new List<string>(2);
-        AddBase(bases, defaultRoot);
-        AddBase(bases, configuredBase);
-        return bases;
+        string? root = NormalizeDirectory(DefaultExtractionRoot());
+        return root == null ? Array.Empty<string>() : new[] { root };
     }
 
     internal static IReadOnlyList<string> SelectDirectories(string? currentDirectory,
@@ -56,7 +50,12 @@ internal static class NativeExtractionCleanup
     }
 
     internal static void Clean(string? currentDirectory, TimeProvider? timeProvider = null)
+        => Clean(currentDirectory, Environment.GetEnvironmentVariable("DOTNET_BUNDLE_EXTRACT_BASE_DIR"), timeProvider);
+
+    internal static void Clean(string? currentDirectory, string? configuredBase, TimeProvider? timeProvider)
     {
+        // 展開先を利用者が指定した場合、その中に何があるかは利用者の管理なので一切削除しない。
+        if (!string.IsNullOrEmpty(configuredBase)) return;
         try
         {
             string? current = NormalizeDirectory(currentDirectory);
@@ -95,12 +94,6 @@ internal static class NativeExtractionCleanup
             ? Path.GetTempPath()
             : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return Path.Combine(root, ".net");
-    }
-
-    private static void AddBase(List<string> bases, string? path)
-    {
-        string? full = NormalizeDirectory(path);
-        if (full != null && !bases.Contains(full, PathComparer)) bases.Add(full);
     }
 
     private static bool IsUnderBase(string? path, IReadOnlyList<string> bases)

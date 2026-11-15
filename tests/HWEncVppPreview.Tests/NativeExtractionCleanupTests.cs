@@ -114,7 +114,7 @@ public sealed class NativeExtractionCleanupTests
     }
 
     [Fact]
-    public void Resolveは既定と指定の展開根の配下だけを受け付ける()
+    public void Resolveは与えた展開根の配下だけを受け付ける()
     {
         string def = VirtualPath("default-root");
         string custom = VirtualPath("custom-root");
@@ -129,35 +129,23 @@ public sealed class NativeExtractionCleanupTests
     }
 
     [Fact]
-    public void ExtractionBasesは既定の展開根と完全な指定根だけを返す()
+    public void 現在の展開根はOSごとのnetだけを含む()
     {
-        string def = VirtualPath("default-base");
-        string custom = VirtualPath("custom-base");
-        Assert.Equal(new[] { def }, NativeExtractionCleanup.ExtractionBases(null, def));
-        Assert.Equal(new[] { def }, NativeExtractionCleanup.ExtractionBases("relative-base", def));
-        Assert.Equal(new[] { def, custom }, NativeExtractionCleanup.ExtractionBases(custom + Path.DirectorySeparatorChar, def));
-        Assert.Equal(new[] { def }, NativeExtractionCleanup.ExtractionBases(Path.Combine(def, "..", Path.GetFileName(def)), def));
-        Assert.Empty(NativeExtractionCleanup.ExtractionBases(null, null));
-    }
-
-    [Fact]
-    public void 現在の展開根はOSごとのnetと環境変数を含む()
-    {
-        string name = "DOTNET_BUNDLE_EXTRACT_BASE_DIR";
-        string? previous = Environment.GetEnvironmentVariable(name);
-        string custom = VirtualPath("configured-base");
         string expected = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(
             OperatingSystem.IsWindows() ? Path.GetTempPath()
                 : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".net")));
-        try
-        {
-            Environment.SetEnvironmentVariable(name, custom);
-            Assert.Equal(new[] { expected, custom }, NativeExtractionCleanup.ExtractionBases());
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(name, previous);
-        }
+        Assert.Equal(new[] { expected }, NativeExtractionCleanup.ExtractionBases());
+    }
+
+    [Fact]
+    public void Cleanは展開先の指定があれば古い兄弟も削除しない()
+    {
+        using var tree = new TestTree();
+        string current = tree.Entry("current", Now);
+        string old = tree.Entry("old", Now.AddHours(-1));
+        NativeExtractionCleanup.Clean(current, VirtualPath("configured-base"), new FixedClock());
+        AssertPayload(current);
+        AssertPayload(old);
     }
 
     [Fact]
@@ -169,7 +157,7 @@ public sealed class NativeExtractionCleanupTests
         string recent = tree.Entry("recent", Now.AddMinutes(-9));
         string boundary = tree.Entry("boundary", Now.AddMinutes(-10));
         string future = tree.Entry("future", Now.AddHours(1));
-        NativeExtractionCleanup.Clean(current, new FixedClock());
+        NativeExtractionCleanup.Clean(current, configuredBase: null, new FixedClock());
         Assert.False(Directory.Exists(old));
         foreach (string path in new[] { current, recent, boundary, future }) AssertPayload(path);
     }
@@ -184,7 +172,7 @@ public sealed class NativeExtractionCleanupTests
         Directory.CreateDirectory(nested);
         File.WriteAllText(Path.Combine(nested, "payload.txt"), "nested");
         Directory.SetLastWriteTimeUtc(old, Now.AddHours(-1).UtcDateTime);
-        NativeExtractionCleanup.Clean(current, new FixedClock());
+        NativeExtractionCleanup.Clean(current, configuredBase: null, new FixedClock());
         Assert.False(Directory.Exists(old));
         AssertPayload(current);
     }
@@ -195,7 +183,7 @@ public sealed class NativeExtractionCleanupTests
         using var tree = new TestTree("HWEncVppPreview-extra");
         string current = tree.Entry("current", Now);
         string old = tree.Entry("old", Now.AddHours(-1));
-        NativeExtractionCleanup.Clean(current, new FixedClock());
+        NativeExtractionCleanup.Clean(current, configuredBase: null, new FixedClock());
         AssertPayload(current);
         AssertPayload(old);
     }
@@ -207,7 +195,7 @@ public sealed class NativeExtractionCleanupTests
     {
         using var tree = new TestTree();
         string old = tree.Entry("old", Now.AddHours(-1));
-        NativeExtractionCleanup.Clean(current, new FixedClock());
+        NativeExtractionCleanup.Clean(current, configuredBase: null, new FixedClock());
         AssertPayload(old);
     }
 
@@ -218,7 +206,7 @@ public sealed class NativeExtractionCleanupTests
         using var tree = new TestTree(root: root);
         string current = tree.Entry("current", Now);
         string old = tree.Entry("old", Now.AddHours(-1));
-        NativeExtractionCleanup.Clean(current, new FixedClock());
+        NativeExtractionCleanup.Clean(current, configuredBase: null, new FixedClock());
         AssertPayload(current);
         AssertPayload(old);
     }
@@ -228,8 +216,8 @@ public sealed class NativeExtractionCleanupTests
     {
         using var tree = new TestTree();
         string old = tree.Entry("old", Now.AddHours(-1));
-        NativeExtractionCleanup.Clean(Path.Combine(tree.Parent, "missing"), new FixedClock());
-        NativeExtractionCleanup.Clean(Path.Combine(tree.Root, "missing", "HWEncVppPreview", "missing"), new FixedClock());
+        NativeExtractionCleanup.Clean(Path.Combine(tree.Parent, "missing"), configuredBase: null, new FixedClock());
+        NativeExtractionCleanup.Clean(Path.Combine(tree.Root, "missing", "HWEncVppPreview", "missing"), configuredBase: null, new FixedClock());
         AssertPayload(old);
     }
 
@@ -242,7 +230,7 @@ public sealed class NativeExtractionCleanupTests
         string link = Path.Combine(tree.Parent, "link");
         tree.Link(link, target);
         string old = tree.Entry("old", Now.AddHours(-1));
-        NativeExtractionCleanup.Clean(current, new FixedClock());
+        NativeExtractionCleanup.Clean(current, configuredBase: null, new FixedClock());
         AssertPayload(target);
         Assert.True((File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0);
         Assert.False(Directory.Exists(old));
@@ -259,7 +247,7 @@ public sealed class NativeExtractionCleanupTests
         tree.Link(Path.Combine(linked, "nested", "nested-link"), target);
         Directory.SetLastWriteTimeUtc(linked, Now.AddHours(-1).UtcDateTime);
         string old = tree.Entry("old", Now.AddHours(-1));
-        NativeExtractionCleanup.Clean(current, new FixedClock());
+        NativeExtractionCleanup.Clean(current, configuredBase: null, new FixedClock());
         Assert.False(Directory.Exists(linked));
         AssertPayload(target);
         Assert.False(Directory.Exists(old));
@@ -273,7 +261,7 @@ public sealed class NativeExtractionCleanupTests
         string locked = tree.Entry("00-locked", Now.AddHours(-1));
         string old = tree.Entry("99-old", Now.AddHours(-1));
         using var held = new FileStream(Path.Combine(locked, "payload.txt"), FileMode.Open, FileAccess.Read, FileShare.None);
-        NativeExtractionCleanup.Clean(current, new FixedClock());
+        NativeExtractionCleanup.Clean(current, configuredBase: null, new FixedClock());
         AssertPayload(current);
         Assert.True(Directory.Exists(locked));
         Assert.True(File.Exists(Path.Combine(locked, "payload.txt")));
