@@ -32,7 +32,7 @@ run/cancel/quitとstdinのEOFに対応し、新しいrunは実行中の要求を
 |`FAKE_ENCODER_PID_PIPE=NAME`|起動時に指定パイプへプロセス番号を送る|
 |`FAKE_ENCODER_INITIALIZE_PIPE=NAME`|初期化の開始を指定パイプへ通知し、解除指示を待つ|
 |`FAKE_ENCODER_PROBE_PIPE=NAME`|履歴検査の開始を指定パイプへ通知し、解除指示を待つ|
-|`FAKE_ENCODER_HOLD_OUTPUT_PIPE=NAME`|標準出力を継承する子を起動し、指定パイプで解除指示を待つ|
+|`FAKE_ENCODER_HOLD_OUTPUT_PIPE=NAME`|標準出力と標準エラーを継承する子を起動する。子は指定パイプにPIDを通知し、`release`を受け取ったら終了コード`0`を返して終了する。制御パイプのEOFでも終了する。`check`を先に送ると、子は継承した標準出力へ`held`を一行書き、解除指示かEOFを待つ|
 |`FAKE_ENCODER_DROP_AFTER=N`|常駐でN件のENDを書いた後、終了コード71で落ちる|
 |`FAKE_ENCODER_PID_FILE=PATH`|起動するたびにプロセスIDをPATHへ改行区切りで追記する|
 

@@ -201,7 +201,9 @@ internal static class Program
         {
             using var timeout = new CancellationTokenSource(TestTimeouts.Hang);
             await childReady.WaitForConnectionAsync(timeout.Token);
-            if (childReady.ReadByte() != 1) throw new EndOfStreamException();
+            var ready = new byte[1];
+            if (await childReady.ReadAsync(ready, timeout.Token) != 1 || ready[0] != 1)
+                throw new EndOfStreamException("パイプ保持用の子が準備を通知せずに終了しました");
         }
         catch
         {
@@ -214,25 +216,45 @@ internal static class Program
     private static async Task<int> HoldOutputChildAsync()
     {
         string? controlPipe = Environment.GetEnvironmentVariable("FAKE_ENCODER_HOLD_OUTPUT_PIPE");
-        if (!string.IsNullOrEmpty(controlPipe))
+        if (string.IsNullOrEmpty(controlPipe)) return -24;
+
+        string stage = "制御パイプへの接続";
+        try
         {
-            using var pipeTimeout = new CancellationTokenSource(TestTimeouts.Hang);
             using var control = new NamedPipeClientStream(".", controlPipe, PipeDirection.InOut, PipeOptions.Asynchronous);
-            await control.ConnectAsync(pipeTimeout.Token);
-            using var writer = new StreamWriter(control, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+            await control.ConnectAsync();
             using var reader = new StreamReader(control, Encoding.UTF8, leaveOpen: true);
-            await writer.WriteLineAsync(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            stage = "PIDの送信";
+            await control.WriteAsync(Encoding.ASCII.GetBytes(Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + "\n"));
+            stage = "親への準備通知";
             string readyName = Environment.GetEnvironmentVariable("FAKE_ENCODER_CHILD_READY_PIPE") ?? throw new InvalidOperationException("子の同期先がありません");
             using (var parentReady = new NamedPipeClientStream(".", readyName, PipeDirection.Out, PipeOptions.Asynchronous))
             {
-                await parentReady.ConnectAsync(pipeTimeout.Token);
-                await parentReady.WriteAsync(new byte[] { 1 }, pipeTimeout.Token);
+                await parentReady.ConnectAsync();
+                await parentReady.WriteAsync(new byte[] { 1 });
             }
-            if (await reader.ReadLineAsync(pipeTimeout.Token) != "release") return -24;
-            await writer.WriteLineAsync("0");
+
+            stage = "制御指示の受信";
+            string? command = await reader.ReadLineAsync();
+            if (command == "check")
+            {
+                stage = "継承した標準出力への確認行の送信";
+                await WriteLineAsync("held");
+                stage = "解除指示の受信";
+                command = await reader.ReadLineAsync();
+            }
+            if (command == null) return -24;
+            if (command != "release") throw new InvalidDataException($"同期解除の指示が不正です: {command}");
+
+            stage = "終了コードの送信";
+            await control.WriteAsync("0\n"u8.ToArray());
             return 0;
         }
-        return -24;
+        catch (IOException error)
+        {
+            await Console.Error.WriteLineAsync($"パイプ保持用の子が{stage}で失敗しました: {error}");
+            return -24;
+        }
     }
 
     private static async Task RunServerAsync(ChannelReader<Request> reader)

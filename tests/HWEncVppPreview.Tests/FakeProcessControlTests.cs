@@ -59,44 +59,105 @@ public sealed class FakeProcessControlTests
         Assert.Contains("子の診断", error.Message);
     }
 
-    [Fact]
-    public async Task InheritedPipesStayOpenUntilOwnedChildIsReleased()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task InheritedPipesStayOpenUntilOwnedChildIsReleased(bool sendRelease)
     {
         string pipeName = "fake-output-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         using var parent = Start(new Dictionary<string, string> { ["FAKE_ENCODER_HOLD_OUTPUT_PIPE"] = pipeName });
         Process? child = null;
-        var stderr = parent.StandardError.ReadToEndAsync();
+        var stderr = new StringBuilder();
+        Task stderrEof = CaptureStandardErrorAsync(parent.StandardError, stderr);
+        string stage = "親のREADY";
         try
         {
             var reader = new PreviewProtocolReader(parent.StandardOutput.BaseStream);
             Assert.IsType<PreviewReady>(await NextAsync(reader));
-            await SendAsync(parent, new { cmd = "quit" });
+            stage = "親へのquit送信";
+            await SendAsync(parent, new { cmd = "quit" }).WaitWithDiagnosticsAsync(SafetyTimeout);
+            stage = "子の制御パイプへの接続";
             await PipeWait.UntilConnectedAsync(pipe, pipeName, SafetyTimeout);
             using var pipeReader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+            stage = "子のPIDの受信";
             string pid = await pipeReader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout) ?? throw new EndOfStreamException();
             child = Process.GetProcessById(int.Parse(pid, System.Globalization.CultureInfo.InvariantCulture));
+            stage = "親の終了";
             await parent.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal(0, parent.ExitCode);
-            var eof = parent.StandardOutput.ReadToEndAsync();
-            using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-            await writer.WriteLineAsync("release");
-            await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-            Assert.Equal("0", await pipeReader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
-            Assert.Equal("", await eof.WaitWithDiagnosticsAsync(SafetyTimeout));
-            Assert.Equal("", await stderr.WaitWithDiagnosticsAsync(SafetyTimeout));
+
+            // 親が終了してから確認行を要求し、子が継承した標準出力に書けることを確かめる。
+            stage = "継承した標準出力の確認";
+            await pipe.WriteAsync("check\n"u8.ToArray()).AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+            Assert.Equal("held", await parent.StandardOutput.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
+
+            if (sendRelease)
+            {
+                stage = "子へのrelease送信";
+                await pipe.WriteAsync("release\n"u8.ToArray()).AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+                // 子は応答を書き終えてから終了するため、継承したパイプのEOFを待つ前に応答を読む。
+                stage = "子の終了コードの受信";
+                Assert.Equal("0", await pipeReader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
+            }
+            else
+            {
+                // 試験が途中で失敗して制御パイプを閉じた場合も、子は継承したパイプを手放す。
+                pipe.Dispose();
+            }
+
+            stage = "継承した標準出力と標準エラーのEOF";
+            Assert.Equal("", await parent.StandardOutput.ReadToEndAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
+            await stderrEof.WaitWithDiagnosticsAsync(SafetyTimeout);
+            Assert.Equal("", Snapshot(stderr));
+        }
+        catch (Exception error)
+        {
+            // 最初の失敗を残したまま制御パイプを閉じ、子の診断が届くまで待つ。
+            pipe.Dispose();
+            Exception? cleanupError = null;
+            try
+            {
+                if (!parent.HasExited) await StopAsync(parent);
+                try { await stderrEof.WaitWithDiagnosticsAsync(SafetyTimeout); }
+                catch (TimeoutException) when (child != null)
+                {
+                    await StopAsync(child);
+                    await stderrEof.WaitWithDiagnosticsAsync(SafetyTimeout);
+                }
+            }
+            catch (Exception cleanup)
+            {
+                cleanupError = cleanup;
+            }
+
+            if (error is TimeoutException)
+            {
+                Exception cause = cleanupError == null ? error : new AggregateException(error, cleanupError);
+                throw new TimeoutException($"{stage}で期限切れ (制御パイプ: {pipeName})。標準エラー: {Snapshot(stderr)}。{error.Message}", cause);
+            }
+            if (cleanupError != null) throw new AggregateException(error, cleanupError);
+            throw;
         }
         finally
         {
-            // 途中で失敗しても、この試験が起動したプロセスを終了させる。
-            await StopAsync(parent);
-            if (child != null)
-            {
-                await StopAsync(child);
-                child.Dispose();
-            }
-            await stderr.WaitWithDiagnosticsAsync(SafetyTimeout);
+            child?.Dispose();
         }
+    }
+
+    private static async Task CaptureStandardErrorAsync(StreamReader reader, StringBuilder stderr)
+    {
+        var buffer = new char[1024];
+        int count;
+        while ((count = await reader.ReadAsync(buffer.AsMemory())) != 0)
+        {
+            lock (stderr) stderr.Append(buffer, 0, count);
+        }
+    }
+
+    private static string Snapshot(StringBuilder stderr)
+    {
+        lock (stderr) return stderr.ToString();
     }
 
     private static string CreateDirectory()

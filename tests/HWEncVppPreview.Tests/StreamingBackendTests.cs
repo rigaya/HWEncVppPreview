@@ -218,8 +218,6 @@ public sealed class StreamingBackendTests
         using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         var backend = new ServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_HOLD_OUTPUT_PIPE"] = pipeName);
         Process? child = null;
-        StreamWriter? writer = null;
-        bool released = false;
         try
         {
             var sink = new OpenSink();
@@ -227,11 +225,9 @@ public sealed class StreamingBackendTests
             Task stopping = backend.DisposeAsync().AsTask();
             await PipeWait.UntilConnectedAsync(pipe, pipeName, stopping, SafetyTimeout);
             using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-            writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
             string pid = await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout) ?? throw new EndOfStreamException();
             child = Process.GetProcessById(int.Parse(pid, System.Globalization.CultureInfo.InvariantCulture));
-            await writer.WriteLineAsync("release");
-            released = true;
+            await pipe.WriteAsync("release\n"u8.ToArray()).AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal("0", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
             await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             await stopping.WaitWithDiagnosticsAsync(SafetyTimeout);
@@ -239,14 +235,13 @@ public sealed class StreamingBackendTests
         }
         finally
         {
-            if (!released && writer != null) await writer.WriteLineAsync("release");
+            pipe.Dispose();
             if (child != null)
             {
                 await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
                 child.Dispose();
             }
             await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-            writer?.Dispose();
         }
     }
 
