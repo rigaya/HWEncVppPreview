@@ -72,53 +72,6 @@ public sealed class StreamingBackendTests
     }
 
     [Fact]
-    public async Task CancellationTimeoutDropsTheSession()
-    {
-        await using var backend = TestProcesses.CreateServerBackendWithFiniteTimeouts(cancelTimeout: TimeSpan.FromMilliseconds(500));
-        using var cancellation = new CancellationTokenSource();
-        var sink = new GatedSink();
-        Task<PreviewRunResult> run = backend.RunAsync(Request("--fake-hang-after", "1", "--fake-ignore-cancel"), sink, cancellation.Token);
-        await sink.Paused.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        cancellation.Cancel();
-        PreviewRunResult result = await run.WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.True(result.IsCancelled);
-        Assert.Contains("FAKEPID", result.StandardError);
-        AssertStopped(sink.ProcessId);
-        var next = new OpenSink();
-        Assert.Equal(0, (await backend.RunAsync(Request(), next).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
-        Assert.NotEqual(sink.ProcessId, next.ProcessId);
-    }
-
-    [Fact]
-    public async Task DisposeReportsIncompleteWhenActiveRequestMissesDeadline()
-    {
-        var backend = TestProcesses.CreateServerBackendWithFiniteTimeouts(cancelTimeout: TimeSpan.FromSeconds(5), stopTimeout: TimeSpan.FromSeconds(1));
-        var sink = new GatedSink();
-        Task<PreviewRunResult> run = backend.RunAsync(Request("--fake-hang-after", "1", "--fake-ignore-cancel"), sink);
-        await sink.Paused.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        using var child = Process.GetProcessById(sink.ProcessId);
-        Task disposal = backend.DisposeAsync().AsTask();
-        await Assert.ThrowsAsync<TimeoutException>(() => disposal.WaitWithDiagnosticsAsync(SafetyTimeout));
-        Assert.True((await run.WaitWithDiagnosticsAsync(SafetyTimeout)).IsCancelled);
-        await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.True(child.HasExited);
-    }
-
-    [Fact]
-    public async Task QuitTimeoutReapsTheProcess()
-    {
-        var backend = TestProcesses.CreateServerBackendWithFiniteTimeouts(stopTimeout: TimeSpan.FromSeconds(2), configureStartInfo: info =>
-            info.Environment["FAKE_ENCODER_IGNORE_QUIT"] = "1");
-        var sink = new OpenSink();
-        await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(SafetyTimeout);
-        using var child = Process.GetProcessById(sink.ProcessId);
-        await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-        await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.True(child.HasExited);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => backend.RunAsync(Request(), new OpenSink()).WaitWithDiagnosticsAsync(SafetyTimeout));
-    }
-
-    [Fact]
     public async Task ServerIgnoringCancelCanBeAbortedAndUsedAgain()
     {
         await using var backend = TestProcesses.CreateServerBackend();
@@ -195,10 +148,18 @@ public sealed class StreamingBackendTests
         await using var backend = TestProcesses.CreateServerBackend();
         var sink = new GatedSink();
         Task<PreviewRunResult> run = backend.RunAsync(Request("--fake-hang-after", "1", "--fake-ignore-cancel"), sink);
-        await sink.Paused.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        await backend.AbortAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.True((await run.WaitWithDiagnosticsAsync(SafetyTimeout)).IsCancelled);
-        AssertStopped(sink.ProcessId);
+        try
+        {
+            await sink.Paused.Task;
+            Task<int> exit = backend.ObserveProcessExitAsync();
+            await backend.AbortAsync();
+            Assert.True((await run).IsCancelled);
+            Assert.NotEqual(0, await exit);
+        }
+        finally
+        {
+            await backend.AbortAsync().AsTask().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
     }
 
     [Fact]
@@ -206,9 +167,10 @@ public sealed class StreamingBackendTests
     {
         await using var backend = TestProcesses.CreateServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_IGNORE_QUIT"] = "1");
         var sink = new OpenSink();
-        Assert.Equal(0, (await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
-        await backend.AbortAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-        AssertStopped(sink.ProcessId);
+        Assert.Equal(0, (await backend.RunAsync(Request(), sink)).ExitCode);
+        Task<int> exit = backend.ObserveProcessExitAsync();
+        await backend.AbortAsync();
+        Assert.NotEqual(0, await exit);
     }
 
     [Fact]

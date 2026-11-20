@@ -1,10 +1,13 @@
-﻿namespace HWEncVppPreview.Tests.Testing;
+﻿using System.Threading.Channels;
+
+namespace HWEncVppPreview.Tests.Testing;
 
 /// <summary>テストだけで使う手動時計。Advanceの呼び出し元で期限順にコールバックを実行する。</summary>
 public sealed class FakeTimeProvider : TimeProvider
 {
     private readonly object _gate = new();
     private readonly List<ManualTimer> _timers = new();
+    private Channel<TimeSpan>? _timerRegistrations;
     private readonly DateTimeOffset _origin = DateTimeOffset.UnixEpoch;
     private long _ticks;
     private long _nextOrder;
@@ -29,8 +32,16 @@ public sealed class FakeTimeProvider : TimeProvider
         {
             timer.Change(dueTime, period);
             _timers.Add(timer);
+            if (dueTime != Timeout.InfiniteTimeSpan) _timerRegistrations?.Writer.TryWrite(dueTime);
         }
         return timer;
+    }
+
+    /// <summary>これ以降に登録される有限タイマーの初期期限を、登録順に受け取る。</summary>
+    public ChannelReader<TimeSpan> ObserveTimers()
+    {
+        lock (_gate)
+            return (_timerRegistrations ??= Channel.CreateUnbounded<TimeSpan>()).Reader;
     }
 
     /// <summary>指定時間だけ進める。期限が同じタイマーは登録・変更順に呼び出す。</summary>

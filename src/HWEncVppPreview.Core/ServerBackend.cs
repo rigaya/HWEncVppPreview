@@ -14,7 +14,8 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
     private readonly TimeSpan _cancelTimeout;
     private readonly TimeSpan _stopTimeout;
     private readonly ServerRestartPolicy _restartPolicy;
-    private readonly Action<ProcessStartInfo>? _configure;
+    private readonly TimeSpan _initializationTimeout;
+    private readonly Func<string, IServerProcess> _startProcess;
     private readonly object _sync = new();
     private readonly SemaphoreSlim _runGate = new(1, 1);
     private Session? _session;
@@ -36,7 +37,8 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
         }, timeProvider ?? TimeProvider.System, restartPolicy, configureStartInfo) { }
 
     internal ServerBackend(PreviewTimeouts timeouts, TimeProvider clock,
-        ServerRestartPolicy? restartPolicy = null, Action<ProcessStartInfo>? configureStartInfo = null)
+        ServerRestartPolicy? restartPolicy = null, Action<ProcessStartInfo>? configureStartInfo = null,
+        Func<string, IServerProcess>? startProcess = null)
     {
         _timeProvider = clock;
         _stopTimeout = PreviewTimeouts.Validate(timeouts.Stop, nameof(timeouts.Stop));
@@ -44,7 +46,8 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
         _readyTimeout = PreviewTimeouts.Validate(timeouts.Ready, nameof(timeouts.Ready));
         _cancelTimeout = PreviewTimeouts.Validate(timeouts.Cancel, nameof(timeouts.Cancel));
         _restartPolicy = restartPolicy ?? new ServerRestartPolicy();
-        _configure = configureStartInfo;
+        _initializationTimeout = PreviewTimeouts.Validate(timeouts.Initialization, nameof(timeouts.Initialization));
+        _startProcess = startProcess ?? (path => new ServerProcess(ProcessSupport.Start(path, ["--preview-server"], configureStartInfo)));
     }
 
     // 回収を検証するときは、PIDから開き直さずセッションが所有するプロセスの終了を観測する。
@@ -53,13 +56,7 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
         lock (_sync)
         {
             var session = _session ?? throw new InvalidOperationException("動作中の常駐セッションがありません。");
-            return GetExitCodeAsync(session.Process);
-        }
-
-        static async Task<int> GetExitCodeAsync(Process process)
-        {
-            await process.WaitForExitAsync().ConfigureAwait(false);
-            return process.ExitCode;
+            return session.ObserveExitAsync();
         }
     }
 
@@ -347,7 +344,7 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
             return session;
         }
         if (PerfTrace.Enabled) PerfTrace.Write("server.process_start", new { path });
-        session = new Session(path, ProcessSupport.Start(path, ["--preview-server"], _configure), _timeProvider, _stopTimeout);
+        session = new Session(path, _startProcess(path), _timeProvider, _stopTimeout);
         session.Sink = sink;
         lock (_sync) _session = session;
         var readyTask = Task.Run(session.Reader.ReadEvent);
@@ -479,19 +476,20 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
         private readonly Dictionary<long, RequestLog> _logs = [];
         private readonly Task _stderrTask;
         private Task<bool>? _stopTask;
+        private Task<int>? _exitObservation;
         private readonly int _pid;
         private readonly TimeProvider _clock;
         private readonly TimeSpan _stopTimeout;
         private readonly TaskCompletionSource _forceStop = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private long? _currentLog;
-        public Session(string path, Process process, TimeProvider clock, TimeSpan stopTimeout)
+        public Session(string path, IServerProcess process, TimeProvider clock, TimeSpan stopTimeout)
         {
             Path = path;
             Process = process;
             _pid = process.Id;
             _clock = clock;
             _stopTimeout = stopTimeout;
-            Reader = new PreviewProtocolReader(new ProgressReadStream(process.StandardOutput.BaseStream,
+            Reader = new PreviewProtocolReader(new ProgressReadStream(process.StandardOutput,
                 () => Volatile.Read(ref _sink)?.OnOutput()));
             _stderrTask = DrainErrorAsync();
         }
@@ -502,11 +500,22 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
         public bool SupportsOutputStart { get; set; }
         public Dictionary<string, bool> HistoryRequirements { get; } = new(StringComparer.Ordinal);
         public string Path { get; }
-        public Process Process { get; }
+        public IServerProcess Process { get; }
         public PreviewProtocolReader Reader { get; }
         public Task? LastRead { get; set; }
         public Task CleanupCompletion { get; private set; } = Task.CompletedTask;
         public int CompletedRequests { get; set; }
+
+        public Task<int> ObserveExitAsync()
+        {
+            lock (_sync) return _exitObservation ??= GetExitCodeAsync();
+
+            async Task<int> GetExitCodeAsync()
+            {
+                await Process.WaitForExitAsync().ConfigureAwait(false);
+                return Process.ExitCode;
+            }
+        }
 
         public Task<string> RegisterLog(long id)
         {
@@ -624,7 +633,7 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
                 catch (InvalidOperationException) { }
             }
             Stage("reap_begin");
-            if (!exited) exited = await ProcessSupport.ReapBoundedAsync(Process, _clock, deadline.Remaining).ConfigureAwait(false);
+            if (!exited) exited = await Process.ReapAsync(_clock, deadline.Remaining).ConfigureAwait(false);
             Stage("reap_end");
             Stage("read_begin");
             Task read = LastRead ?? Task.CompletedTask;
@@ -643,7 +652,11 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
                 foreach (var log in _logs.Values) log.Completion.TrySetResult(log.Text.ToString());
                 _logs.Clear();
             }
-            CleanupCompletion = ProcessSupport.DisposeAfterAsync(Process, read, _stderrTask, Process.WaitForExitAsync());
+            lock (_sync)
+            {
+                CleanupCompletion = ProcessSupport.DisposeAfterAsync(Process, read, _stderrTask,
+                    _exitObservation ?? Process.WaitForExitAsync());
+            }
             bool complete = exited && readDone && errorDone;
             Stage(complete ? "complete" : "incomplete");
             return complete;

@@ -120,7 +120,7 @@ public sealed class InputProbeTests
     public async Task TimeoutUsesInjectedClockAndDoesNotCacheFailure()
     {
         var clock = new FakeTimeProvider();
-        await using var probe = TestProcesses.CreateInputProbe(new TimeoutProbeBackend(), clock);
+        await using var probe = TestProcesses.CreateProbeWithSimulatedDeadlines(new TimeoutProbeBackend(), clock);
         Task<InputInfo> run = probe.ProbeAsync("fake", "in.ts");
         // 要求を開始した時点で期限が時計に登録されている。
         clock.Advance(TimeSpan.FromSeconds(30));
@@ -170,12 +170,6 @@ public sealed class InputProbeTests
         {
             await probe.DisposeAsync();
         }
-    }
-
-    [Fact]
-    public void RejectsNonPositiveTimeout()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => TestProcesses.CreateInputProbeWithFiniteTimeout(timeout: TimeSpan.Zero));
     }
 
     [Theory]
@@ -369,7 +363,6 @@ public sealed class InputProbeTests
     public async Task CancelledDurationReapsProcessAndDoesNotCacheFailure()
     {
         string pipeName = "duration-pid-" + Guid.NewGuid().ToString("N");
-        using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         int starts = 0;
         await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info =>
         {
@@ -378,14 +371,19 @@ public sealed class InputProbeTests
             info.ArgumentList.Add("--fake-hang-after");
             info.ArgumentList.Add("0");
         });
+        using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         using var cancellation = new CancellationTokenSource();
         string[] args = ["--fake-duration", "00:00:10.00", "--fake-duration-at-exit"];
         Task<TimeSpan?> run = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args, cancellation.Token);
-        int pid = await ReadPidFromPipeAsync(pipe, pipeName, run);
+        await PipeWait.UntilConnectedAsync(pipe, pipeName, run);
+        using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+        string line = await reader.ReadLineAsync() ?? throw new EndOfStreamException();
+        int pid = int.Parse(line, System.Globalization.CultureInfo.InvariantCulture);
+
         cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitWithDiagnosticsAsync(SafetyTimeout));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
         AssertStopped(pid);
-        Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout));
+        Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args));
     }
 
     [Fact]
@@ -433,21 +431,69 @@ public sealed class InputProbeTests
     [Fact]
     public async Task DurationTimeoutRunsCleanupBeforeReturningDiagnosticException()
     {
-        string name = "duration-timeout-" + Guid.NewGuid().ToString("N");
-        using var pipe = new NamedPipeServerStream(name, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        int starts = 0;
-        await using var probe = TestProcesses.CreateInputProbeWithFiniteTimeout(timeout: TimeSpan.FromSeconds(2), configureStartInfo: info =>
+        var clock = new FakeTimeProvider();
+        var timers = clock.ObserveTimers();
+        var timeout = TimeSpan.FromSeconds(2);
+        var first = new FakeDurationProcess(id: 1);
+        var next = new FakeDurationProcess(id: 2);
+        var processes = new Queue<FakeDurationProcess>([first, next]);
+        await using var probe = TestProcesses.CreateDurationProbe(PreviewTimeouts.Infinite with { Input = timeout }, clock,
+            new TimeoutProbeBackend(), (_, _) => processes.Dequeue());
+
+        try
         {
-            if (Interlocked.Increment(ref starts) == 1) info.Environment["FAKE_ENCODER_PID_PIPE"] = name;
-        });
-        Task<TimeSpan?> run = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-hang-after", "0", "--fake-duration", "00:00:10.00" });
-        int pid = await ReadPidFromPipeAsync(pipe, name, run);
-        var error = await Assert.ThrowsAsync<InputProbeTimeoutException>(() => run.WaitWithDiagnosticsAsync(SafetyTimeout));
-        Assert.IsType<TimeoutException>(error.InnerException);
-        Assert.Contains("Duration:", error.StandardError);
-        AssertStopped(pid);
-        Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "in.ts",
-            new[] { "--fake-duration", "00:00:10.00" }).WaitWithDiagnosticsAsync(SafetyTimeout));
+            const string diagnostic = "Duration: 00:00:10.00, start: 0.0";
+            Task<TimeSpan?> run = probe.ProbeDurationAsync("fake", "in.ts");
+            Assert.Equal(timeout, await timers.ReadAsync());
+            clock.Advance(timeout);
+            await first.KillRequested.Task;
+            first.Complete(diagnostic);
+
+            var error = await Assert.ThrowsAsync<InputProbeTimeoutException>(() => run);
+            Assert.IsType<TimeoutException>(error.InnerException);
+            Assert.Equal(diagnostic, error.StandardError);
+            Assert.True(first.Disposed);
+
+            next.Complete("Duration: 00:00:20.00, start: 0.0");
+            Assert.Equal(TimeSpan.FromSeconds(20), await probe.ProbeDurationAsync("fake", "in.ts"));
+            Assert.True(next.Disposed);
+            Assert.Empty(processes);
+        }
+        finally
+        {
+            first.Complete("");
+            next.Complete("");
+        }
+    }
+
+    private sealed class FakeDurationProcess(int id) : InputProbe.IDurationProcess
+    {
+        private readonly TaskCompletionSource _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _stdoutEof = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<string> _stderrEof = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int Id => id;
+        public bool Disposed { get; private set; }
+        public TaskCompletionSource KillRequested { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task WaitForExitAsync() => _exit.Task;
+        public Task DrainStandardOutputAsync() => _stdoutEof.Task;
+        public Task<string> ReadStandardErrorAsync() => _stderrEof.Task;
+        public void Kill() => KillRequested.TrySetResult();
+        public void Dispose()
+        {
+            Assert.True(_exit.Task.IsCompletedSuccessfully);
+            Assert.True(_stdoutEof.Task.IsCompletedSuccessfully);
+            Assert.True(_stderrEof.Task.IsCompletedSuccessfully);
+            Disposed = true;
+        }
+
+        public void Complete(string stderr)
+        {
+            _exit.TrySetResult();
+            _stdoutEof.TrySetResult();
+            _stderrEof.TrySetResult(stderr);
+        }
     }
 
     private sealed class TimeoutProbeBackend : IPreviewBackend

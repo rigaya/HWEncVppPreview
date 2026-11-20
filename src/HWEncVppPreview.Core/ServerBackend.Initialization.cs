@@ -42,7 +42,7 @@ public sealed partial class ServerBackend
         // 登録を終えてから実行し、実要求が初期化の後ろへ並ぶ順序を確定する。
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         using (cancellation)
-        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30), _timeProvider))
+        using (var timeout = new CancellationTokenSource(_initializationTimeout, _timeProvider))
         using (var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token, timeout.Token))
         {
             long correlationId = Interlocked.Increment(ref _nextInitializationCorrelation);

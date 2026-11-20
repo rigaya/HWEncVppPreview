@@ -60,7 +60,7 @@ public sealed class ExceptionDiagnosticTests
     public async Task CliArgumentFailureIncludesExceptionChainInJson()
     {
         using var output = new StringWriter();
-        int code = await CliProgram.RunAsync(["--enc", "unused", "--input", "unused", "--time", "0", "--watchdog-seconds", "1e300"], output);
+        int code = await CliProgram.RunAsync(["--enc", "unused", "--input", "unused", "--time", "0", "--watchdog-seconds", "1e300"], output, PreviewTimeouts.Infinite);
         Assert.Equal(2, code);
         using var json = JsonDocument.Parse(output.ToString());
         string[] lines = json.RootElement.GetProperty("exceptionChain").EnumerateArray().Select(value => value.GetString()!).ToArray();

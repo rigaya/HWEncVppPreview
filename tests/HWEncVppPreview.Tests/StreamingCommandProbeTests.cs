@@ -78,7 +78,7 @@ public sealed class StreamingCommandProbeTests
     {
         var clock = new ProbeShutdownClock();
         var backend = new UnresponsiveProbeBackend();
-        var probe = TestProcesses.CreateInputProbe(backend, clock);
+        var probe = TestProcesses.CreateProbeWithSimulatedDeadlines(backend, clock);
         Task<InputInfo> preparation = probe.ProbeAsync("cpu-stub", "input.ts");
         try
         {

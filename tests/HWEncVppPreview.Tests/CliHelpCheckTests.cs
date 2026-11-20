@@ -13,7 +13,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class CliHelpCheckTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private const string Prefix = "VPP Options:\n\n  [denoise] Denoise\n";
     private const string Valid = Prefix + "   --vpp-example [<param1>=<value>][,<param2>=<value>][...]\n    params\n"
         + "      amount=<float> Amount. (default: 0.25, range: 0..1)\n"
@@ -191,25 +190,70 @@ public sealed class CliHelpCheckTests
     }
 
     [Fact]
-    public async Task CaptureTimeoutReapsTheChild()
+    public async Task CaptureTimeoutRequestsKillAndReportsCompletedCleanup()
     {
-        await using var child = new FakeCapture("hang");
-        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TimeSpan.FromSeconds(2));
-        int pid = await child.ReadPidAsync(capture);
-        var error = await Assert.ThrowsAsync<HelpCaptureException>(() => capture.WaitWithDiagnosticsAsync(Safety));
+        var clock = new FakeTimeProvider();
+        var timers = clock.ObserveTimers();
+        var captureTimeout = TimeSpan.FromSeconds(2);
+        var cleanupTimeout = TimeSpan.FromSeconds(5);
+        var child = new ControlledHelpProcess();
+        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(
+            () => child, clock, captureTimeout, cleanupTimeout);
+
+        Assert.Equal(captureTimeout, await timers.ReadAsync());
+        clock.Advance(captureTimeout);
+        await child.KillRequested.Task;
+        Assert.Equal(cleanupTimeout, await timers.ReadAsync());
+        child.Exit(23);
+
+        var error = await Assert.ThrowsAsync<HelpCaptureException>(() => capture);
         Assert.True(error.TimedOut);
         Assert.IsType<TimeoutException>(error.InnerException);
         Assert.Contains("help", error.Message, StringComparison.Ordinal);
-        AssertStopped(pid);
-        await using var next = new FakeCapture("stdout");
-        Task<HelpProcessResult> recovery = CaptureUntilExitAsync(next.StartInfo());
-        int nextPid = await next.ReadPidAsync(recovery);
-        Assert.Equal(0, (await recovery).ExitCode);
-        AssertStopped(nextPid);
+        Assert.Equal(23, error.EncoderExitCode);
+        Assert.Equal(ControlledHelpProcess.ErrorText, error.StandardError);
+        Assert.Null(error.CleanupError);
+        Assert.False(child.PipesClosed);
+        await child.Disposed.Task;
     }
 
     [Fact]
-    public async Task CancelledCaptureReapsItsParent()
+    public async Task CleanupTimeoutClosesPipesAndDisposesAfterLateExit()
+    {
+        var clock = new FakeTimeProvider();
+        var timers = clock.ObserveTimers();
+        var captureTimeout = TimeSpan.FromSeconds(2);
+        var cleanupTimeout = TimeSpan.FromSeconds(5);
+        var child = new ControlledHelpProcess();
+        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(
+            () => child, clock, captureTimeout, cleanupTimeout);
+
+        try
+        {
+            Assert.Equal(captureTimeout, await timers.ReadAsync());
+            clock.Advance(captureTimeout);
+            await child.KillRequested.Task;
+            Assert.Equal(cleanupTimeout, await timers.ReadAsync());
+            clock.Advance(cleanupTimeout);
+
+            var error = await Assert.ThrowsAsync<HelpCaptureException>(() => capture);
+            Assert.True(error.TimedOut);
+            Assert.NotNull(error.CleanupError);
+            Assert.Null(error.EncoderExitCode);
+            Assert.True(child.PipesClosed);
+            // 終了を通知するまでは、回収が期限切れでも所有プロセスを破棄できない。
+            Assert.False(child.Disposed.Task.IsCompleted);
+        }
+        finally
+        {
+            child.Exit(23);
+        }
+
+        await child.Disposed.Task;
+    }
+
+    [Fact]
+    public async Task ExplicitCancellationForciblyReapsEncoder()
     {
         await using var child = new FakeCapture("hang");
         using var cancellation = new CancellationTokenSource();
@@ -227,6 +271,12 @@ public sealed class CliHelpCheckTests
             cancellation.Cancel();
             await ((Task)capture).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
         }
+
+        await using var next = new FakeCapture("stdout");
+        Task<HelpProcessResult> recovery = CaptureUntilExitAsync(next.StartInfo());
+        int nextPid = await next.ReadPidAsync(recovery);
+        Assert.Equal(0, (await recovery).ExitCode);
+        AssertStopped(nextPid);
     }
 
     [Fact]
@@ -264,8 +314,9 @@ public sealed class CliHelpCheckTests
     {
         using var stop = new CancellationTokenSource();
         stop.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            CaptureUntilExitAsync(HelpProcessCapture.StartInfo("存在しないexe"), stop.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => HelpProcessCapture.CaptureAsync(
+            () => throw new InvalidOperationException("取消後にプロセスが作成された"),
+            TimeProvider.System, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan, stop.Token));
     }
 
     private static Task<HelpProcessResult> CaptureUntilExitAsync(ProcessStartInfo start, CancellationToken token = default)
@@ -276,7 +327,7 @@ public sealed class CliHelpCheckTests
     private static async Task<Run> RunAsync(params string[] args)
     {
         using var output = new StringWriter(CultureInfo.InvariantCulture);
-        int code = await CliProgram.RunAsync(args, output);
+        int code = await CliProgram.RunAsync(args, output, PreviewTimeouts.Infinite);
         string[] lines = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.Single(lines);
         return new(code, JsonDocument.Parse(lines[0]));
@@ -295,6 +346,38 @@ public sealed class CliHelpCheckTests
         public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "viewer-help-" + Guid.NewGuid().ToString("N") + ".txt");
         public TextFile(string text) => File.WriteAllText(Path, text);
         public void Dispose() => File.Delete(Path);
+    }
+
+    private sealed class ControlledHelpProcess : HelpProcessCapture.IHelpProcess
+    {
+        public const string ErrorText = "偽プロセスの標準エラー";
+        private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<string> _output = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource KillRequested { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool PipesClosed { get; private set; }
+        public bool HasExited => _exit.Task.IsCompletedSuccessfully;
+        public int ExitCode => _exit.Task.GetAwaiter().GetResult();
+
+        public bool Start() => true;
+        public Task<string> ReadStandardOutputAsync() => _output.Task;
+        public Task<string> ReadStandardErrorAsync() => Task.FromResult(ErrorText);
+        public Task WaitForExitAsync() => _exit.Task;
+        public void KillTree() => KillRequested.SetResult();
+
+        public void Exit(int code)
+        {
+            _output.TrySetResult("");
+            _exit.SetResult(code);
+        }
+
+        public void ClosePipes()
+        {
+            PipesClosed = true;
+            _output.TrySetResult("");
+        }
+
+        public void Dispose() => Disposed.SetResult();
     }
 
     private sealed class FakeCapture : IAsyncDisposable

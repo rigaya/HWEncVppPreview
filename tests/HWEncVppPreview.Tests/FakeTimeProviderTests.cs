@@ -91,6 +91,21 @@ public class FakeTimeProviderTests
     }
 
     [Fact]
+    public async Task 有限タイマーの登録だけを登録順に通知する()
+    {
+        var clock = new FakeTimeProvider();
+        var registrations = clock.ObserveTimers();
+        var waiting = registrations.ReadAsync();
+        using var disabled = clock.CreateTimer(_ => { }, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        using var second = clock.CreateTimer(_ => { }, null, TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
+        using var first = clock.CreateTimer(_ => { }, null, TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
+
+        Assert.Equal(TimeSpan.FromSeconds(2), await waiting);
+        Assert.Equal(TimeSpan.FromSeconds(1), await registrations.ReadAsync());
+        Assert.False(registrations.TryRead(out _));
+    }
+
+    [Fact]
     public void 負の経過と不正な期限は拒否する()
     {
         var clock = new FakeTimeProvider();

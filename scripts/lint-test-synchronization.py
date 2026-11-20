@@ -31,6 +31,69 @@ def code_only(source):
     return non_code.sub(lambda match: re.sub(r'[^\n]', ' ', match.group()), source)
 
 
+core_tests = Path('tests/HWEncVppPreview.Tests')
+fixture = Path('tests/TestProcesses.cs')
+validation = core_tests / 'PreviewTimeoutsTests.cs'
+server_deadlines = core_tests / 'ServerDeadlineTests.cs'
+cli_capture = core_tests / 'CliHelpCheckTests.cs'
+fake_clock = re.compile(r'\bnew\s+(?:[\w.]+\.)?FakeTimeProvider\s*\(')
+real_process = re.compile(
+    r'\b(?:TestProcesses\s*\.\s*CreateServerBackend|Process(?:Support)?\s*\.\s*Start|'
+    r'CliProgram\s*\.\s*RunAsync|CaptureUntilExitAsync)\s*\('
+    r'|\bTestProcesses\s*\.\s*CreateInputProbe\s*\(\s*(?:configureStartInfo\s*:|\))'
+)
+finite_product = re.compile(
+    r'\bPreviewTimeouts\s*\.\s*(?:Default\b|Infinite\s+with\b)'
+    r'|\bnew\s+(?:(?:global|\w+)\s*::\s*)?(?:\w+\s*\.\s*)*PreviewTimeouts\s*[({]'
+    r'|\b(?:CreateServerBackendWithFiniteTimeouts|CreateInputProbeWithFiniteTimeout)\s*\('
+    r'|\b(?:HelpProcessCapture\s*\.\s*CaptureAsync|CliProgram\s*\.\s*RunAsync)\s*\('
+)
+
+
+def allowed_process_construction(path, tail):
+    if path == fixture:
+        # 実プロセスを生成できる共通入口では無限プロファイルを明示する。
+        return bool(re.match(r'[^;{]*?\bnew\s*\(\s*(?:PreviewTimeouts\s*\.\s*Infinite\b|timeouts\b)',
+                             tail, re.S))
+    if path == validation:
+        # 公開境界の不正引数を確かめる式は生成前に例外を返す。
+        return bool(re.match(r'new\s+(?:ServerBackend\s*\(\s*(?:ready|probe|cancel|stop)Timeout\s*:\s*infinite'
+                             r'|InputProbe\s*\(\s*timeout\s*:\s*(?:infinite|TimeSpan\.Zero))\s*\)', tail))
+    if path == server_deadlines:
+        return bool(re.match(r'new\s+ServerBackend\s*\(\s*timeouts\s*,\s*clock\s*,\s*startProcess\s*:', tail))
+    return False
+
+
+def allowed_product_deadline(path, code, match):
+    expression = match.group()
+    tail = code[match.end():]
+    if re.fullmatch(r'PreviewTimeouts\s*\.\s*Default', expression):
+        return path == validation and bool(re.match(r'\s*\)\s*\)\s*;', tail))
+    if re.fullmatch(r'PreviewTimeouts\s*\.\s*Infinite\s+with', expression):
+        prefix = code[:match.start()]
+        if path == server_deadlines:
+            return bool(re.search(r'new\s+Sessions\s*\(\s*clock\s*,\s*$', prefix))
+        if path == core_tests / 'InputProbeTests.cs':
+            return bool(re.search(r'TestProcesses\.CreateDurationProbe\s*\(\s*$', prefix)
+                        and re.match(r'\s*\{[^{}]*\}\s*,\s*clock\s*,', tail))
+        if path == fixture:
+            return bool(re.match(r'\s*\{[^{}]*\}\s*,\s*clock\s*,\s*backend\s*:\s*backend\s*,'
+                                 r'\s*startDurationProcess\s*:\s*\(_,\s*_\)\s*=>\s*throw\b', tail))
+        return False
+    if re.fullmatch(r'CliProgram\s*\.\s*RunAsync\s*\(', expression):
+        # 通常の試験入口は無限プロファイルを明示する。引数配列中の文字列は除去済み。
+        return bool(re.match(r'\s*(?:\w+|\[[^\]]*\])\s*,\s*\w+\s*,\s*PreviewTimeouts\s*\.\s*Infinite\b', tail))
+    if re.fullmatch(r'HelpProcessCapture\s*\.\s*CaptureAsync\s*\(', expression):
+        if path != cli_capture:
+            return False
+        return bool(re.match(r'\s*(?:\(\)\s*=>\s*child\s*,\s*clock\s*,'
+                             r'|\(\)\s*=>\s*throw\s+new\s+InvalidOperationException\s*\(\s*\)\s*,'
+                             r'\s*TimeProvider\.System\s*,\s*Timeout\.InfiniteTimeSpan\s*,\s*Timeout\.InfiniteTimeSpan'
+                             r'|start\s*,\s*TimeProvider\.System\s*,\s*PreviewTimeouts\.Infinite\.CliHelp'
+                             r'\s*,\s*PreviewTimeouts\.Infinite\.HelpCleanup)', tail))
+    return False
+
+
 if len(sys.argv) > 1 and sys.argv[1] == '--self-test':
     examples = {
         '時間待ち': ['await Task.Delay(10);', 'SpinWait.SpinUntil(check);'],
@@ -72,6 +135,31 @@ if len(sys.argv) > 1 and sys.argv[1] == '--self-test':
     ]
     if any(direct_process.search(code_only(example)) for example in indirect):
         raise SystemExit('試験でのプロセス間接構築を誤検出しました')
+    deadline_examples = [
+        (core_tests / 'UnrelatedTests.cs', 'Run(PreviewTimeouts.Default);', False),
+        (core_tests / 'UnrelatedTests.cs', 'Run(PreviewTimeouts.Infinite with { Ready = timeout });', False),
+        (core_tests / 'UnrelatedTests.cs', 'var p = new PreviewTimeouts { Ready = timeout };', False),
+        (core_tests / 'UnrelatedTests.cs', 'TestProcesses.CreateServerBackendWithFiniteTimeouts();', False),
+        (core_tests / 'CliTests.cs', 'await CliProgram.RunAsync(args, output);', False),
+        (core_tests / 'CliTests.cs', 'await CliProgram.RunAsync(args, output, PreviewTimeouts.Infinite);', True),
+        (cli_capture, 'HelpProcessCapture.CaptureAsync(start, TimeProvider.System, finite, cleanup);', False),
+        (cli_capture, 'HelpProcessCapture.CaptureAsync(() => child, clock, timeout, cleanup);', True),
+        (server_deadlines, 'new Sessions(clock, PreviewTimeouts.Infinite with { Ready = timeout });', True),
+        (server_deadlines, 'Run(PreviewTimeouts.Infinite with { Ready = timeout });', False),
+        (core_tests / 'InputProbeTests.cs', 'TestProcesses.CreateDurationProbe(PreviewTimeouts.Infinite with { Input = timeout }, clock, backend, create);', True),
+        (fixture, 'new(PreviewTimeouts.Infinite with { Input = timeout }, TimeProvider.System);', False),
+        (fixture, 'new(PreviewTimeouts.Infinite with { Input = timeout }, clock, backend: backend, startDurationProcess: (_, _) => throw Bad());', True),
+        (core_tests / 'UnrelatedTests.cs', 'Run(new global::HWEncVppPreview.Core.PreviewTimeouts());', False),
+    ]
+    for file, sample, allowed in deadline_examples:
+        code = code_only(sample)
+        match = finite_product.search(code)
+        if match is None or allowed_product_deadline(file, code, match) != allowed:
+            raise SystemExit('製品期限の検査に失敗しました: ' + sample)
+    for sample in ('TestProcesses.CreateInputProbe()', 'ProcessSupport.Start(path, args, null)',
+                   'TestProcesses.CreateServerBackend()', 'CaptureUntilExitAsync(info)'):
+        if not real_process.search(sample):
+            raise SystemExit('実プロセスの起動を検出できません: ' + sample)
     print('試験検査の自己確認に成功しました')
     sys.exit(0)
 issues = []
@@ -86,24 +174,28 @@ for path in sorted((root / 'tests').rglob('*.cs')):
     # 直接記述された混在を捕捉する。補助経由の依存関係は別途、呼出経路を確認する。
     source = path.read_text(encoding='utf-8-sig')
     relative = path.relative_to(root)
-    if relative != Path('tests/TestProcesses.cs'):
-        for match in direct_process.finditer(code_only(source)):
+    code = code_only(source)
+    for match in direct_process.finditer(code):
+        if not allowed_process_construction(relative, code[match.start():]):
             number = source.count('\n', 0, match.start()) + 1
             issues.append((relative, number, 'プロセスの直接構築', 'TestProcessesの作成補助を使ってください'))
+    for match in finite_product.finditer(code):
+        if not allowed_product_deadline(relative, code, match):
+            number = source.count('\n', 0, match.start()) + 1
+            issues.append((relative, number, '実時間の製品期限', match.group().replace('\n', ' ')))
     # setterへの反射は行をまたぐことがあるため、行単位の検査とは別に拾う。
     for match in re.finditer(r'\.GetProperty\s*\([^\n]*\)\s*!?\s*\.SetValue\s*\(', source):
         number = source.count('\n', 0, match.start()) + 1
         issues.append((path.relative_to(root), number, 'setterへの反射', match.group().replace('\n', ' ')))
     method = re.compile(r'\b(?:public|private|internal)\s+(?:static\s+)?(?:async\s+)?(?:Task(?:<[^>]+>)?|void)\s+(\w+)\s*\([^)]*\)\s*\{')
-    for match in method.finditer(source):
+    for match in method.finditer(code):
         depth, end = 1, match.end()
         while end < len(source) and depth:
-            if source[end] == '{': depth += 1
-            elif source[end] == '}': depth -= 1
+            if code[end] == '{': depth += 1
+            elif code[end] == '}': depth -= 1
             end += 1
-        body = source[match.end():end]
-        if re.search(r'\bnew\s+FakeTimeProvider\s*\(', body) and re.search(
-                r'\b(?:new\s+(?:ServerBackend|OneShotBackend)|TestProcesses\s*\.\s*CreateServerBackend\w*|Process\s*\.\s*Start)\s*\(', body):
+        body = code[match.end():end]
+        if fake_clock.search(body) and real_process.search(body):
             number = source.count('\n', 0, match.start()) + 1
             issues.append((path.relative_to(root), number, '偽時計と実プロセスの直接混在', match.group(1)))
 for path, number, name, line in issues:

@@ -48,8 +48,9 @@ public sealed class InputProbe : IAsyncDisposable
     private readonly SemaphoreSlim _durationGate = new(1, 1);
     private readonly Dictionary<ProbeKey, InputInfo> _cache = new();
     private readonly Dictionary<ProbeKey, TimeSpan?> _durationCache = new();
-    private readonly Dictionary<Process, Task> _durationProcesses = new();
+    private readonly Dictionary<IDurationProcess, Task> _durationProcesses = new();
     private readonly Action<ProcessStartInfo>? _configureStartInfo;
+    private readonly Func<string, IEnumerable<string>, IDurationProcess>? _startDurationProcess;
     private readonly IPreviewBackend _backend;
     private readonly TimeSpan _stopTimeout;
     private readonly TimeProvider _clock;
@@ -66,18 +67,16 @@ public sealed class InputProbe : IAsyncDisposable
         }, timeProvider ?? TimeProvider.System, configureStartInfo) { }
 
     internal InputProbe(PreviewTimeouts timeouts, TimeProvider clock,
-        Action<ProcessStartInfo>? configureStartInfo = null, IPreviewBackend? backend = null)
+        Action<ProcessStartInfo>? configureStartInfo = null, IPreviewBackend? backend = null,
+        Func<string, IEnumerable<string>, IDurationProcess>? startDurationProcess = null)
     {
         _clock = clock;
         _timeout = PreviewTimeouts.Validate(timeouts.Input, nameof(timeouts.Input));
         _stopTimeout = PreviewTimeouts.Validate(timeouts.InputCleanup, nameof(timeouts.InputCleanup));
         _backend = backend ?? new ServerBackend(timeouts, clock, configureStartInfo: configureStartInfo);
         _configureStartInfo = configureStartInfo;
+        _startDurationProcess = startDurationProcess;
     }
-
-    // 終了要求を無視する検査backendの回帰を、GPUやOSの異常終了に頼らず再現する。
-    internal InputProbe(IPreviewBackend backend, TimeProvider timeProvider, Action<ProcessStartInfo>? configureStartInfo = null)
-        : this(PreviewTimeouts.Default, timeProvider, configureStartInfo, backend) { }
 
     /// <summary>追加引数の既定は空。引数配列を複製し、値が同じ要求にはキャッシュを返す。</summary>
     /// <exception cref="InputProbeException">エンコーダがエラー終了した、または有効なヘッダがない。</exception>
@@ -184,7 +183,7 @@ public sealed class InputProbe : IAsyncDisposable
             {
                 "-i", inputFile, "--log-level", "input=debug", "--frames", "1", "-c", "raw", "-o", "-",
             });
-            Process? process = null;
+            IDurationProcess? process = null;
             int pid = 0;
             Task<string>? stderr = null;
             Task completion = Task.CompletedTask;
@@ -204,15 +203,17 @@ public sealed class InputProbe : IAsyncDisposable
                 lock (_sync)
                 {
                     cancellation.Token.ThrowIfCancellationRequested();
-                    process = ProcessSupport.Start(encoderPath, command, _configureStartInfo);
+                    process = _startDurationProcess != null
+                        ? _startDurationProcess(encoderPath, command)
+                        : new DurationProcess(ProcessSupport.Start(encoderPath, command, _configureStartInfo));
                     pid = process.Id;
                     var pending = new List<Task>();
                     try
                     {
                         // 終了待ちは一度だけ作り、回収側がDispose後に新しい待ちを登録しないようにする。
                         pending.Add(process.WaitForExitAsync());
-                        pending.Add(process.StandardOutput.BaseStream.CopyToAsync(Stream.Null));
-                        stderr = process.StandardError.ReadToEndAsync();
+                        pending.Add(process.DrainStandardOutputAsync());
+                        stderr = process.ReadStandardErrorAsync();
                         pending.Add(stderr);
                     }
                     finally
@@ -222,7 +223,7 @@ public sealed class InputProbe : IAsyncDisposable
                         _durationProcesses.Add(process, completion);
                     }
                 }
-                registration = cancellation.Token.Register(() => ProcessSupport.Observe(Task.Run(() => ProcessSupport.Kill(process))));
+                registration = cancellation.Token.Register(() => ProcessSupport.Observe(Task.Run(process.Kill)));
                 try { await completion.WaitAsync(_timeout, _clock, cancellation.Token).ConfigureAwait(false); }
                 catch (TimeoutException exception)
                 {
@@ -333,7 +334,7 @@ public sealed class InputProbe : IAsyncDisposable
         // backendの終了が先に見えてエラー扱いされないよう、取消要求だけ先に立てる。
         Task cancellation = _lifetime.CancelAsync();
         Task backend = Task.Run(async () => await _backend.DisposeAsync().ConfigureAwait(false));
-        KeyValuePair<Process, Task>[] processes;
+        KeyValuePair<IDurationProcess, Task>[] processes;
         lock (_sync)
         {
             processes = _durationProcesses.ToArray();
@@ -354,11 +355,11 @@ public sealed class InputProbe : IAsyncDisposable
             TaskContinuationOptions.None, TaskScheduler.Default));
     }
 
-    private async Task StopDurationProcessAsync(Process process, Task completion, TimeSpan timeout)
+    private async Task StopDurationProcessAsync(IDurationProcess process, Task completion, TimeSpan timeout)
     {
         var deadline = new CleanupDeadline(_clock, timeout);
         int pid = process.Id;
-        Task kill = Task.Run(() => ProcessSupport.Kill(process));
+        Task kill = Task.Run(process.Kill);
         bool complete = false;
         try
         {
@@ -374,6 +375,26 @@ public sealed class InputProbe : IAsyncDisposable
             if (complete) process.Dispose();
             else ProcessSupport.DisposeAfter(process, kill, completion);
         }
+    }
+
+    // プロセス終了と出力のEOFを個別に制御し、長さ検査の回収順を検証する。
+    internal interface IDurationProcess : IDisposable
+    {
+        int Id { get; }
+        Task WaitForExitAsync();
+        Task DrainStandardOutputAsync();
+        Task<string> ReadStandardErrorAsync();
+        void Kill();
+    }
+
+    private sealed class DurationProcess(Process process) : IDurationProcess
+    {
+        public int Id => process.Id;
+        public Task WaitForExitAsync() => process.WaitForExitAsync();
+        public Task DrainStandardOutputAsync() => process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
+        public Task<string> ReadStandardErrorAsync() => process.StandardError.ReadToEndAsync();
+        public void Kill() => ProcessSupport.Kill(process);
+        public void Dispose() => process.Dispose();
     }
 
     private async Task ClearAfterGateAsync(SemaphoreSlim gate, Action clear)

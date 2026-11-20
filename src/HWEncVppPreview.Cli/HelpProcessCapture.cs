@@ -27,22 +27,17 @@ internal static class HelpProcessCapture
     }
 
     internal static Task<HelpProcessResult> CaptureAsync(ProcessStartInfo start, TimeProvider clock,
-        TimeSpan timeout, CancellationToken token = default)
-        => CaptureAsync(start, clock, timeout, PreviewTimeouts.Default.HelpCleanup, token);
+        TimeSpan timeout, TimeSpan cleanupTimeout, CancellationToken token = default)
+        => CaptureAsync(() => new HelpProcess(start), clock, timeout, cleanupTimeout, token);
 
-    internal static async Task<HelpProcessResult> CaptureAsync(ProcessStartInfo start, TimeProvider clock,
+    // 取得と回収の同じ処理を、起動・出力・終了を独立に制御できる相手でも検証する。
+    internal static async Task<HelpProcessResult> CaptureAsync(Func<IHelpProcess> createProcess, TimeProvider clock,
         TimeSpan timeout, TimeSpan cleanupTimeout, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         PreviewTimeouts.Validate(timeout, nameof(timeout));
         PreviewTimeouts.Validate(cleanupTimeout, nameof(cleanupTimeout));
-        start.UseShellExecute = false;
-        start.RedirectStandardOutput = true;
-        start.RedirectStandardError = true;
-        start.StandardOutputEncoding = Encoding.UTF8;
-        start.StandardErrorEncoding = Encoding.UTF8;
-        start.CreateNoWindow = true;
-        var process = new Process { StartInfo = start };
+        IHelpProcess process = createProcess();
         Task<string>? stdout = null, stderr = null;
         Task? exited = null, kill = null;
         bool started = false;
@@ -53,8 +48,8 @@ internal static class HelpProcessCapture
         {
             if (!process.Start()) throw new IOException("helpの子プロセスを開始できません。");
             started = true;
-            stdout = process.StandardOutput.ReadToEndAsync();
-            stderr = process.StandardError.ReadToEndAsync();
+            stdout = process.ReadStandardOutputAsync();
+            stderr = process.ReadStandardErrorAsync();
             // Dispose済みProcessに対する再待機を避け、終了待ちは所有者が一度だけ作る。
             exited = process.WaitForExitAsync();
             await Task.WhenAll(exited, stdout, stderr).WaitAsync(timeout, clock, token).ConfigureAwait(false);
@@ -67,7 +62,7 @@ internal static class HelpProcessCapture
             {
                 kill = Task.Run(() =>
                 {
-                    try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+                    try { if (!process.HasExited) process.KillTree(); }
                     catch (InvalidOperationException) { }
                 });
                 try
@@ -79,8 +74,7 @@ internal static class HelpProcessCapture
                 {
                     cleanupError = exception.Message;
                     // 親が先に終了して孫がpipeを持つ場合も、取得側の返却を無期限に止めない。
-                    try { process.StandardOutput.Dispose(); } catch (Exception) { }
-                    try { process.StandardError.Dispose(); } catch (Exception) { }
+                    process.ClosePipes();
                 }
             }
             if (started)
@@ -106,5 +100,49 @@ internal static class HelpProcessCapture
             throw new OperationCanceledException("helpの取得を取り消しました。", failure, token);
         throw new HelpCaptureException("helpの取得に失敗しました: " + failure!.Message, failure,
             failure is TimeoutException, encoderExitCode, stderr?.IsCompletedSuccessfully == true ? stderr.Result : "", cleanupError);
+    }
+
+    internal interface IHelpProcess : IDisposable
+    {
+        bool Start();
+        Task<string> ReadStandardOutputAsync();
+        Task<string> ReadStandardErrorAsync();
+        Task WaitForExitAsync();
+        bool HasExited { get; }
+        int ExitCode { get; }
+        void KillTree();
+        void ClosePipes();
+    }
+
+    private sealed class HelpProcess : IHelpProcess
+    {
+        private readonly Process _process;
+
+        public HelpProcess(ProcessStartInfo start)
+        {
+            start.UseShellExecute = false;
+            start.RedirectStandardOutput = true;
+            start.RedirectStandardError = true;
+            start.StandardOutputEncoding = Encoding.UTF8;
+            start.StandardErrorEncoding = Encoding.UTF8;
+            start.CreateNoWindow = true;
+            _process = new Process { StartInfo = start };
+        }
+
+        public bool Start() => _process.Start();
+        public Task<string> ReadStandardOutputAsync() => _process.StandardOutput.ReadToEndAsync();
+        public Task<string> ReadStandardErrorAsync() => _process.StandardError.ReadToEndAsync();
+        public Task WaitForExitAsync() => _process.WaitForExitAsync();
+        public bool HasExited => _process.HasExited;
+        public int ExitCode => _process.ExitCode;
+        public void KillTree() => _process.Kill(entireProcessTree: true);
+
+        public void ClosePipes()
+        {
+            try { _process.StandardOutput.Dispose(); } catch (Exception) { }
+            try { _process.StandardError.Dispose(); } catch (Exception) { }
+        }
+
+        public void Dispose() => _process.Dispose();
     }
 }

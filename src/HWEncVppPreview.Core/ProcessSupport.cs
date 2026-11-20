@@ -81,9 +81,9 @@ internal static class ProcessSupport
         CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
         TaskScheduler.Default);
 
-    public static void DisposeAfter(Process process, params Task[] tasks) => _ = DisposeAfterAsync(process, tasks);
+    public static void DisposeAfter(IDisposable process, params Task[] tasks) => _ = DisposeAfterAsync(process, tasks);
 
-    public static Task DisposeAfterAsync(Process process, params Task[] tasks)
+    public static Task DisposeAfterAsync(IDisposable process, params Task[] tasks)
     {
         // 未完了のpipe操作とDisposeを競合させず、遅れて完了した場合にも資源を解放する。
         Task cleanup = Task.WhenAll(tasks).ContinueWith(_ => process.Dispose(), CancellationToken.None,

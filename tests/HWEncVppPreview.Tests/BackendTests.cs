@@ -79,30 +79,34 @@ public sealed class BackendTests
     }
 
     [Fact]
-    public async Task MissingReadyTimesOutAndDropsTheSession()
+    public async Task AbortReapsServerWaitingForReady()
     {
         string name = "missing-ready-" + Guid.NewGuid().ToString("N");
         using var pipe = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.In, 1,
             System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
-        int starts = 0;
-        await using var backend = TestProcesses.CreateServerBackendWithFiniteTimeouts(readyTimeout: TimeSpan.FromSeconds(2), configureStartInfo: info =>
+        var backend = TestProcesses.CreateServerBackend(configureStartInfo: info =>
         {
-            if (Interlocked.Increment(ref starts) == 1)
-            {
-                info.Environment["FAKE_ENCODER_READY_NONE"] = "1";
-                info.Environment["FAKE_ENCODER_PID_PIPE"] = name;
-            }
+            info.Environment["FAKE_ENCODER_READY_NONE"] = "1";
+            info.Environment["FAKE_ENCODER_PID_PIPE"] = name;
         });
-        Task<PreviewRunResult> first = backend.RunAsync(Request(), new RecordingSink());
-        await PipeWait.UntilConnectedAsync(pipe, name, first, SafetyTimeout);
-        using var reader = new StreamReader(pipe);
-        int pid = int.Parse(await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout) ?? throw new EndOfStreamException());
-        var error = await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => first.WaitWithDiagnosticsAsync(SafetyTimeout));
-        Assert.IsType<TimeoutException>(error.InnerException);
-        AssertStopped(pid);
-        var next = new RecordingSink();
-        Assert.Equal(0, (await backend.RunAsync(Request(), next).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
-        Assert.NotEqual(pid, next.ProcessId);
+        Task<PreviewRunResult> run = backend.RunAsync(Request(), new RecordingSink());
+        try
+        {
+            await PipeWait.UntilConnectedAsync(pipe, name, run);
+            using var reader = new StreamReader(pipe, System.Text.Encoding.UTF8, leaveOpen: true);
+            Assert.True(int.TryParse(await reader.ReadLineAsync(), out int pid) && pid > 0);
+            Task<int> exit = backend.ObserveProcessExitAsync();
+
+            await backend.AbortAsync();
+            Assert.True((await run).IsCancelled);
+            Assert.NotEqual(0, await exit);
+        }
+        finally
+        {
+            pipe.Dispose();
+            await backend.AbortAsync().AsTask().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+            await backend.DisposeAsync().AsTask().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
     }
 
     [Fact]

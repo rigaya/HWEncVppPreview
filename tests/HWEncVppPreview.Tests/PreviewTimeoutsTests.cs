@@ -13,7 +13,7 @@ public sealed class PreviewTimeoutsTests
             TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5),
             TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30),
             TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5),
-            TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30),
         }, Values(PreviewTimeouts.Default));
         Assert.All(Values(PreviewTimeouts.Infinite), value => Assert.Equal(Timeout.InfiniteTimeSpan, value));
     }
@@ -23,15 +23,18 @@ public sealed class PreviewTimeoutsTests
     {
         TimeSpan infinite = Timeout.InfiniteTimeSpan;
         Assert.Equal("readyTimeout", Assert.Throws<ArgumentOutOfRangeException>(() =>
-            TestProcesses.CreateServerBackendWithFiniteTimeouts(readyTimeout: infinite)).ParamName);
+            new ServerBackend(readyTimeout: infinite)).ParamName);
         Assert.Equal("probeTimeout", Assert.Throws<ArgumentOutOfRangeException>(() =>
-            TestProcesses.CreateServerBackendWithFiniteTimeouts(probeTimeout: infinite)).ParamName);
+            new ServerBackend(probeTimeout: infinite)).ParamName);
         Assert.Equal("cancelTimeout", Assert.Throws<ArgumentOutOfRangeException>(() =>
-            TestProcesses.CreateServerBackendWithFiniteTimeouts(cancelTimeout: infinite)).ParamName);
+            new ServerBackend(cancelTimeout: infinite)).ParamName);
         Assert.Equal("stopTimeout", Assert.Throws<ArgumentOutOfRangeException>(() =>
-            TestProcesses.CreateServerBackendWithFiniteTimeouts(stopTimeout: infinite)).ParamName);
+            new ServerBackend(stopTimeout: infinite)).ParamName);
         Assert.Equal("timeout", Assert.Throws<ArgumentOutOfRangeException>(() =>
-            TestProcesses.CreateInputProbeWithFiniteTimeout(infinite)).ParamName);
+            new InputProbe(timeout: infinite)).ParamName);
+
+        Assert.Equal("timeout", Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new InputProbe(timeout: TimeSpan.Zero)).ParamName);
 
         Assert.Equal("watchdog", Assert.Throws<ArgumentOutOfRangeException>(() =>
             new PreviewController(watchdog: infinite)).ParamName);
@@ -72,6 +75,6 @@ public sealed class PreviewTimeoutsTests
         timeouts.Ready, timeouts.Probe, timeouts.Cancel, timeouts.Stop,
         timeouts.Input, timeouts.InputCleanup, timeouts.Watchdog,
         timeouts.DisposeGrace, timeouts.ControllerDispose, timeouts.Metadata,
-        timeouts.ViewModelDispose, timeouts.CliHelp, timeouts.HelpCleanup,
+        timeouts.ViewModelDispose, timeouts.CliHelp, timeouts.HelpCleanup, timeouts.Initialization,
     ];
 }

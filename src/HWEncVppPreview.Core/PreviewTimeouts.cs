@@ -8,6 +8,7 @@ internal sealed record PreviewTimeouts
     internal static PreviewTimeouts Infinite { get; } = new()
     {
         Ready = Timeout.InfiniteTimeSpan,
+        Initialization = Timeout.InfiniteTimeSpan,
         Probe = Timeout.InfiniteTimeSpan,
         Cancel = Timeout.InfiniteTimeSpan,
         Stop = Timeout.InfiniteTimeSpan,
@@ -22,6 +23,7 @@ internal sealed record PreviewTimeouts
         HelpCleanup = Timeout.InfiniteTimeSpan,
     };
 
+    internal TimeSpan Initialization { get; init; } = TimeSpan.FromSeconds(30);
     internal TimeSpan Ready { get; init; } = TimeSpan.FromSeconds(3);
     internal TimeSpan Probe { get; init; } = TimeSpan.FromSeconds(3);
     internal TimeSpan Cancel { get; init; } = TimeSpan.FromSeconds(5);
