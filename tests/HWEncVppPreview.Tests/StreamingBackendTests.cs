@@ -216,31 +216,34 @@ public sealed class StreamingBackendTests
     {
         string pipeName = "server-child-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        var backend = new ServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_HOLD_OUTPUT_PIPE"] = pipeName);
-        Process? child = null;
+        var backend = new ServerBackend(readyTimeout: SafetyTimeout, probeTimeout: SafetyTimeout,
+            cancelTimeout: SafetyTimeout, stopTimeout: SafetyTimeout,
+            configureStartInfo: info => info.Environment["FAKE_ENCODER_HOLD_OUTPUT_PIPE"] = pipeName);
         try
         {
             var sink = new OpenSink();
             Assert.Equal(0, (await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+            using var parent = Process.GetProcessById(sink.ProcessId);
+            _ = parent.SafeHandle;
             Task stopping = backend.DisposeAsync().AsTask();
             await PipeWait.UntilConnectedAsync(pipe, pipeName, stopping, SafetyTimeout);
             using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-            string pid = await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout) ?? throw new EndOfStreamException();
-            child = Process.GetProcessById(int.Parse(pid, System.Globalization.CultureInfo.InvariantCulture));
+            string? pid = await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            Assert.True(int.TryParse(pid, out int childPid) && childPid > 0);
+
+            // 親が正常終了しても、子が継承パイプを閉じるまでDisposeは完了しない。
+            await parent.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            Assert.Equal(0, parent.ExitCode);
+            Assert.False(stopping.IsCompleted);
+
             await pipe.WriteAsync("release\n"u8.ToArray()).AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal("0", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
-            await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            Assert.Null(await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
             await stopping.WaitWithDiagnosticsAsync(SafetyTimeout);
-            AssertStopped(sink.ProcessId);
         }
         finally
         {
             pipe.Dispose();
-            if (child != null)
-            {
-                await child.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-                child.Dispose();
-            }
             await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
         }
     }
