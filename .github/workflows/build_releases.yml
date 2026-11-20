@@ -111,11 +111,13 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
-            executable: HWEncVppPreview.exe
+            app_executable: HWEncVppPreview.exe
+            cli_executable: HWEncVppPreviewCLI.exe
             extension: zip
           - os: ubuntu-latest
             rid: linux-x64
-            executable: HWEncVppPreview
+            app_executable: HWEncVppPreview
+            cli_executable: HWEncVppPreviewCLI
             extension: tar.xz
     steps:
       - uses: actions/checkout@v4
@@ -128,15 +130,18 @@ jobs:
         shell: bash
         env:
           RID: ${{ matrix.rid }}
-        run: >-
-          dotnet publish src/HWEncVppPreview.App/HWEncVppPreview.App.csproj
-          -c Release -p:PublishProfile=Distribution -r "$RID"
-          -o "$RUNNER_TEMP/publish/$RID"
-      - name: 実行ファイルの版の照合
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/publish/$RID"
+          dotnet publish src/HWEncVppPreview.App/HWEncVppPreview.App.csproj \
+            -c Release -p:PublishProfile=Distribution -r "$RID" -o "$out"
+          dotnet publish src/HWEncVppPreview.Cli/HWEncVppPreview.Cli.csproj \
+            -c Release -p:PublishProfile=Distribution -r "$RID" -o "$out"
+      - name: App実行ファイルの版の照合
         shell: pwsh
         env:
           RID: ${{ matrix.rid }}
-          EXECUTABLE: ${{ matrix.executable }}
+          EXECUTABLE: ${{ matrix.app_executable }}
           EXPECTED_VERSION: ${{ needs.version.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -146,6 +151,39 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $actual -cne "HWEncVppPreview $env:EXPECTED_VERSION") {
             throw "実行ファイルの版が不一致です: '$actual'"
           }
+      - name: CLIエンジンのREADY確認
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE: ${{ matrix.cli_executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:RUNNER_TEMP "publish/$env:RID/$env:EXECUTABLE"
+          $tmp = Join-Path $env:RUNNER_TEMP "cli-ready-check"
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = $exe
+          $psi.ArgumentList.Add('--amatsukaze-engine')
+          $psi.ArgumentList.Add('--tmp')
+          $psi.ArgumentList.Add($tmp)
+          $psi.ArgumentList.Add('--amatsukaze-dir')
+          $psi.ArgumentList.Add($tmp)
+          $psi.RedirectStandardInput = $true
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $psi.UseShellExecute = $false
+          $proc = [System.Diagnostics.Process]::Start($psi)
+          $proc.StandardInput.WriteLine('{"cmd":"quit"}')
+          $proc.StandardInput.Close()
+          $ready = $proc.StandardOutput.ReadLine()
+          $stderr = $proc.StandardError.ReadToEnd()
+          if (-not $proc.WaitForExit(30000)) {
+            $proc.Kill()
+            throw 'CLIエンジンがタイムアウトしました。'
+          }
+          if ($proc.ExitCode -ne 0 -or $ready -cne 'AMTPREVIEW READY version=1') {
+            throw "CLIエンジンのREADYが不一致です: ready='$ready' exit=$($proc.ExitCode) stderr='$stderr'"
+          }
       - name: Windowsの圧縮ファイルを作成
         if: matrix.rid == 'win-x64'
         shell: pwsh
@@ -154,7 +192,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/archives" | Out-Null
-          Compress-Archive -LiteralPath "$env:RUNNER_TEMP/publish/win-x64/HWEncVppPreview.exe" -DestinationPath "$env:RUNNER_TEMP/archives/HWEncVppPreview_$($env:VERSION_NAME)_win-x64.zip"
+          $src = "$env:RUNNER_TEMP/publish/win-x64"
+          # AppとCLIは別アーカイブ。Amatsukazeの取り込みが HWEncVppPreviewCLI_* を参照する。
+          Compress-Archive -LiteralPath "$src/HWEncVppPreview.exe" `
+            -DestinationPath "$env:RUNNER_TEMP/archives/HWEncVppPreview_$($env:VERSION_NAME)_win-x64.zip"
+          Compress-Archive -LiteralPath "$src/HWEncVppPreviewCLI.exe" `
+            -DestinationPath "$env:RUNNER_TEMP/archives/HWEncVppPreviewCLI_$($env:VERSION_NAME)_win-x64.zip"
       - name: Linuxの圧縮ファイルを作成
         if: matrix.rid == 'linux-x64'
         shell: bash
@@ -164,12 +207,16 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/archives"
           chmod 755 "$RUNNER_TEMP/publish/linux-x64/HWEncVppPreview"
-          tar -cJf "$RUNNER_TEMP/archives/HWEncVppPreview_${VERSION_NAME}_linux-x64.tar.xz" -C "$RUNNER_TEMP/publish/linux-x64" HWEncVppPreview
+          chmod 755 "$RUNNER_TEMP/publish/linux-x64/HWEncVppPreviewCLI"
+          tar -cJf "$RUNNER_TEMP/archives/HWEncVppPreview_${VERSION_NAME}_linux-x64.tar.xz" \
+            -C "$RUNNER_TEMP/publish/linux-x64" HWEncVppPreview
+          tar -cJf "$RUNNER_TEMP/archives/HWEncVppPreviewCLI_${VERSION_NAME}_linux-x64.tar.xz" \
+            -C "$RUNNER_TEMP/publish/linux-x64" HWEncVppPreviewCLI
       - name: 配布物の保存
         uses: actions/upload-artifact@v4
         with:
           name: HWEncVppPreview_${{ needs.version.outputs.version_name }}_${{ matrix.rid }}
-          path: ${{ runner.temp }}/archives/HWEncVppPreview_${{ needs.version.outputs.version_name }}_${{ matrix.rid }}.${{ matrix.extension }}
+          path: ${{ runner.temp }}/archives/
           if-no-files-found: error
           retention-days: 14
 
@@ -185,6 +232,7 @@ jobs:
         with:
           pattern: HWEncVppPreview_*
           path: release-assets
+          merge-multiple: true
       - name: 成果物の検査と下書きの作成
         id: draft
         shell: bash

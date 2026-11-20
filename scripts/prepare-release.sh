@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+!/usr/bin/env bash
 set -euo pipefail
 
 # 既存のタグを上書きせず、同じ実行が作った下書きだけを再開する。
@@ -20,24 +20,31 @@ if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]{2}$ || ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ||
 fi
 
 # 作成を始める前に、数・名前・空でないことをまとめて検査する。
+# AppとCLIは別アーカイブ（Amatsukazeが HWEncVppPreviewCLI_* を直接取得する）。
 if [[ "$mode" == create ]]; then
     : "${ASSET_DIR:?成果物の場所が必要です}"
     mapfile -d '' assets < <(find "$ASSET_DIR" -type f -print0)
-    windows_count=0
-    linux_count=0
+    app_windows_count=0
+    app_linux_count=0
+    cli_windows_count=0
+    cli_linux_count=0
     for asset in "${assets[@]}"; do
         if [[ ! -s "$asset" ]]; then
             echo 'ERROR: 空の成果物があります。' >&2
             exit 1
         fi
         case "${asset##*/}" in
-            "HWEncVppPreview_${TAG}_win-x64.zip") windows_count=$((windows_count + 1)) ;;
-            "HWEncVppPreview_${TAG}_linux-x64.tar.xz") linux_count=$((linux_count + 1)) ;;
+            "HWEncVppPreview_${TAG}_win-x64.zip") app_windows_count=$((app_windows_count + 1)) ;;
+            "HWEncVppPreview_${TAG}_linux-x64.tar.xz") app_linux_count=$((app_linux_count + 1)) ;;
+            "HWEncVppPreviewCLI_${TAG}_win-x64.zip") cli_windows_count=$((cli_windows_count + 1)) ;;
+            "HWEncVppPreviewCLI_${TAG}_linux-x64.tar.xz") cli_linux_count=$((cli_linux_count + 1)) ;;
             *) echo 'ERROR: 想定外の名前の成果物があります。' >&2; exit 1 ;;
         esac
     done
-    if [[ "${#assets[@]}" -ne 2 || "$windows_count" -ne 1 || "$linux_count" -ne 1 ]]; then
-        echo 'ERROR: 指定版のWindows zipとLinux tar.xzが非空で1個ずつ必要です。' >&2
+    if [[ "${#assets[@]}" -ne 4 ||
+          "$app_windows_count" -ne 1 || "$app_linux_count" -ne 1 ||
+          "$cli_windows_count" -ne 1 || "$cli_linux_count" -ne 1 ]]; then
+        echo 'ERROR: 指定版のApp/CLIのWindows zipとLinux tar.xzが非空で1個ずつ必要です。' >&2
         exit 1
     fi
 fi

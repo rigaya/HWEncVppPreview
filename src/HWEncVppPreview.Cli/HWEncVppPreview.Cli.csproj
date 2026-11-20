@@ -5,7 +5,25 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>HWEncVppPreview.Cli</RootNamespace>
+    <Copyright>Copyright (c) 2026 rigaya</Copyright>
+    <Product>HWEncVppPreviewCLI</Product>
   </PropertyGroup>
+
+  <!-- 配布時だけ exe 名を HWEncVppPreviewCLI にする。通常ビルドは試験が HWEncVppPreview.Cli を参照する。 -->
+  <PropertyGroup Condition="'$(PublishProfile)' == 'Distribution'">
+    <AssemblyName>HWEncVppPreviewCLI</AssemblyName>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="SkiaSharp" Version="3.119.4" />
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.4" />
