@@ -83,6 +83,9 @@ jobs:
           python-version: '3.12'
       - name: 試験同期の検査
         shell: bash
+        env:
+          # Windowsの既定のcp1252では日本語のメッセージを出力できないため。
+          PYTHONIOENCODING: utf-8
         run: |
           python scripts/lint-test-synchronization.py --self-test
           python scripts/lint-test-synchronization.py
