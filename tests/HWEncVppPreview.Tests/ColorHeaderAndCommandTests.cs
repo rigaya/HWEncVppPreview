@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Text;
 using HWEncVppPreview.Core;
 
 namespace HWEncVppPreview.Tests;
@@ -144,6 +145,7 @@ public sealed class ColorHeaderAndCommandTests
         var start = new ProcessStartInfo(BackendTests.FakeEncoderPath())
         {
             RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
         };
         start.ArgumentList.Add("--help");
         start.Environment["FAKE_ENCODER_COLOR_CAPABILITIES"] = "1";

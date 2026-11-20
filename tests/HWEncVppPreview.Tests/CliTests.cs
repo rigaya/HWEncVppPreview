@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using HWEncVppPreview.Core;
 using HWEncVppPreview.Tests.Testing;
@@ -242,7 +243,11 @@ public sealed class CliTests
         Assert.NotNull(directory);
         string executable = Path.Combine(directory.FullName, "src", "HWEncVppPreview.Cli", "bin", configuration, "net10.0",
             OperatingSystem.IsWindows() ? "HWEncVppPreview.Cli.exe" : "HWEncVppPreview.Cli");
-        var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        var start = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+        };
         if (capabilities) start.Environment["FAKE_ENCODER_PREVIEW_CAPABILITIES"] = "1";
         if (readyEncoder is not null)
         {

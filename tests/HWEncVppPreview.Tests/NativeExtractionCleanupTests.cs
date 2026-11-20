@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Text;
 using HWEncVppPreview.Core;
 
 namespace HWEncVppPreview.Tests;
@@ -327,9 +328,10 @@ public sealed class NativeExtractionCleanupTests
                 var start = new ProcessStartInfo("cmd.exe")
                 {
                     UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.Unicode, StandardErrorEncoding = Encoding.Unicode,
                     CreateNoWindow = true,
                 };
-                foreach (string argument in new[] { "/d", "/c", "mklink", "/J", link, target }) start.ArgumentList.Add(argument);
+                foreach (string argument in new[] { "/d", "/u", "/c", "mklink", "/J", link, target }) start.ArgumentList.Add(argument);
                 using var process = Process.Start(start) ?? throw new IOException("ジャンクション作成を開始できません。");
                 Task<string> stdout = process.StandardOutput.ReadToEndAsync();
                 Task<string> stderr = process.StandardError.ReadToEndAsync();

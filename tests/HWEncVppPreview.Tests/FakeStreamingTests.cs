@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using HWEncVppPreview.Core;
 
@@ -177,6 +178,7 @@ public sealed class FakeStreamingTests
         var start = new ProcessStartInfo(BackendTests.FakeEncoderPath())
         {
             UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
         };
         start.Environment.Remove("FAKE_ENCODER_HELP_FILE");
         start.Environment["FAKE_ENCODER_PREVIEW_CAPABILITIES"] = capabilities ? "1" : "0";

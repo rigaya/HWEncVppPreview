@@ -169,6 +169,7 @@ public sealed class FakeProcessControlTests
         {
             UseShellExecute = false, RedirectStandardInput = true,
             RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
         };
         foreach (string key in new[] { "FAKE_ENCODER_IGNORE_QUIT", "FAKE_ENCODER_HOLD_OUTPUT_PIPE", "FAKE_ENCODER_COMMAND_LOG_FILE" })
             start.Environment.Remove(key);

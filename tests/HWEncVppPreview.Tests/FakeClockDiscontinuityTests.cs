@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using HWEncVppPreview.Core;
 
@@ -93,6 +94,7 @@ public sealed class FakeClockDiscontinuityTests
         {
             UseShellExecute = false, RedirectStandardInput = true,
             RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardErrorEncoding = Encoding.UTF8,
         };
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
         return new ChildProcess(Process.Start(start) ?? throw new InvalidOperationException("偽エンコーダを起動できませんでした"));
