@@ -27,18 +27,40 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
     public ServerBackend(TimeProvider? timeProvider = null, TimeSpan? readyTimeout = null,
         TimeSpan? cancelTimeout = null, ServerRestartPolicy? restartPolicy = null,
         Action<ProcessStartInfo>? configureStartInfo = null, TimeSpan? stopTimeout = null, TimeSpan? probeTimeout = null)
+        : this(PreviewTimeouts.Default with
+        {
+            Stop = PreviewTimeouts.Finite(stopTimeout, PreviewTimeouts.Default.Stop, nameof(stopTimeout)),
+            Probe = PreviewTimeouts.Finite(probeTimeout, PreviewTimeouts.Default.Probe, nameof(probeTimeout)),
+            Ready = PreviewTimeouts.Finite(readyTimeout, PreviewTimeouts.Default.Ready, nameof(readyTimeout)),
+            Cancel = PreviewTimeouts.Finite(cancelTimeout, PreviewTimeouts.Default.Cancel, nameof(cancelTimeout)),
+        }, timeProvider ?? TimeProvider.System, restartPolicy, configureStartInfo) { }
+
+    internal ServerBackend(PreviewTimeouts timeouts, TimeProvider clock,
+        ServerRestartPolicy? restartPolicy = null, Action<ProcessStartInfo>? configureStartInfo = null)
     {
-        _timeProvider = timeProvider ?? TimeProvider.System;
-        _readyTimeout = readyTimeout ?? TimeSpan.FromSeconds(3);
-        _probeTimeout = probeTimeout ?? TimeSpan.FromSeconds(3);
-        _cancelTimeout = cancelTimeout ?? TimeSpan.FromSeconds(5);
-        _stopTimeout = stopTimeout ?? TimeSpan.FromSeconds(5);
-        if (_stopTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(stopTimeout));
-        if (_probeTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(probeTimeout));
-        if (_readyTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(readyTimeout));
-        if (_cancelTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(cancelTimeout));
+        _timeProvider = clock;
+        _stopTimeout = PreviewTimeouts.Validate(timeouts.Stop, nameof(timeouts.Stop));
+        _probeTimeout = PreviewTimeouts.Validate(timeouts.Probe, nameof(timeouts.Probe));
+        _readyTimeout = PreviewTimeouts.Validate(timeouts.Ready, nameof(timeouts.Ready));
+        _cancelTimeout = PreviewTimeouts.Validate(timeouts.Cancel, nameof(timeouts.Cancel));
         _restartPolicy = restartPolicy ?? new ServerRestartPolicy();
         _configure = configureStartInfo;
+    }
+
+    // 回収を検証するときは、PIDから開き直さずセッションが所有するプロセスの終了を観測する。
+    internal Task<int> ObserveProcessExitAsync()
+    {
+        lock (_sync)
+        {
+            var session = _session ?? throw new InvalidOperationException("動作中の常駐セッションがありません。");
+            return GetExitCodeAsync(session.Process);
+        }
+
+        static async Task<int> GetExitCodeAsync(Process process)
+        {
+            await process.WaitForExitAsync().ConfigureAwait(false);
+            return process.ExitCode;
+        }
     }
 
     public async Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
@@ -584,13 +606,8 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
             if (graceful && !_forceStop.Task.IsCompleted)
             {
                 // quitが全期限を使うと回収の成否が実行順に依存するため、回収の時間を残す。
-                var quitDeadline = new CleanupDeadline(_clock, TimeSpan.FromTicks(timeout.Ticks / 2));
-                TimeSpan QuitRemaining()
-                {
-                    TimeSpan quit = quitDeadline.Remaining;
-                    TimeSpan total = deadline.Remaining;
-                    return quit < total ? quit : total;
-                }
+                var quitDeadline = new CleanupDeadline(_clock, CleanupDeadline.Half(timeout));
+                TimeSpan QuitRemaining() => CleanupDeadline.Shorter(quitDeadline.Remaining, deadline.Remaining);
                 Stage("quit_begin");
                 try
                 {

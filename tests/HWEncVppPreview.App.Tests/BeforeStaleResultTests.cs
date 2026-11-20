@@ -39,13 +39,14 @@ public sealed class BeforeStaleResultTests
             foreach (var action in actions) Dispatcher.UIThread.Post(action);
         }
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, Post);
-        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, after,
+        var vm = TestViewModels.Create(new OwnedInjectionViewModelTests.Services(), after,
             null, cache, (frame, token) => Task.FromResult(Enumerable.Repeat(frame.RawPixels[0],
-                frame.Header.Width * frame.Header.Height * 4).ToArray()), before, owned: dependencies)
-        {
-            EncoderPath = OwnedInjectionViewModelTests.FakeEncoderPath(), InputPath = "early.ts", InputArgsText = "--avhw",
-            CurrentSeconds = .5, CompareMode = PreviewCompareMode.SideBySide,
-        };
+                frame.Header.Width * frame.Header.Height * 4).ToArray()), before, owned: dependencies);
+        vm.EncoderPath = OwnedInjectionViewModelTests.FakeEncoderPath();
+        vm.InputPath = "early.ts";
+        vm.InputArgsText = "--avhw";
+        vm.CurrentSeconds = .5;
+        vm.CompareMode = PreviewCompareMode.SideBySide;
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         try
         {

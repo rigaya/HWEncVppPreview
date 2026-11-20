@@ -17,8 +17,8 @@ public sealed class TimestampReplayTests
     [InlineData(true, "--fake-clock-backstep-at")]
     public async Task ImmediateIdleWaitIncludesAutomaticLegacyReplay(bool continuous, string fault)
     {
-        var backend = new RecordingBackend(new ServerBackend());
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        var backend = new RecordingBackend(TestProcesses.CreateServerBackend());
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero);
         var images = new List<PreviewFrameResult>();
         var completions = new List<PreviewCompletion>();
         var failures = new List<PreviewFailure>();
@@ -51,8 +51,8 @@ public sealed class TimestampReplayTests
     [Fact]
     public async Task PrefetchAnomalyAfterTargetDisplayStillFinishesReplayBeforeIdleReturns()
     {
-        var backend = new RecordingBackend(new ServerBackend());
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        var backend = new RecordingBackend(TestProcesses.CreateServerBackend());
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero);
         var completions = new List<PreviewCompletion>();
         var images = new List<PreviewFrameResult>();
         controller.Completed += completions.Add;
@@ -69,8 +69,8 @@ public sealed class TimestampReplayTests
     [Fact]
     public async Task ReplayReplansShortWindowAtLatestTargetInsteadOfKeepingStreamSeek()
     {
-        var backend = new RecordingBackend(new ServerBackend());
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        var backend = new RecordingBackend(TestProcesses.CreateServerBackend());
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero);
         var request = Request("--fake-clock-jump-at", true) with
             { TargetSeconds = 0, InputArgs = new[] { "--fake-clock-jump-at", "1850" } };
         controller.Submit(request);
@@ -108,8 +108,8 @@ public sealed class TimestampReplayTests
     [Fact]
     public async Task NearWrapOriginStartsWithPassOffAndKeepsNumericOrigin()
     {
-        var backend = new RecordingBackend(new ServerBackend());
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        var backend = new RecordingBackend(TestProcesses.CreateServerBackend());
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero);
         PreviewCompletion? complete = null;
         controller.Completed += value => complete = value;
         var request = Request("--fake-clock-jump-at", true) with { TimestampOriginSeconds = 95443.7, TimestampOriginTrusted = false };
@@ -128,8 +128,8 @@ public sealed class TimestampReplayTests
     [InlineData(true)]
     public async Task ForegroundSourceSwitchReevaluatesAtoBtoA(bool changeVpp)
     {
-        var backend = new RecordingBackend(new ServerBackend());
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        var backend = new RecordingBackend(TestProcesses.CreateServerBackend());
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero);
         var request = Request("--fake-clock-jump-at", false);
         foreach (int variant in new[] { 0, 1, 0 })
         {
@@ -147,9 +147,9 @@ public sealed class TimestampReplayTests
     [Fact]
     public async Task BackgroundBeforeDoesNotResetForegroundBadState()
     {
-        var backend = new RecordingBackend(new ServerBackend());
-        var background = new RecordingBackend(new ServerBackend());
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero, backgroundBackend: background);
+        var backend = new RecordingBackend(TestProcesses.CreateServerBackend());
+        var background = new RecordingBackend(TestProcesses.CreateServerBackend());
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero, backgroundBackend: background);
         var request = Request("--fake-clock-jump-at", false);
         controller.Submit(request);
         await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
@@ -167,8 +167,8 @@ public sealed class TimestampReplayTests
     [InlineData(true)]
     public async Task CachedLegacySelectionUsesLogicalTargetAndSavedPhysicalClock(bool explicitTimestamp)
     {
-        var backend = new RecordingBackend(new ServerBackend());
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        var backend = new RecordingBackend(TestProcesses.CreateServerBackend());
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero);
         var images = new List<PreviewFrameResult>();
         var completions = new List<PreviewCompletion>();
         controller.FrameReady += images.Add;
@@ -206,8 +206,8 @@ public sealed class TimestampReplayTests
     [InlineData(true)]
     public async Task ForcedLegacyRemovesExplicitPassthroughTokensOnlyFromPhysicalArgs(bool nearWrap)
     {
-        var backend = new RecordingBackend(new ServerBackend());
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        var backend = new RecordingBackend(TestProcesses.CreateServerBackend());
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero);
         PreviewCompletion? completed = null;
         controller.Completed += value => completed = value;
         var request = Request("--fake-clock-jump-at", false) with
@@ -232,7 +232,7 @@ public sealed class TimestampReplayTests
     public async Task BackendThrowingCancellationStillReplaysGuardFailure(bool continuous)
     {
         var backend = new ThrowingCancellationBackend();
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero);
         PreviewCompletion? complete = null;
         PreviewFailure? failure = null;
         var order = new List<string>();

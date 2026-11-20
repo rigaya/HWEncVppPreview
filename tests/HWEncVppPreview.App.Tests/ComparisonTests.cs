@@ -472,7 +472,7 @@ public sealed class ComparisonTests
     }
 
     private static MainWindowViewModel Create(TestServices services, FakeTimeProvider clock, RecordingBackend backend) =>
-        new(services, clock, backend, new InputProbe(new ProbeBackend(), clock, _ => { services.ProcessAttempted = true; throw new InvalidOperationException("実プロセスは使用しません。"); }), null, null,
+        new(services, clock, backend, TestProcesses.CreateInputProbe(new ProbeBackend(), clock, _ => { services.ProcessAttempted = true; throw new InvalidOperationException("実プロセスは使用しません。"); }), null, null,
             readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help" ? "  --vpp-nlmeans [params]\n" : "FakeEncoder"))
         {
             EncoderPath = FakeEncoderPath(), InputPath = "fake input.ts", CurrentSeconds = 0.3,

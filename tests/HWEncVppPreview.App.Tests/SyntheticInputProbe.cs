@@ -11,7 +11,7 @@ internal sealed class SyntheticInputProbe : IAsyncDisposable
 
     internal SyntheticInputProbe(TimeProvider clock)
     {
-        Probe = new InputProbe(new Backend(), clock, _ =>
+        Probe = TestProcesses.CreateInputProbe(new Backend(), clock, _ =>
         {
             _processAttempted = true;
             throw new InvalidOperationException("この試験ではプロセスを起動しません。");

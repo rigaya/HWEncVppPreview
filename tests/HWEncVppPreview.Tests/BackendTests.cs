@@ -13,7 +13,7 @@ public sealed class BackendTests
     [Fact]
     public async Task ServerReusesProcessAndKeepsRequestsIndependent()
     {
-        await using var backend = new ServerBackend();
+        await using var backend = TestProcesses.CreateServerBackend();
         var a1 = new RecordingSink();
         var b = new RecordingSink();
         var a2 = new RecordingSink();
@@ -33,7 +33,7 @@ public sealed class BackendTests
     [Fact]
     public async Task ServerCancelRecoversWithoutRestart()
     {
-        await using var backend = new ServerBackend();
+        await using var backend = TestProcesses.CreateServerBackend();
         using var cancellation = new CancellationTokenSource();
         var sink = new RecordingSink();
         var run = backend.RunAsync(Request("--fake-hang-after", "1"), sink, cancellation.Token);
@@ -50,7 +50,7 @@ public sealed class BackendTests
     [Fact]
     public async Task NewServerRunCancelsPreviousRun()
     {
-        await using var backend = new ServerBackend();
+        await using var backend = TestProcesses.CreateServerBackend();
         var first = new RecordingSink();
         var firstRun = backend.RunAsync(Request("--fake-hang-after", "1"), first);
         await first.FirstFrame.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
@@ -64,7 +64,7 @@ public sealed class BackendTests
     [Fact]
     public async Task IgnoredCancellationCanBeAbortedThenServerRestarts()
     {
-        await using var backend = new ServerBackend();
+        await using var backend = TestProcesses.CreateServerBackend();
         using var cancellation = new CancellationTokenSource();
         var sink = new RecordingSink();
         var run = backend.RunAsync(Request("--fake-hang-after", "1", "--fake-ignore-cancel"), sink, cancellation.Token);
@@ -85,7 +85,7 @@ public sealed class BackendTests
         using var pipe = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.In, 1,
             System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
         int starts = 0;
-        await using var backend = new ServerBackend(readyTimeout: TimeSpan.FromSeconds(2), configureStartInfo: info =>
+        await using var backend = TestProcesses.CreateServerBackendWithFiniteTimeouts(readyTimeout: TimeSpan.FromSeconds(2), configureStartInfo: info =>
         {
             if (Interlocked.Increment(ref starts) == 1)
             {
@@ -111,7 +111,7 @@ public sealed class BackendTests
         string name = "invalid-ready-" + Guid.NewGuid().ToString("N");
         using var pipe = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.In, 1,
             System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
-        await using var backend = new ServerBackend(configureStartInfo: info =>
+        await using var backend = TestProcesses.CreateServerBackend(configureStartInfo: info =>
         {
             info.Environment["FAKE_ENCODER_READY_VERSION"] = "0";
             info.Environment["FAKE_ENCODER_PID_PIPE"] = name;
@@ -127,7 +127,7 @@ public sealed class BackendTests
     [Fact]
     public async Task TruncatedFrameFailsAndNextRunRestarts()
     {
-        await using var backend = new ServerBackend();
+        await using var backend = TestProcesses.CreateServerBackend();
         var broken = new RecordingSink();
         var exception = await Assert.ThrowsAsync<PreviewBackendException>(() =>
             backend.RunAsync(Request("--fake-crash-at", "1"), broken).WaitWithDiagnosticsAsync(SafetyTimeout));
@@ -144,7 +144,7 @@ public sealed class BackendTests
     [Fact]
     public async Task RequestLimitRestartsServer()
     {
-        await using var backend = new ServerBackend(restartPolicy: new ServerRestartPolicy(2));
+        await using var backend = TestProcesses.CreateServerBackend(restartPolicy: new ServerRestartPolicy(2));
         var first = new RecordingSink();
         var second = new RecordingSink();
         var third = new RecordingSink();
@@ -164,7 +164,7 @@ public sealed class BackendTests
     [InlineData(17, true)]
     public async Task ExitCodeDeterminesServerRestart(int rc, bool restarts)
     {
-        await using var backend = new ServerBackend();
+        await using var backend = TestProcesses.CreateServerBackend();
         var first = new RecordingSink();
         var result = await backend.RunAsync(Request("--fake-rc", rc.ToString(System.Globalization.CultureInfo.InvariantCulture)), first).WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(rc, result.ExitCode);
@@ -188,7 +188,7 @@ public sealed class BackendTests
     [Fact]
     public async Task DroppedTimestampsArePreserved()
     {
-        await using var backend = new ServerBackend();
+        await using var backend = TestProcesses.CreateServerBackend();
         var sink = new RecordingSink();
         var result = await backend.RunAsync(Request("--fake-step", "2"), sink).WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(0, result.ExitCode);
@@ -199,7 +199,7 @@ public sealed class BackendTests
     [Fact]
     public async Task ProtocolViolationKillsServerAndNextRequestRecovers()
     {
-        await using var backend = new ServerBackend();
+        await using var backend = TestProcesses.CreateServerBackend();
         var broken = new RecordingSink();
         var exception = await Assert.ThrowsAsync<PreviewBackendException>(() =>
             backend.RunAsync(Request("--fake-bad-control-at", "1"), broken).WaitWithDiagnosticsAsync(SafetyTimeout));
@@ -216,7 +216,7 @@ public sealed class BackendTests
     [Fact]
     public async Task ServerThatExitsAfterRequestCanBeStartedAgain()
     {
-        await using var backend = new ServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_DROP_AFTER"] = "1");
+        await using var backend = TestProcesses.CreateServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_DROP_AFTER"] = "1");
         var first = new RecordingSink();
         Assert.Equal(0, (await backend.RunAsync(Request(), first).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
         try

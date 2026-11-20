@@ -9,3 +9,6 @@
 
 // 撮影用の入力検査を実プロセスなしで通す。
 [assembly: InternalsVisibleTo("UiSnapshot")]
+
+[assembly: InternalsVisibleTo("HWEncVppPreview.Cli")]
+[assembly: InternalsVisibleTo("HWEncVppPreviewCLI")]

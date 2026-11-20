@@ -17,11 +17,10 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
     public async Task DoubleRateRightStepsShowEveryOutputFrameWithoutSkipping()
     {
         using var services = new Services();
-        var clock = TimeProvider.System;
         int starts = 0;
-        await using var vm = Create(services, clock, () => ++starts);
+        await using var vm = Create(services, () => ++starts);
         vm.CurrentSeconds = 6.0 / 60;
-        await InitializeAsync(vm, clock);
+        await InitializeAsync(vm);
         int initialStarts = starts;
         for (int expected = 7; expected <= 13; ++expected)
         {
@@ -38,11 +37,10 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
     public async Task DoubleRateLeftStepStaysInsideTheCachedInterval()
     {
         using var services = new Services();
-        var clock = TimeProvider.System;
         int starts = 0;
-        await using var vm = Create(services, clock, () => ++starts);
+        await using var vm = Create(services, () => ++starts);
         vm.CurrentSeconds = 13.0 / 60;
-        await InitializeAsync(vm, clock);
+        await InitializeAsync(vm);
         int initialStarts = starts;
         vm.StepFrameCommand.Execute(-1);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
@@ -52,14 +50,13 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
         Assert.Equal(ExpectedHash(12), ImageHash(vm));
     }
 
-    private static MainWindowViewModel Create(Services services, TimeProvider clock, Action started)
+    private static MainWindowViewModel Create(Services services, Action started)
     {
         var backend = new CountingBackend(started);
-        var vm = new MainWindowViewModel(services, clock, backend, null, null, null, debounceOverride: TimeSpan.Zero)
-        {
-            EncoderPath = FakeEncoderPath(), InputPath = "frame rate input.ts",
-            InputArgsText = "--avhw --fake-duration 00:00:10.00",
-        };
+        var vm = TestViewModels.Create(services, backend, null, null, null, debounceOverride: TimeSpan.Zero);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "frame rate input.ts";
+        vm.InputArgsText = "--avhw --fake-duration 00:00:10.00";
         // 入力検査は30fpsのまま、フィルタ後のヘッダだけを60fpsにする。
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--fake-output-rate double --fake-no-xdur" });
         return vm;
@@ -67,7 +64,7 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
 
     private sealed class CountingBackend(Action started) : IPreviewBackend
     {
-        private readonly ServerBackend _inner = new();
+        private readonly ServerBackend _inner = TestProcesses.CreateServerBackend();
         public Task InitializeEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
             => _inner.InitializeEncoderAsync(encoderPath, cancellationToken);
         public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
@@ -81,7 +78,7 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
         public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 
-    private static async Task InitializeAsync(MainWindowViewModel vm, TimeProvider clock)
+    private static async Task InitializeAsync(MainWindowViewModel vm)
     {
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);

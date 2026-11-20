@@ -51,7 +51,7 @@ public sealed class InputProbe : IAsyncDisposable
     private readonly Dictionary<Process, Task> _durationProcesses = new();
     private readonly Action<ProcessStartInfo>? _configureStartInfo;
     private readonly IPreviewBackend _backend;
-    private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
+    private readonly TimeSpan _stopTimeout;
     private readonly TimeProvider _clock;
     private readonly TimeSpan _timeout;
     private readonly CancellationTokenSource _lifetime = new();
@@ -60,17 +60,24 @@ public sealed class InputProbe : IAsyncDisposable
 
     public InputProbe(TimeProvider? timeProvider = null, TimeSpan? timeout = null,
         Action<ProcessStartInfo>? configureStartInfo = null)
+        : this(PreviewTimeouts.Default with
+        {
+            Input = PreviewTimeouts.Finite(timeout, PreviewTimeouts.Default.Input, nameof(timeout)),
+        }, timeProvider ?? TimeProvider.System, configureStartInfo) { }
+
+    internal InputProbe(PreviewTimeouts timeouts, TimeProvider clock,
+        Action<ProcessStartInfo>? configureStartInfo = null, IPreviewBackend? backend = null)
     {
-        _clock = timeProvider ?? TimeProvider.System;
-        _timeout = timeout ?? TimeSpan.FromSeconds(30);
-        if (_timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
-        _backend = new ServerBackend(_clock, configureStartInfo: configureStartInfo, stopTimeout: StopTimeout);
+        _clock = clock;
+        _timeout = PreviewTimeouts.Validate(timeouts.Input, nameof(timeouts.Input));
+        _stopTimeout = PreviewTimeouts.Validate(timeouts.InputCleanup, nameof(timeouts.InputCleanup));
+        _backend = backend ?? new ServerBackend(timeouts, clock, configureStartInfo: configureStartInfo);
         _configureStartInfo = configureStartInfo;
     }
 
     // 終了要求を無視する検査backendの回帰を、GPUやOSの異常終了に頼らず再現する。
     internal InputProbe(IPreviewBackend backend, TimeProvider timeProvider, Action<ProcessStartInfo>? configureStartInfo = null)
-        : this(timeProvider, configureStartInfo: configureStartInfo) => _backend = backend;
+        : this(PreviewTimeouts.Default, timeProvider, configureStartInfo, backend) { }
 
     /// <summary>追加引数の既定は空。引数配列を複製し、値が同じ要求にはキャッシュを返す。</summary>
     /// <exception cref="InputProbeException">エンコーダがエラー終了した、または有効なヘッダがない。</exception>
@@ -183,7 +190,7 @@ public sealed class InputProbe : IAsyncDisposable
             Task completion = Task.CompletedTask;
             CancellationTokenRegistration registration = default;
             CleanupDeadline? cleanup = null;
-            TimeSpan Remaining() => (cleanup ??= new CleanupDeadline(_clock, StopTimeout)).Remaining;
+            TimeSpan Remaining() => (cleanup ??= new CleanupDeadline(_clock, _stopTimeout)).Remaining;
             async Task StopIfOwnerAsync()
             {
                 if (process == null) return;
@@ -322,7 +329,7 @@ public sealed class InputProbe : IAsyncDisposable
     private async Task DisposeCoreAsync()
     {
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
-        var deadline = new CleanupDeadline(_clock, StopTimeout);
+        var deadline = new CleanupDeadline(_clock, _stopTimeout);
         // backendの終了が先に見えてエラー扱いされないよう、取消要求だけ先に立てる。
         Task cancellation = _lifetime.CancelAsync();
         Task backend = Task.Run(async () => await _backend.DisposeAsync().ConfigureAwait(false));
@@ -384,7 +391,7 @@ public sealed class InputProbe : IAsyncDisposable
 
     private async Task<string> StopProbeRunAsync(Task<PreviewRunResult> run, CancellationTokenSource cancellation, IPreviewBackend backend)
     {
-        var deadline = new CleanupDeadline(_clock, StopTimeout);
+        var deadline = new CleanupDeadline(_clock, _stopTimeout);
         await JoinIgnoringFailureAsync(cancellation.CancelAsync(), deadline, "probe.run_cancel").ConfigureAwait(false);
         Task abort = Task.Run(async () => await backend.AbortAsync().ConfigureAwait(false));
         await JoinIgnoringFailureAsync(abort, deadline, "probe.run_abort").ConfigureAwait(false);

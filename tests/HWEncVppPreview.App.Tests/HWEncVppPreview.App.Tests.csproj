@@ -28,4 +28,7 @@
   <ItemGroup>
     <Compile Include="..\TestTimeouts.cs" Link="Testing\TestTimeouts.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\TestProcesses.cs" Link="Testing\TestProcesses.cs" />
+  </ItemGroup>
 </Project>

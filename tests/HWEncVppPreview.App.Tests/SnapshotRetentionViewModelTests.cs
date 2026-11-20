@@ -16,12 +16,12 @@ public sealed class SnapshotRetentionViewModelTests
         var cache = new FrameCache(scope);
         var backend = new OwnedInjectionViewModelTests.OwnedBackend();
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend,
+        var vm = TestViewModels.Create(new OwnedInjectionViewModelTests.Services(), backend,
             null, cache, (frame, token) => Task.FromResult(Enumerable.Repeat((byte)42, frame.Header.Width * frame.Header.Height * 4).ToArray()),
-            beforeEnabled: false, owned: dependencies)
-        {
-            EncoderPath = OwnedInjectionViewModelTests.FakeEncoderPath(), InputPath = "retention.ts", InputArgsText = "--avhw"
-        };
+            beforeEnabled: false, owned: dependencies);
+        vm.EncoderPath = OwnedInjectionViewModelTests.FakeEncoderPath();
+        vm.InputPath = "retention.ts";
+        vm.InputArgsText = "--avhw";
         try
         {
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);

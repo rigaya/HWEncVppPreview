@@ -93,7 +93,7 @@ public sealed class ReaderCommandTests
     {
         var backend = new RecordingProbeBackend();
         var commands = backend.Commands;
-        await using var probe = new InputProbe(backend, TimeProvider.System);
+        await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System);
         await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input" + extension,
             Array.Empty<string>(), capabilities: Capabilities).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         string[] args = Assert.Single(commands);
@@ -110,7 +110,7 @@ public sealed class ReaderCommandTests
     public async Task 長さ検査も同じreader規則でvpyの相対パス補助だけを付ける(string extension, string reader, bool expected)
     {
         var commands = new List<string[]>();
-        await using var probe = new InputProbe(configureStartInfo: start => commands.Add(start.ArgumentList.ToArray()));
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: start => commands.Add(start.ArgumentList.ToArray()));
         string[] args = [.. string.IsNullOrEmpty(reader) ? Array.Empty<string>() : new[] { reader },
             "--fake-duration", "00:00:10.00"];
         var duration = await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input" + extension,
@@ -125,7 +125,7 @@ public sealed class ReaderCommandTests
     public async Task 長さ検査はhelpで確認できないvpy指定を付けず対応変更時は再検査する()
     {
         var commands = new List<string[]>();
-        await using var probe = new InputProbe(configureStartInfo: start =>
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: start =>
         {
             // 相対パスを解決できない場合だけ長さが不明になる入力を模す。
             if (!start.ArgumentList.Contains("--vpy-assume-script-dir"))

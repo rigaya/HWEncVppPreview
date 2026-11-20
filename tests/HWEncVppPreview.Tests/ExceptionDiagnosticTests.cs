@@ -28,7 +28,7 @@ public sealed class ExceptionDiagnosticTests
     [Fact]
     public async Task ServerFrameFailurePreservesOriginalExceptionChain()
     {
-        await using var backend = new ServerBackend();
+        await using var backend = TestProcesses.CreateServerBackend();
         var root = new IOException("native sink cause");
         var original = new InvalidOperationException("sink frame failed", root);
         var request = new PreviewRequest

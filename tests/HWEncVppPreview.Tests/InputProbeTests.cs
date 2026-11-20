@@ -16,7 +16,7 @@ public sealed class InputProbeTests
     {
         var backend = new RecordingProbeBackend();
         var commands = backend.Commands;
-        await using var probe = new InputProbe(backend, TimeProvider.System);
+        await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System);
         InputInfo first = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", new[] { "--avhw" }).WaitWithDiagnosticsAsync(SafetyTimeout);
         InputInfo cached = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", new List<string> { "--avhw" }).WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Same(first, cached);
@@ -38,7 +38,7 @@ public sealed class InputProbeTests
     public async Task CacheKeyIncludesEncoderInputAndAdditionalArgumentsAndCopiesLists()
     {
         var backend = new RecordingProbeBackend();
-        await using var probe = new InputProbe(backend, TimeProvider.System);
+        await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System);
         string encoder = BackendTests.FakeEncoderPath();
         var arguments = new List<string> { "--avhw" };
         await probe.ProbeAsync(encoder, "first.ts", arguments).WaitWithDiagnosticsAsync(SafetyTimeout);
@@ -56,7 +56,7 @@ public sealed class InputProbeTests
     public async Task ConcurrentSameRequestsShareSuccessfulCacheEntry()
     {
         int starts = 0;
-        await using var probe = new InputProbe(configureStartInfo: _ => ++starts);
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: _ => ++starts);
         var results = await Task.WhenAll(Enumerable.Range(0, 5)
             .Select(_ => probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts"))).WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(1, starts);
@@ -67,7 +67,7 @@ public sealed class InputProbeTests
     public async Task EncoderErrorContainsExitCodeAndDiagnosticsAndIsNotCached()
     {
         var backend = new RecordingProbeBackend();
-        await using var probe = new InputProbe(backend, TimeProvider.System);
+        await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System);
         for (int i = 0; i < 2; ++i)
         {
             var error = await Assert.ThrowsAsync<InputProbeException>(() =>
@@ -83,7 +83,7 @@ public sealed class InputProbeTests
     {
         string pipeName = "probe-first-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        await using var probe = new InputProbe(configureStartInfo: info => info.Environment["FAKE_ENCODER_PID_PIPE"] = pipeName);
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info => info.Environment["FAKE_ENCODER_PID_PIPE"] = pipeName);
         // 2枚目以降が応答しなくても、最初の1枚を受け取ったら取得と子の回収が終わる。
         Task<InputInfo> operation = probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-hang-after", "1" });
         int pid = await ReadPidFromPipeAsync(pipe, pipeName, operation);
@@ -96,7 +96,7 @@ public sealed class InputProbeTests
     [Fact]
     public async Task FirstFrameMakesLaterEncoderExitCodeIrrelevant()
     {
-        await using var probe = new InputProbe();
+        await using var probe = TestProcesses.CreateInputProbe();
         InputInfo input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts",
             new[] { "--fake-rc", "23" }).WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(30, input.Fps);
@@ -106,7 +106,7 @@ public sealed class InputProbeTests
     public async Task NoFrameCannotPopulateTheCacheEvenWithSuccessfulExit()
     {
         var backend = new RecordingProbeBackend();
-        await using var probe = new InputProbe(backend, TimeProvider.System);
+        await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System);
         for (int i = 0; i < 2; ++i)
         {
             var error = await Assert.ThrowsAsync<InputProbeException>(() =>
@@ -120,7 +120,7 @@ public sealed class InputProbeTests
     public async Task TimeoutUsesInjectedClockAndDoesNotCacheFailure()
     {
         var clock = new FakeTimeProvider();
-        await using var probe = new InputProbe(new TimeoutProbeBackend(), clock);
+        await using var probe = TestProcesses.CreateInputProbe(new TimeoutProbeBackend(), clock);
         Task<InputInfo> run = probe.ProbeAsync("fake", "in.ts");
         // 要求を開始した時点で期限が時計に登録されている。
         clock.Advance(TimeSpan.FromSeconds(30));
@@ -135,7 +135,7 @@ public sealed class InputProbeTests
     {
         string name = "probe-frame-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        await using var probe = new InputProbe();
+        await using var probe = TestProcesses.CreateInputProbe();
         using var waitingCancellation = new CancellationTokenSource();
         Task<InputInfo> active = probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-frame-pipe", name });
         await PipeWait.UntilConnectedAsync(pipe, name, active, SafetyTimeout);
@@ -155,7 +155,7 @@ public sealed class InputProbeTests
     {
         string pipeName = "probe-pid-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        var probe = new InputProbe(configureStartInfo: info => info.Environment["FAKE_ENCODER_PID_PIPE"] = pipeName);
+        var probe = TestProcesses.CreateInputProbe(configureStartInfo: info => info.Environment["FAKE_ENCODER_PID_PIPE"] = pipeName);
         try
         {
             Task<InputInfo> run = probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-hang-after", "0" });
@@ -175,7 +175,7 @@ public sealed class InputProbeTests
     [Fact]
     public void RejectsNonPositiveTimeout()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new InputProbe(timeout: TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(() => TestProcesses.CreateInputProbeWithFiniteTimeout(timeout: TimeSpan.Zero));
     }
 
     [Theory]
@@ -242,7 +242,7 @@ public sealed class InputProbeTests
     [InlineData("invalid", null)]
     public async Task ReadsDurationFromDrainedStandardError(string value, double? seconds)
     {
-        await using var probe = new InputProbe();
+        await using var probe = TestProcesses.CreateInputProbe();
         var info = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts",
             new[] { "--avhw", "--fake-duration", value, "--fake-hang-after", "1" }).WaitWithDiagnosticsAsync(SafetyTimeout);
         if (seconds.HasValue) Assert.Equal(TimeSpan.FromSeconds(seconds.Value), info.Duration);
@@ -265,7 +265,7 @@ public sealed class InputProbeTests
     public async Task DurationAtExitIsReadAfterFormatProbeStoppedAndThenCached()
     {
         var commands = new List<string[]>();
-        await using var probe = new InputProbe(configureStartInfo: info => commands.Add(info.ArgumentList.ToArray()));
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info => commands.Add(info.ArgumentList.ToArray()));
         string[] args = ["--avhw", "--fake-duration", "00:30:07.56", "--fake-duration-at-exit"];
         var input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Null(input.Duration);
@@ -281,7 +281,7 @@ public sealed class InputProbeTests
     public async Task KnownDurationFromFormatProbeAvoidsAnotherProcess()
     {
         int starts = 0;
-        await using var probe = new InputProbe(configureStartInfo: _ => ++starts);
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: _ => ++starts);
         string[] args = ["--fake-duration", "00:00:10.00", "--fake-hang-after", "1"];
         var input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(TimeSpan.FromSeconds(10), input.Duration);
@@ -295,7 +295,7 @@ public sealed class InputProbeTests
     public async Task DurationIgnoresErrorExitAndCachesUnknownResults(string value, double? expected)
     {
         int starts = 0;
-        await using var probe = new InputProbe(configureStartInfo: info =>
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info =>
         {
             ++starts;
             info.ArgumentList[info.ArgumentList.IndexOf("--frames") + 1] = "0";
@@ -313,7 +313,7 @@ public sealed class InputProbeTests
     public async Task DurationCacheIncludesEncoderInputAndArgumentValues()
     {
         int starts = 0;
-        await using var probe = new InputProbe(configureStartInfo: _ => ++starts);
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: _ => ++starts);
         string encoder = BackendTests.FakeEncoderPath();
         var args = new List<string> { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit" };
         Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(encoder, "a.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout));
@@ -331,7 +331,7 @@ public sealed class InputProbeTests
     public async Task MissingDurationAndNonVideoStdoutAreDrainedAndCached()
     {
         int starts = 0;
-        await using var probe = new InputProbe(configureStartInfo: _ => ++starts);
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: _ => ++starts);
         for (int i = 0; i < 2; ++i)
             Assert.Null(await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "a.ts", new[] { "--version" }).WaitWithDiagnosticsAsync(SafetyTimeout));
         Assert.Equal(1, starts);
@@ -340,7 +340,7 @@ public sealed class InputProbeTests
     [Fact]
     public async Task DurationDrainsLargeStdoutAndStderrWithoutDeadlock()
     {
-        await using var probe = new InputProbe(configureStartInfo: info =>
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info =>
             info.ArgumentList[info.ArgumentList.IndexOf("--frames") + 1] = "1000");
         Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts",
             new[] { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit", "--fake-stderr-bytes", "131072" }).WaitWithDiagnosticsAsync(SafetyTimeout));
@@ -351,7 +351,7 @@ public sealed class InputProbeTests
     {
         string name = "duration-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        await using var probe = new InputProbe();
+        await using var probe = TestProcesses.CreateInputProbe();
         string[] durationArgs = ["--fake-duration", "00:00:10.00", "--fake-duration-at-exit", "--fake-duration-exit-pipe", name];
         var duration = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", durationArgs);
         await PipeWait.UntilConnectedAsync(pipe, name, duration, SafetyTimeout);
@@ -371,7 +371,7 @@ public sealed class InputProbeTests
         string pipeName = "duration-pid-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         int starts = 0;
-        await using var probe = new InputProbe(configureStartInfo: info =>
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info =>
         {
             if (Interlocked.Increment(ref starts) != 1) return;
             info.Environment["FAKE_ENCODER_PID_PIPE"] = pipeName;
@@ -393,7 +393,7 @@ public sealed class InputProbeTests
     {
         string pipeName = "probe-pid-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        var probe = new InputProbe(configureStartInfo: info => info.Environment["FAKE_ENCODER_PID_PIPE"] = pipeName);
+        var probe = TestProcesses.CreateInputProbe(configureStartInfo: info => info.Environment["FAKE_ENCODER_PID_PIPE"] = pipeName);
         using var waitingCancellation = new CancellationTokenSource();
         try
         {
@@ -415,7 +415,7 @@ public sealed class InputProbeTests
     {
         string name = "duration-waiter-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        await using var probe = new InputProbe();
+        await using var probe = TestProcesses.CreateInputProbe();
         using var waitingCancellation = new CancellationTokenSource();
         var active = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts",
             new[] { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit", "--fake-duration-exit-pipe", name });
@@ -436,7 +436,7 @@ public sealed class InputProbeTests
         string name = "duration-timeout-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(name, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         int starts = 0;
-        await using var probe = new InputProbe(timeout: TimeSpan.FromSeconds(2), configureStartInfo: info =>
+        await using var probe = TestProcesses.CreateInputProbeWithFiniteTimeout(timeout: TimeSpan.FromSeconds(2), configureStartInfo: info =>
         {
             if (Interlocked.Increment(ref starts) == 1) info.Environment["FAKE_ENCODER_PID_PIPE"] = name;
         });

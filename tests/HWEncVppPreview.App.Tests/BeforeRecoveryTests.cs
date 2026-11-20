@@ -18,10 +18,12 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = TimeProvider.System;
         var backend = new ControlledBackend(moveWhileRunning);
-        await using var vm = new MainWindowViewModel(services, clock, backend, null, null, EncodeTime, debounceOverride: TimeSpan.Zero)
-        { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
+        await using var vm = TestViewModels.Create(services, backend, null, null, EncodeTime, debounceOverride: TimeSpan.Zero);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "before-recovery.ts";
+        vm.CurrentSeconds = 10;
+        vm.InputArgsText = "--avhw";
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         Task afterApplied = ObserveAfterApplied(vm);
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
@@ -62,9 +64,13 @@ public sealed class BeforeRecoveryTests
             }
             return await EncodeTime(frame, token);
         }
-        await using var vm = new MainWindowViewModel(services, TimeProvider.System, backend, null, null, ConvertAsync,
-            debounceOverride: TimeSpan.Zero)
-        { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw", IsShowingBefore = true };
+        await using var vm = TestViewModels.Create(services, backend, null, null, ConvertAsync,
+            debounceOverride: TimeSpan.Zero);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "before-recovery.ts";
+        vm.CurrentSeconds = 10;
+        vm.InputArgsText = "--avhw";
+        vm.IsShowingBefore = true;
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         try
         {
@@ -95,11 +101,14 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = TimeProvider.System;
         var backend = new ControlledBackend(false, lateAfter: true);
         backend.Release.TrySetResult();
-        await using var vm = new MainWindowViewModel(services, clock, backend, null, null, EncodeTime, debounceOverride: TimeSpan.Zero)
-        { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw", IsShowingBefore = true };
+        await using var vm = TestViewModels.Create(services, backend, null, null, EncodeTime, debounceOverride: TimeSpan.Zero);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "before-recovery.ts";
+        vm.CurrentSeconds = 10;
+        vm.InputArgsText = "--avhw";
+        vm.IsShowingBefore = true;
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
@@ -116,9 +125,8 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = TimeProvider.System;
         var backend = new ControlledBackend(false, alwaysLate: true);
-        await using var vm = await Start(services, clock, backend);
+        await using var vm = await Start(services, backend);
         backend.Release.TrySetResult();
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         Assert.False(vm.IsBeforeBusy);
@@ -131,7 +139,6 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = TimeProvider.System;
         var backend = new ControlledBackend(false, blockRecovery: true, stopAfterEarly: true);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseAfter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -144,7 +151,7 @@ public sealed class BeforeRecoveryTests
             }
             return await EncodeTime(frame, token);
         }
-        await using var vm = await Start(services, clock, backend, ConvertFrame);
+        await using var vm = await Start(services, backend, ConvertFrame);
         try
         {
             backend.Release.TrySetResult();
@@ -181,9 +188,8 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = TimeProvider.System;
         var backend = new ControlledBackend(false);
-        await using var vm = await Start(services, clock, backend);
+        await using var vm = await Start(services, backend);
         await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
         await backend.Cancelled.Task.WaitWithDiagnosticsAsync(Safety);
         Assert.False(vm.IsBeforeBusy);
@@ -194,9 +200,8 @@ public sealed class BeforeRecoveryTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = TimeProvider.System;
         var backend = new ControlledBackend(false);
-        await using var vm = await Start(services, clock, backend);
+        await using var vm = await Start(services, backend);
         vm.RefreshCommand.Execute(null);
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
         await backend.Cancelled.Task.WaitWithDiagnosticsAsync(Safety);
@@ -208,11 +213,14 @@ public sealed class BeforeRecoveryTests
         Assert.False(vm.IsBeforeBusy);
     }
 
-    private static async Task<MainWindowViewModel> Start(Services services, TimeProvider clock, ControlledBackend backend,
+    private static async Task<MainWindowViewModel> Start(Services services, ControlledBackend backend,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter = null)
     {
-        var vm = new MainWindowViewModel(services, clock, backend, null, null, converter ?? EncodeTime, debounceOverride: TimeSpan.Zero)
-        { EncoderPath = FakeEncoderPath(), InputPath = "before-recovery.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
+        var vm = TestViewModels.Create(services, backend, null, null, converter ?? EncodeTime, debounceOverride: TimeSpan.Zero);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "before-recovery.ts";
+        vm.CurrentSeconds = 10;
+        vm.InputArgsText = "--avhw";
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         Task afterApplied = ObserveAfterApplied(vm);
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);

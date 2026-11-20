@@ -17,8 +17,7 @@ public sealed class HdrDisplayViewModelTests
     {
         using var services = new Services();
         var backend = new FramesBackend(afterHdr: true, beforeHdr: true);
-        var clock = TimeProvider.System;
-        await using var vm = Create(services, backend, clock);
+        await using var vm = Create(services, backend);
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         int runs = backend.Runs;
@@ -47,7 +46,7 @@ public sealed class HdrDisplayViewModelTests
     {
         using var services = new Services();
         var backend = new FramesBackend(afterHdr: false, beforeHdr: true);
-        await using var vm = Create(services, backend, TimeProvider.System);
+        await using var vm = Create(services, backend);
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         // AfterがSDRでも、Beforeを変換しているので基準白は出す。
@@ -84,7 +83,7 @@ public sealed class HdrDisplayViewModelTests
             for (int i = 3; i < data.Length; i += 4) data[i] = 255;
             return data;
         }
-        await using var vm = Create(services, backend, TimeProvider.System, ConvertAsync);
+        await using var vm = Create(services, backend, ConvertAsync);
         var shown = new List<byte>();
         vm.PropertyChanged += (_, e) =>
         {
@@ -109,11 +108,13 @@ public sealed class HdrDisplayViewModelTests
         Assert.Equal(2, backend.Runs);
     }
 
-    private static MainWindowViewModel Create(Services services, FramesBackend backend, TimeProvider clock,
+    private static MainWindowViewModel Create(Services services, FramesBackend backend,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter = null)
     {
-        var vm = new MainWindowViewModel(services, clock, backend, null, null, converter)
-        { EncoderPath = FakeEncoderPath(), InputPath = "hdr.ts", InputArgsText = "--avhw --fake-duration 00:00:10.00" };
+        var vm = TestViewModels.Create(services, backend, null, null, converter);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "hdr.ts";
+        vm.InputArgsText = "--avhw --fake-duration 00:00:10.00";
         vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
         return vm;
     }

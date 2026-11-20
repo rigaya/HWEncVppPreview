@@ -42,10 +42,10 @@ internal sealed class OwnedProcessSession : IAsyncDisposable
         SetEnvironment("FAKE_ENCODER_PID_FILE", PidPath);
         SetEnvironment("FAKE_ENCODER_COMMAND_LOG_FILE", CommandPath);
         Cache = new FrameCache(Scope);
-        IPreviewBackend first = new ServerBackend();
-        IPreviewBackend? beforeFirst = beforeEnabled ? new ServerBackend() : null;
+        IPreviewBackend first = TestProcesses.CreateServerBackend();
+        IPreviewBackend? beforeFirst = beforeEnabled ? TestProcesses.CreateServerBackend() : null;
         var owned = new MainWindowViewModel.OwnedPreviewDependencies(Scope, Post);
-        InputProbe? probe = durationPipe == null ? null : new InputProbe(configureStartInfo: info =>
+        InputProbe? probe = durationPipe == null ? null : TestProcesses.CreateInputProbe(configureStartInfo: info =>
         {
             int index = info.ArgumentList.IndexOf("--frames");
             if (index >= 0 && index + 1 < info.ArgumentList.Count && info.ArgumentList[index + 1] == "1")
@@ -54,13 +54,14 @@ internal sealed class OwnedProcessSession : IAsyncDisposable
                 info.ArgumentList.Add(durationPipe);
             }
         });
-        Vm = new MainWindowViewModel(new Services(Path.Combine(DirectoryPath, "settings.json")), TimeProvider.System,
+        Vm = TestViewModels.Create(new Services(Path.Combine(DirectoryPath, "settings.json")),
             first, probe, Cache, null, backgroundBackend: beforeFirst,
-            beforeEnabled: beforeEnabled, owned: owned, debounceOverride: TimeSpan.Zero)
-        {
-            EncoderPath = FakeEncoderPath(), InputPath = "owned-process.ts", InputArgsText = inputArgs,
-            CurrentSeconds = target, IsShowingBefore = beforeEnabled,
-        };
+            beforeEnabled: beforeEnabled, owned: owned, debounceOverride: TimeSpan.Zero);
+        Vm.EncoderPath = FakeEncoderPath();
+        Vm.InputPath = "owned-process.ts";
+        Vm.InputArgsText = inputArgs;
+        Vm.CurrentSeconds = target;
+        Vm.IsShowingBefore = beforeEnabled;
         if (filterText != null) Vm.FilterLines.Add(new FilterLineViewModel { Text = filterText });
     }
 

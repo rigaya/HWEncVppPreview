@@ -11,7 +11,7 @@ public sealed class PreparationTests
         var backend = new CountingBackend();
         var cache = new FrameCache();
         var controller = new PreviewController(backend, cache);
-        var probe = new InputProbe();
+        var probe = TestProcesses.CreateInputProbe();
         int notifications = 0;
         controller.FrameReady += _ => notifications++;
         controller.Completed += _ => notifications++;
@@ -33,7 +33,7 @@ public sealed class PreparationTests
     {
         var backend = new CountingBackend(hang: true);
         var controller = new PreviewController(backend);
-        await using var probe = new InputProbe();
+        await using var probe = TestProcesses.CreateInputProbe();
         Task<InputInfo> pending = controller.ProbeInputAsync(probe, "encoder", "input.ts", [], new());
         await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
         await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);

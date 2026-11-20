@@ -63,7 +63,7 @@ public sealed class FakeLogFilesTests
     public async Task 並列の実Fake起動も各暖機runとquitをPID別に全件残す()
     {
         using var files = new Files();
-        var backends = Enumerable.Range(0, 4).Select(_ => new ServerBackend(configureStartInfo: info =>
+        var backends = Enumerable.Range(0, 4).Select(_ => TestProcesses.CreateServerBackend(configureStartInfo: info =>
         {
             info.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"] = files.Log;
             info.Environment["FAKE_ENCODER_PID_FILE"] = files.Pids;

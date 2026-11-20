@@ -38,13 +38,14 @@ public sealed class SafeBoundaryViewModelTests
                 lowerBoundary ? 5 + error : 4, lowerBoundary ? 6 : 5 - error);
         }
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend,
+        var vm = TestViewModels.Create(new OwnedInjectionViewModelTests.Services(), backend,
             null, cache, (frame, token) => Task.FromResult(Enumerable.Repeat(frame.RawPixels[0],
-                frame.Header.Width * frame.Header.Height * 4).ToArray()), owned: dependencies)
-        {
-            EncoderPath = request.EncoderPath, InputPath = request.InputFile, InputArgsText = "--avhw",
-            CurrentSeconds = lowerBoundary ? 5 + 1d / 30 : 5 - 1d / 30, CompareMode = PreviewCompareMode.SideBySide,
-        };
+                frame.Header.Width * frame.Header.Height * 4).ToArray()), owned: dependencies);
+        vm.EncoderPath = request.EncoderPath;
+        vm.InputPath = request.InputFile;
+        vm.InputArgsText = "--avhw";
+        vm.CurrentSeconds = lowerBoundary ? 5 + 1d / 30 : 5 - 1d / 30;
+        vm.CompareMode = PreviewCompareMode.SideBySide;
         try
         {
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);

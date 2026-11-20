@@ -70,23 +70,37 @@ public sealed partial class PreviewController : IAsyncDisposable
     public PreviewController(IPreviewBackend? backend = null, FrameCache? cache = null, TimeProvider? timeProvider = null,
         TimeSpan? debounce = null, TimeSpan? watchdog = null, IPreviewBackend? backgroundBackend = null,
         TimeSpan? disposeGrace = null, TimeSpan? disposeTimeout = null)
+        : this(ResolveFiniteTimeouts(watchdog, disposeGrace, disposeTimeout), timeProvider ?? TimeProvider.System,
+            backend, cache, debounce, backgroundBackend) { }
+
+    internal PreviewController(PreviewTimeouts timeouts, TimeProvider clock,
+        IPreviewBackend? backend = null, FrameCache? cache = null, TimeSpan? debounce = null,
+        IPreviewBackend? backgroundBackend = null, RawOwnershipScope? ownershipScope = null)
     {
-        _clock = timeProvider ?? TimeProvider.System;
+        _clock = clock;
         _debounce = debounce ?? TimeSpan.FromMilliseconds(150);
-        _watchdog = watchdog ?? TimeSpan.FromSeconds(30);
-        // 通常のcancel/ENDでGPU資源を閉じる機会を設け、応答しない実行だけを強制終了する。
-        _disposeGrace = disposeGrace ?? TimeSpan.FromSeconds(2);
-        _disposeTimeout = disposeTimeout ?? TimeSpan.FromSeconds(5);
         if (_debounce < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(debounce));
-        if (_watchdog <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(watchdog));
-        if (_disposeTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(disposeTimeout));
-        if (_disposeGrace < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(disposeGrace));
-        _backend = backend ?? new ServerBackend(_clock);
+        _watchdog = PreviewTimeouts.Validate(timeouts.Watchdog, nameof(timeouts.Watchdog));
+        // 通常のcancel/ENDでGPU資源を閉じる機会を設け、応答しない実行だけを強制終了する。
+        _disposeGrace = PreviewTimeouts.Validate(timeouts.DisposeGrace, nameof(timeouts.DisposeGrace), allowZero: true);
+        _disposeTimeout = PreviewTimeouts.Validate(timeouts.ControllerDispose, nameof(timeouts.ControllerDispose));
+        _backend = backend ?? new ServerBackend(timeouts, clock);
         // 実プロセスは最初のBefore miss時に起動する。
-        _backgroundBackend = backgroundBackend ?? (backend == null ? new ServerBackend(_clock) : _backend);
+        _backgroundBackend = backgroundBackend ?? (backend == null ? new ServerBackend(timeouts, clock) : _backend);
         _separateBackground = !ReferenceEquals(_backgroundBackend, _backend);
-        _cache = cache ?? new FrameCache();
+        _rawScope = ownershipScope;
+        _cache = cache ?? (ownershipScope == null ? new FrameCache() : new FrameCache(ownershipScope));
+        if (ownershipScope != null && !ReferenceEquals(_cache.OwnershipScope, ownershipScope))
+            throw new ArgumentException("raw scopeが異なるcacheです。", "cache");
     }
+
+    private static PreviewTimeouts ResolveFiniteTimeouts(TimeSpan? watchdog, TimeSpan? disposeGrace, TimeSpan? disposeTimeout)
+        => PreviewTimeouts.Default with
+        {
+            Watchdog = PreviewTimeouts.Finite(watchdog, PreviewTimeouts.Default.Watchdog, nameof(watchdog)),
+            ControllerDispose = PreviewTimeouts.Finite(disposeTimeout, PreviewTimeouts.Default.ControllerDispose, nameof(disposeTimeout)),
+            DisposeGrace = PreviewTimeouts.Finite(disposeGrace, PreviewTimeouts.Default.DisposeGrace, nameof(disposeGrace), allowZero: true),
+        };
 
     /// <summary>目標フレームが確定したときに通知する。</summary>
     /// <remarks>ハンドラはすぐに戻ること。UIスレッドを同期的に待たず、Postで非同期にディスパッチすること。</remarks>
@@ -685,9 +699,11 @@ public sealed partial class PreviewController : IAsyncDisposable
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         Task finished = Task.WhenAll(tasks);
         Task cooperative = Task.WhenAll(cancellations.Append(finished));
-        TimeSpan grace = Min(_disposeGrace, Remaining(started));
+        TimeSpan grace = CleanupDeadline.Shorter(_disposeGrace, Remaining(started));
         TraceDispose("grace_begin", new { tasks = tasks.Length, milliseconds = grace.TotalMilliseconds });
-        if (!cooperative.IsCompleted && grace > TimeSpan.Zero)
+        if (grace == Timeout.InfiniteTimeSpan)
+            await Task.WhenAny(cooperative).ConfigureAwait(false);
+        else if (!cooperative.IsCompleted && grace > TimeSpan.Zero)
         {
             using var timer = new CancellationTokenSource();
             await Task.WhenAny(cooperative, Task.Delay(grace, _clock, timer.Token)).ConfigureAwait(false);
@@ -722,9 +738,7 @@ public sealed partial class PreviewController : IAsyncDisposable
         TraceDispose("complete", new { incomplete = ShutdownIncomplete });
     }
 
-    private TimeSpan Remaining(long started) => Max(TimeSpan.Zero, _disposeTimeout - _clock.GetElapsedTime(started));
-    private static TimeSpan Min(TimeSpan left, TimeSpan right) => left < right ? left : right;
-    private static TimeSpan Max(TimeSpan left, TimeSpan right) => left > right ? left : right;
+    private TimeSpan Remaining(long started) => CleanupDeadline.RemainingSince(_clock, started, _disposeTimeout);
 
     private async Task WaitForShutdownAsync(Task task, long started, string stage)
     {
@@ -733,7 +747,7 @@ public sealed partial class PreviewController : IAsyncDisposable
             if (!task.IsCompleted)
             {
                 TimeSpan remaining = Remaining(started);
-                if (remaining <= TimeSpan.Zero) throw new TimeoutException();
+                if (remaining == TimeSpan.Zero) throw new TimeoutException();
                 await task.WaitAsync(remaining, _clock).ConfigureAwait(false);
             }
             else await task.ConfigureAwait(false);
@@ -1066,7 +1080,7 @@ public sealed partial class PreviewController : IAsyncDisposable
     private sealed class OutputWatchdog : IDisposable
     {
         private readonly object _sync = new();
-        private readonly ITimer _timer;
+        private readonly ITimer? _timer;
         private readonly TimeSpan _timeout;
         private readonly TimeProvider _clock;
         private long _lastProgress;
@@ -1078,7 +1092,8 @@ public sealed partial class PreviewController : IAsyncDisposable
             _clock = clock;
             _timeout = timeout;
             _lastProgress = clock.GetTimestamp();
-            _timer = clock.CreateTimer(_ => Check(), null, timeout, Timeout.InfiniteTimeSpan);
+            if (timeout != Timeout.InfiniteTimeSpan)
+                _timer = clock.CreateTimer(_ => Check(), null, timeout, Timeout.InfiniteTimeSpan);
         }
         public Task Expired => _expired.Task;
         public void Touch()
@@ -1087,12 +1102,12 @@ public sealed partial class PreviewController : IAsyncDisposable
             {
                 if (_disposed || _suspended) return;
                 _lastProgress = _clock.GetTimestamp();
-                _timer.Change(_timeout, Timeout.InfiniteTimeSpan);
+                _timer?.Change(_timeout, Timeout.InfiniteTimeSpan);
             }
         }
         public void Suspend()
         {
-            lock (_sync) { if (_disposed) return; _suspended = true; _timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan); }
+            lock (_sync) { if (_disposed) return; _suspended = true; _timer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan); }
         }
         public void Resume()
         {
@@ -1101,7 +1116,7 @@ public sealed partial class PreviewController : IAsyncDisposable
                 if (_disposed) return;
                 _suspended = false;
                 _lastProgress = _clock.GetTimestamp();
-                _timer.Change(_timeout, Timeout.InfiniteTimeSpan);
+                _timer?.Change(_timeout, Timeout.InfiniteTimeSpan);
             }
         }
         private void Check()
@@ -1111,10 +1126,10 @@ public sealed partial class PreviewController : IAsyncDisposable
                 if (_disposed || _suspended) return;
                 // Changeより前にキューへ入った古いコールバックでも、最新の受信時刻で再判定する。
                 TimeSpan remaining = _timeout - _clock.GetElapsedTime(_lastProgress);
-                if (remaining > TimeSpan.Zero) _timer.Change(remaining, Timeout.InfiniteTimeSpan);
+                if (remaining > TimeSpan.Zero) _timer?.Change(remaining, Timeout.InfiniteTimeSpan);
                 else _expired.TrySetResult();
             }
         }
-        public void Dispose() { lock (_sync) { _disposed = true; _timer.Dispose(); } }
+        public void Dispose() { lock (_sync) { _disposed = true; _timer?.Dispose(); } }
     }
 }

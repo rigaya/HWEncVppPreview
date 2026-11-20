@@ -16,10 +16,13 @@ public sealed class ForwardPrefetchViewModelTests
     {
         using var capability = new CapabilityScope(); using var services = new Services();
         var backend = new Backend();
-        await using var vm = new MainWindowViewModel(services, TimeProvider.System, backend, null, null,
+        await using var vm = TestViewModels.Create(services, backend, null, null,
             (frame, token) => Task.FromResult(Enumerable.Repeat(frame.Data[0], frame.Header.Width * frame.Header.Height * 4).ToArray()),
-            debounceOverride: TimeSpan.Zero)
-        { EncoderPath = FakeEncoderPath(), InputPath = "c2-prefetch.ts", CurrentSeconds = 10, InputArgsText = "--avhw" };
+            debounceOverride: TimeSpan.Zero);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "c2-prefetch.ts";
+        vm.CurrentSeconds = 10;
+        vm.InputArgsText = "--avhw";
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         for (int i = 0; i < 6; i++)

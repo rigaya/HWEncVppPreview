@@ -116,7 +116,7 @@ public sealed class CliHelpCheckTests
         yield return new object[] { new[] { "--check-help", "--check-help", "--help-file", "b" } };
         yield return new object[] { new[] { "--check-help", "--help-file", "a", "--help-file", "b" } };
         yield return new object[] { new[] { "--check-help", "--help-file", "a", "--mode", "server" } };
-        foreach (string value in new[] { "0", "-1", "NaN", "Infinity", "1e100" })
+        foreach (string value in new[] { "0", "-0.001", "-1", "NaN", "Infinity", "1e100" })
             yield return new object[] { new[] { "--check-help", "--help-file", "a", "--watchdog-seconds", value } };
     }
 
@@ -169,9 +169,9 @@ public sealed class CliHelpCheckTests
     public async Task CaptureDrainsBothStreamsIncludingStderrOnlyHelp(bool stderrOnly)
     {
         await using var child = new FakeCapture(stderrOnly ? "stderr" : "stdout");
-        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TestTimeouts.Hang);
+        Task<HelpProcessResult> capture = CaptureUntilExitAsync(child.StartInfo());
         int pid = await child.ReadPidAsync(capture);
-        var result = await capture.WaitWithDiagnosticsAsync(Safety);
+        var result = await capture;
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(Valid, stderrOnly ? result.StandardError : result.StandardOutput);
         if (!stderrOnly) Assert.Equal(131072, result.StandardError.Length);
@@ -182,9 +182,9 @@ public sealed class CliHelpCheckTests
     public async Task CaptureRetainsNonzeroExitAndDiagnostics()
     {
         await using var child = new FakeCapture("error");
-        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TestTimeouts.Hang);
+        Task<HelpProcessResult> capture = CaptureUntilExitAsync(child.StartInfo());
         int pid = await child.ReadPidAsync(capture);
-        var result = await capture.WaitWithDiagnosticsAsync(Safety);
+        var result = await capture;
         Assert.Equal(23, result.ExitCode);
         Assert.Contains("child failed", result.StandardError);
         AssertStopped(pid);
@@ -202,9 +202,9 @@ public sealed class CliHelpCheckTests
         Assert.Contains("help", error.Message, StringComparison.Ordinal);
         AssertStopped(pid);
         await using var next = new FakeCapture("stdout");
-        Task<HelpProcessResult> recovery = HelpProcessCapture.CaptureAsync(next.StartInfo(), TimeProvider.System, Safety);
+        Task<HelpProcessResult> recovery = CaptureUntilExitAsync(next.StartInfo());
         int nextPid = await next.ReadPidAsync(recovery);
-        Assert.Equal(0, (await recovery.WaitWithDiagnosticsAsync(Safety)).ExitCode);
+        Assert.Equal(0, (await recovery).ExitCode);
         AssertStopped(nextPid);
     }
 
@@ -213,11 +213,20 @@ public sealed class CliHelpCheckTests
     {
         await using var child = new FakeCapture("hang");
         using var cancellation = new CancellationTokenSource();
-        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(child.StartInfo(), TimeProvider.System, TestTimeouts.Hang, cancellation.Token);
-        int pid = await child.ReadPidAsync(capture);
-        cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => capture.WaitWithDiagnosticsAsync(Safety));
-        AssertStopped(pid);
+        Task<HelpProcessResult> capture = CaptureUntilExitAsync(child.StartInfo(), cancellation.Token);
+        try
+        {
+            int pid = await child.ReadPidAsync(capture);
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => capture);
+            AssertStopped(pid);
+        }
+        finally
+        {
+            child.ClosePidPipe();
+            cancellation.Cancel();
+            await ((Task)capture).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
     }
 
     [Fact]
@@ -228,18 +237,26 @@ public sealed class CliHelpCheckTests
         await using var parent = new FakeCapture("inherited");
         ProcessStartInfo info = parent.StartInfo();
         info.Environment["FAKE_ENCODER_HOLD_OUTPUT_PIPE"] = name;
-        Task<HelpProcessResult> capture = HelpProcessCapture.CaptureAsync(info, TimeProvider.System, TestTimeouts.Hang);
-        int parentPid = await parent.ReadPidAsync(capture);
-        await PipeWait.UntilConnectedAsync(pipe, name, capture, Safety);
-        using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-        using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-        int pid = int.Parse(await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Safety) ?? throw new EndOfStreamException(), CultureInfo.InvariantCulture);
-        using var child = Process.GetProcessById(pid);
-        await writer.WriteLineAsync("release");
-        Assert.Equal("0", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Safety));
-        await child.WaitForExitAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(0, (await capture.WaitWithDiagnosticsAsync(Safety)).ExitCode);
-        AssertStopped(parentPid);
+        Task<HelpProcessResult> capture = CaptureUntilExitAsync(info);
+        try
+        {
+            int parentPid = await parent.ReadPidAsync(capture);
+            await PipeWait.UntilConnectedAsync(pipe, name, capture);
+            using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+            string? pid = await reader.ReadLineAsync();
+            Assert.True(int.TryParse(pid, NumberStyles.None, CultureInfo.InvariantCulture, out int childPid) && childPid > 0);
+            await pipe.WriteAsync("release\n"u8.ToArray());
+            Assert.Equal("0", await reader.ReadLineAsync());
+            Assert.Null(await reader.ReadLineAsync());
+            Assert.Equal(0, (await capture).ExitCode);
+            AssertStopped(parentPid);
+        }
+        finally
+        {
+            parent.ClosePidPipe();
+            pipe.Dispose();
+            await ((Task)capture).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
     }
 
     [Fact]
@@ -247,15 +264,19 @@ public sealed class CliHelpCheckTests
     {
         using var stop = new CancellationTokenSource();
         stop.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => HelpProcessCapture.CaptureAsync(
-            HelpProcessCapture.StartInfo("存在しないexe"), TimeProvider.System, TimeSpan.FromSeconds(5), stop.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            CaptureUntilExitAsync(HelpProcessCapture.StartInfo("存在しないexe"), stop.Token));
     }
+
+    private static Task<HelpProcessResult> CaptureUntilExitAsync(ProcessStartInfo start, CancellationToken token = default)
+        => HelpProcessCapture.CaptureAsync(start, TimeProvider.System,
+            PreviewTimeouts.Infinite.CliHelp, PreviewTimeouts.Infinite.HelpCleanup, token);
 
     private static string Data(params string[] names) => System.IO.Path.Combine(new[] { AppContext.BaseDirectory, "Data", "help" }.Concat(names).ToArray());
     private static async Task<Run> RunAsync(params string[] args)
     {
         using var output = new StringWriter(CultureInfo.InvariantCulture);
-        int code = await CliProgram.RunAsync(args, output).WaitWithDiagnosticsAsync(Safety);
+        int code = await CliProgram.RunAsync(args, output);
         string[] lines = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.Single(lines);
         return new(code, JsonDocument.Parse(lines[0]));
@@ -301,11 +322,13 @@ public sealed class CliHelpCheckTests
 
         public async Task<int> ReadPidAsync(Task capture)
         {
-            await PipeWait.UntilConnectedAsync(_pipe, _name, capture, Safety);
+            await PipeWait.UntilConnectedAsync(_pipe, _name, capture);
             using var reader = new StreamReader(_pipe, Encoding.UTF8, leaveOpen: true);
-            string value = await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Safety) ?? throw new EndOfStreamException();
+            string value = await reader.ReadLineAsync() ?? throw new EndOfStreamException();
             return int.Parse(value, CultureInfo.InvariantCulture);
         }
+
+        public void ClosePidPipe() => _pipe.Dispose();
 
         public ValueTask DisposeAsync()
         {

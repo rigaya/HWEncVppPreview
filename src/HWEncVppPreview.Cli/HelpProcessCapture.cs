@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Text;
+using HWEncVppPreview.Core;
 
 namespace HWEncVppPreview.Cli;
 
@@ -18,8 +19,6 @@ internal sealed class HelpCaptureException(string message, Exception innerExcept
 /// <summary>helpの終了と両パイプを同じ期限で待ち、自分の子だけを有界に回収する。</summary>
 internal static class HelpProcessCapture
 {
-    private static readonly TimeSpan CleanupTimeout = TimeSpan.FromSeconds(5);
-
     internal static ProcessStartInfo StartInfo(string encoder)
     {
         var start = new ProcessStartInfo(encoder);
@@ -27,10 +26,16 @@ internal static class HelpProcessCapture
         return start;
     }
 
-    internal static async Task<HelpProcessResult> CaptureAsync(ProcessStartInfo start, TimeProvider clock,
+    internal static Task<HelpProcessResult> CaptureAsync(ProcessStartInfo start, TimeProvider clock,
         TimeSpan timeout, CancellationToken token = default)
+        => CaptureAsync(start, clock, timeout, PreviewTimeouts.Default.HelpCleanup, token);
+
+    internal static async Task<HelpProcessResult> CaptureAsync(ProcessStartInfo start, TimeProvider clock,
+        TimeSpan timeout, TimeSpan cleanupTimeout, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+        PreviewTimeouts.Validate(timeout, nameof(timeout));
+        PreviewTimeouts.Validate(cleanupTimeout, nameof(cleanupTimeout));
         start.UseShellExecute = false;
         start.RedirectStandardOutput = true;
         start.RedirectStandardError = true;
@@ -68,7 +73,7 @@ internal static class HelpProcessCapture
                 try
                 {
                     await Task.WhenAll(kill, exited ?? Task.CompletedTask, stdout ?? Task.CompletedTask,
-                        stderr ?? Task.CompletedTask).WaitAsync(CleanupTimeout, clock).ConfigureAwait(false);
+                        stderr ?? Task.CompletedTask).WaitAsync(cleanupTimeout, clock).ConfigureAwait(false);
                 }
                 catch (Exception exception)
                 {

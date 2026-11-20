@@ -34,6 +34,7 @@ internal static class ProcessSupport
 
     public static async Task<bool> ReapBoundedAsync(Process process, TimeProvider clock, TimeSpan timeout)
     {
+        PreviewTimeouts.Validate(timeout, nameof(timeout), allowZero: true);
         int? pid = null;
         try { pid = process.Id; } catch (InvalidOperationException) { }
         void Stage(string stage)
@@ -98,13 +99,23 @@ internal static class ProcessSupport
 internal sealed class CleanupDeadline(TimeProvider clock, TimeSpan timeout)
 {
     private readonly long _started = clock.GetTimestamp();
-    public TimeSpan Remaining
+    public TimeSpan Remaining => RemainingSince(clock, _started, timeout);
+
+    internal static TimeSpan RemainingSince(TimeProvider clock, long started, TimeSpan timeout)
     {
-        get
-        {
-            TimeSpan remaining = timeout - clock.GetElapsedTime(_started);
-            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
-        }
+        if (timeout == Timeout.InfiniteTimeSpan) return timeout;
+        TimeSpan remaining = timeout - clock.GetElapsedTime(started);
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
+
+    internal static TimeSpan Half(TimeSpan timeout) =>
+        timeout == Timeout.InfiniteTimeSpan ? timeout : TimeSpan.FromTicks(timeout.Ticks / 2);
+
+    internal static TimeSpan Shorter(TimeSpan left, TimeSpan right)
+    {
+        if (left == Timeout.InfiniteTimeSpan) return right;
+        if (right == Timeout.InfiniteTimeSpan) return left;
+        return left < right ? left : right;
     }
 }
 

@@ -34,6 +34,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private readonly Action<Action> _postToUi;
     private readonly IViewModelServices _services;
     private readonly TimeProvider _clock;
+    private readonly PreviewTimeouts _timeouts;
     private readonly InputProbe _probe;
     private readonly bool _borrowInputProbe;
     private readonly FrameCache _cache;
@@ -66,13 +67,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         IPreviewBackend? backend = null, InputProbe? probe = null, FrameCache? cache = null)
         : this(services, timeProvider, backend, probe, cache, null) { }
 
-    /// <summary>偽時計による描画待ちの再現用に、画像変換だけを差し替える内部入口。</summary>
+    /// <summary>試験用に画像変換、時計と期限を差し替える内部入口。</summary>
     internal MainWindowViewModel(IViewModelServices? services, TimeProvider? timeProvider,
         IPreviewBackend? backend, InputProbe? probe, FrameCache? cache,
         Func<Y4mFrame, CancellationToken, Task<byte[]>>? converter,
         IPreviewBackend? backgroundBackend = null, bool beforeEnabled = true,
         OwnedPreviewDependencies? owned = null, TimeSpan? debounceOverride = null,
-        Func<string, string, CancellationToken, Task<string>>? readTextOverride = null)
+        Func<string, string, CancellationToken, Task<string>>? readTextOverride = null,
+        PreviewTimeouts? timeouts = null)
     {
         if (owned != null)
         {
@@ -92,21 +94,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _beforeEnabled = beforeEnabled;
         _services = services ?? new AvaloniaViewModelServices();
         _clock = timeProvider ?? TimeProvider.System;
+        _timeouts = timeouts ?? PreviewTimeouts.Default;
         _inputEditDelay = debounceOverride ?? TimeSpan.FromMilliseconds(150);
         _readTextOverride = readTextOverride;
-        _probe = probe ?? new InputProbe(_clock);
+        _probe = probe ?? new InputProbe(_timeouts, _clock);
         _borrowInputProbe = probe == null && backend == null;
         // 同じ長さなら読取が全体を上書きし、所有権が貸出中の画素を守るため、入力世代や形式では分けない。
         _rawOwnershipScope = owned?.Scope ?? (_usesOwnedRaw ? new RawOwnershipScope(new RawBufferPool()) : null);
         _cache = cache ?? (_rawOwnershipScope != null ? new FrameCache(_rawOwnershipScope) : new FrameCache());
-        var observed = new ObservedBackend(backend ?? new ServerBackend(_clock), this);
+        var observed = new ObservedBackend(backend ?? new ServerBackend(_timeouts, _clock), this);
         var before = backgroundBackend != null ? new ObservedBackend(backgroundBackend, this) :
-            backend == null ? new ObservedBackend(new ServerBackend(_clock), this) : observed;
-        _controller = _rawOwnershipScope != null
-            ? new PreviewController(_rawOwnershipScope, observed, _cache, _clock,
-                debounce: debounceOverride, backgroundBackend: before)
-            : new PreviewController(observed, _cache, _clock,
-                debounce: debounceOverride, backgroundBackend: before);
+            backend == null ? new ObservedBackend(new ServerBackend(_timeouts, _clock), this) : observed;
+        _controller = new PreviewController(_timeouts, _clock, observed, _cache,
+            debounce: debounceOverride, backgroundBackend: before, ownershipScope: _rawOwnershipScope);
         _controller.ReplayStarted += OnReplayStarted;
         if (_usesOwnedRaw)
         {
@@ -1013,7 +1013,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         using var registration = token.Register(() => { try { if (!process.HasExited) process.Kill(true); } catch (InvalidOperationException) { } });
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
-        try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5), _clock, token).ConfigureAwait(false); }
+        try { await process.WaitForExitAsync().WaitAsync(_timeouts.Metadata, _clock, token).ConfigureAwait(false); }
         finally
         {
             if (!process.HasExited) process.Kill(true);
@@ -1051,7 +1051,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         UiLanguage.Changed -= OnLanguageChanged;
         _initialized = false;
         Interlocked.Increment(ref _generation);
-        long started = _clock.GetTimestamp();
+        var deadline = new CleanupDeadline(_clock, _timeouts.ViewModelDispose);
         Task cancellations = Task.Run(() =>
         {
             CancelEncoderInitialization();
@@ -1080,13 +1080,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         // 同期取消・検査・変換・UI反映にも同じ総期限を適用し、残る処理は遅延観測する。
         TraceDisposeStage("controller_dispose.begin");
         Task controller = Task.Run(async () => await _controller.DisposeAsync().ConfigureAwait(false));
-        await WaitForVmShutdownAsync(cancellations, started, "cancellations").ConfigureAwait(false);
-        await WaitForVmShutdownAsync(controller, started, "controller").ConfigureAwait(false);
+        await WaitForVmShutdownAsync(cancellations, deadline, "cancellations").ConfigureAwait(false);
+        await WaitForVmShutdownAsync(controller, deadline, "controller").ConfigureAwait(false);
         if (_controller.ShutdownIncomplete) Interlocked.Exchange(ref _shutdownIncomplete, 1);
         TraceDisposeStage("controller_dispose.end");
         TraceDisposeStage("probe_dispose.begin");
         Task probe = Task.Run(async () => await _probe.DisposeAsync().ConfigureAwait(false));
-        await WaitForVmShutdownAsync(probe, started, "probe").ConfigureAwait(false);
+        await WaitForVmShutdownAsync(probe, deadline, "probe").ConfigureAwait(false);
         TraceDisposeStage("probe_dispose.end");
         TraceDisposeStage("wait_idle.begin");
         Task pending = Task.Run(async () =>
@@ -1095,7 +1095,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             lock (_taskLock) tasks = _tasks.ToArray();
             await Task.WhenAll(tasks).ConfigureAwait(false);
         });
-        await WaitForVmShutdownAsync(pending, started, "vm_tasks").ConfigureAwait(false);
+        await WaitForVmShutdownAsync(pending, deadline, "vm_tasks").ConfigureAwait(false);
         TraceDisposeStage("wait_idle.end");
         TraceDisposeStage("cleanup.begin");
         Task cleanup = PostAsync(() =>
@@ -1129,7 +1129,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             _beforeExecutionContext = null;
             _beforePhysicalWindow = null;
         });
-        await WaitForVmShutdownAsync(cleanup, started, "ui_cleanup").ConfigureAwait(false);
+        await WaitForVmShutdownAsync(cleanup, deadline, "ui_cleanup").ConfigureAwait(false);
         Task resources = Task.WhenAll(cancellations, controller, probe, pending);
         ObserveVmShutdownTask(resources);
         if (resources.IsCompleted) _lifetime.Dispose();
@@ -1143,17 +1143,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         AssertOwnedRawReleased();
         TraceDisposeStage(Volatile.Read(ref _shutdownIncomplete) == 0 ? "complete" : "incomplete");
     }
-    private async Task WaitForVmShutdownAsync(Task task, long started, string stage)
+    private async Task WaitForVmShutdownAsync(Task task, CleanupDeadline deadline, string stage)
     {
         try
         {
-            if (task.IsCompleted) await task.ConfigureAwait(false);
-            else
+            if (task.IsCompleted)
             {
-                TimeSpan remaining = TimeSpan.FromSeconds(5) - _clock.GetElapsedTime(started);
-                if (remaining <= TimeSpan.Zero) throw new TimeoutException();
-                await task.WaitAsync(remaining, _clock).ConfigureAwait(false);
+                await task.ConfigureAwait(false);
+                return;
             }
+            TimeSpan remaining = deadline.Remaining;
+            if (remaining == TimeSpan.Zero) throw new TimeoutException();
+            await task.WaitAsync(remaining, _clock).ConfigureAwait(false);
         }
         catch (Exception exception)
         {

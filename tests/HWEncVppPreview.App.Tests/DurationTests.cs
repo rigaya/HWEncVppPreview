@@ -18,19 +18,18 @@ public sealed class DurationTests
     public async Task ExitDurationDoesNotDelayImageOrReplaceImageStateAndSurvivesEditingAndSeeking()
     {
         using var files = new TestFiles();
-        var clock = TimeProvider.System;
         int starts = 0;
-        await using var probe = new InputProbe(clock, configureStartInfo: info =>
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info =>
         {
             if (!IsDuration(info)) return;
             Interlocked.Increment(ref starts);
             HoldDuration(info, files);
         });
-        await using var vm = Create(files, clock, probe);
+        await using var vm = Create(files, probe);
         vm.CurrentSeconds = 15;
         var line = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.1" };
         vm.FilterLines.Add(line);
-        await PrepareAsync(vm, clock);
+        await PrepareAsync(vm);
         await files.WaitReadyAsync(vm);
         await WaitForPropertyAsync(vm, () => vm.PreviewImage != null && !vm.IsBusy);
         await files.ReleaseAsync();
@@ -56,16 +55,15 @@ public sealed class DurationTests
     public async Task FilterAndSeekDoNotCancelOrDuplicatePendingDuration()
     {
         using var files = new TestFiles();
-        var clock = TimeProvider.System;
         int starts = 0;
-        await using var probe = new InputProbe(clock, configureStartInfo: info =>
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info =>
         {
             if (!IsDuration(info)) return;
             Interlocked.Increment(ref starts);
             HoldDuration(info, files);
         });
-        await using var vm = Create(files, clock, probe);
-        await PrepareAsync(vm, clock);
+        await using var vm = Create(files, probe);
+        await PrepareAsync(vm);
         await files.WaitReadyAsync(vm);
         vm.FilterLines.Add(new() { Text = "--vpp-nlmeans sigma=0.1" });
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
@@ -87,13 +85,12 @@ public sealed class DurationTests
     public async Task NonzeroDurationExitStillUpdatesLengthWithoutChangingPreviewDiagnostics()
     {
         using var files = new TestFiles();
-        var clock = TimeProvider.System;
-        await using var probe = new InputProbe(clock, configureStartInfo: info =>
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info =>
         {
             if (IsDuration(info)) { info.ArgumentList.Add("--fake-rc"); info.ArgumentList.Add("23"); }
         });
-        await using var vm = Create(files, clock, probe);
-        await PrepareAsync(vm, clock);
+        await using var vm = Create(files, probe);
+        await PrepareAsync(vm);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(vm.HasDuration);
         Assert.Equal(10, vm.DurationSeconds);
@@ -106,8 +103,7 @@ public sealed class DurationTests
     public async Task InputChangeCancelsAndReapsOldDurationAndRejectsItsResult()
     {
         using var files = new TestFiles();
-        var clock = TimeProvider.System;
-        await using var probe = new InputProbe(clock, configureStartInfo: info =>
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info =>
         {
             if (!IsDuration(info)) return;
             if (info.ArgumentList.Contains("old.ts")) HoldDuration(info, files);
@@ -117,8 +113,8 @@ public sealed class DurationTests
                 info.ArgumentList[index + 1] = "00:00:20.00";
             }
         });
-        await using var vm = Create(files, clock, probe);
-        await PrepareAsync(vm, clock);
+        await using var vm = Create(files, probe);
+        await PrepareAsync(vm);
         await files.WaitReadyAsync(vm);
         int pid = await files.PidAsync();
         vm.InputPath = "new.ts";
@@ -137,13 +133,12 @@ public sealed class DurationTests
     public async Task DisposeCancelsAndReapsPendingDuration()
     {
         using var files = new TestFiles();
-        var clock = TimeProvider.System;
-        var probe = new InputProbe(clock, configureStartInfo: info => { if (IsDuration(info)) HoldDuration(info, files); });
-        var vm = Create(files, clock, probe);
+        var probe = TestProcesses.CreateInputProbe(configureStartInfo: info => { if (IsDuration(info)) HoldDuration(info, files); });
+        var vm = Create(files, probe);
         Exception? failure = null;
         try
         {
-            await PrepareAsync(vm, clock);
+            await PrepareAsync(vm);
             await files.WaitReadyAsync(vm);
             int pid = await files.PidAsync();
             await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
@@ -176,12 +171,11 @@ public sealed class DurationTests
     public async Task KnownProbeDurationDoesNotStartAnotherProcess()
     {
         using var files = new TestFiles();
-        var clock = TimeProvider.System;
         int starts = 0;
-        await using var probe = new InputProbe(clock, configureStartInfo: _ => Interlocked.Increment(ref starts));
-        await using var vm = Create(files, clock, probe);
+        await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: _ => Interlocked.Increment(ref starts));
+        await using var vm = Create(files, probe);
         vm.InputArgsText = "--avhw --fake-duration 00:00:10.00";
-        await PrepareAsync(vm, clock);
+        await PrepareAsync(vm);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(vm.HasDuration);
         Assert.Equal(10, vm.DurationSeconds);
@@ -204,14 +198,12 @@ public sealed class DurationTests
     public async Task OmittedBeforeStartsDurationAfterTheAfterImage()
     {
         using var files = new TestFiles();
-        var clock = TimeProvider.System;
-        var probe = HeldDurationProbe(files, clock);
-        var backend = new ServerBackend();
-        await using var vm = new MainWindowViewModel(files, clock, backend, probe, null, null, beforeEnabled: false)
-        {
-            EncoderPath = FakeEncoderPath(), InputPath = "no-before.ts",
-            InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit"
-        };
+        var probe = HeldDurationProbe(files);
+        var backend = TestProcesses.CreateServerBackend();
+        await using var vm = TestViewModels.Create(files, backend, probe, null, null, beforeEnabled: false);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "no-before.ts";
+        vm.InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit";
         try
         {
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
@@ -231,15 +223,13 @@ public sealed class DurationTests
     public async Task MissingOrFailedBeforeDoesNotPreventDuration(int beforeExitCode)
     {
         using var files = new TestFiles();
-        var clock = TimeProvider.System;
-        var probe = HeldDurationProbe(files, clock);
-        var after = new ServerBackend();
+        var probe = HeldDurationProbe(files);
+        var after = TestProcesses.CreateServerBackend();
         var before = new MissingBeforeBackend(beforeExitCode);
-        await using var vm = new MainWindowViewModel(files, clock, after, probe, null, null, before)
-        {
-            EncoderPath = FakeEncoderPath(), InputPath = "missing-before.ts",
-            InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit"
-        };
+        await using var vm = TestViewModels.Create(files, after, probe, null, null, before);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "missing-before.ts";
+        vm.InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit";
         vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
         try
         {
@@ -260,8 +250,7 @@ public sealed class DurationTests
         using var files = new TestFiles();
         string? old = Environment.GetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES");
         Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", "1");
-        var clock = TimeProvider.System;
-        var probe = HeldDurationProbe(files, clock);
+        var probe = HeldDurationProbe(files);
         var after = new DelayedStreamBackend();
         var before = new DurationBeforeBackend();
         var secondBefore = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -272,11 +261,10 @@ public sealed class DurationTests
                 await secondBefore.Task.WaitAsync(token);
             return YuvToBgra.Convert(frame);
         }
-        await using var vm = new MainWindowViewModel(files, clock, after, probe, null, ConvertAsync, before)
-        {
-            EncoderPath = FakeEncoderPath(), InputPath = "cross-generation.ts",
-            InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit"
-        };
+        await using var vm = TestViewModels.Create(files, after, probe, null, ConvertAsync, before);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "cross-generation.ts";
+        vm.InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit";
         vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
         Task beforeUpdated = ObservePropertyChanged(vm, nameof(vm.BeforeImage));
         try
@@ -303,7 +291,7 @@ public sealed class DurationTests
         Assert.Null(vm.ErrorText);
     }
 
-    private static InputProbe HeldDurationProbe(TestFiles files, TimeProvider clock) => new(clock, configureStartInfo: info =>
+    private static InputProbe HeldDurationProbe(TestFiles files) => TestProcesses.CreateInputProbe(configureStartInfo: info =>
     {
         if (IsDuration(info)) HoldDuration(info, files);
         else { info.ArgumentList.Add("--fake-hang-after"); info.ArgumentList.Add("1"); }
@@ -361,16 +349,15 @@ public sealed class DurationTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private static MainWindowViewModel Create(TestFiles files, TimeProvider clock, InputProbe probe)
+    private static MainWindowViewModel Create(TestFiles files, InputProbe probe)
     {
-        var backend = new ServerBackend();
-        return new(files, clock, backend: backend, probe: probe)
-        {
-            EncoderPath = FakeEncoderPath(), InputPath = "old.ts",
-            InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit",
-        };
+        var vm = TestViewModels.Create(files, TestProcesses.CreateServerBackend(), probe);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "old.ts";
+        vm.InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit";
+        return vm;
     }
-    private static async Task PrepareAsync(MainWindowViewModel vm, TimeProvider clock)
+    private static async Task PrepareAsync(MainWindowViewModel vm)
     {
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
 

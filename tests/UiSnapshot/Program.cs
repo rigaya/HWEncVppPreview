@@ -5,6 +5,7 @@ using HWEncVppPreview.App;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.Localization;
 using HWEncVppPreview.Core;
+using HWEncVppPreview.Testing;
 using Avalonia.Headless;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -31,7 +32,7 @@ static MainWindowViewModel CreateDesignSample(bool loadHelp = false)
 {
     var metadataBackend = new SnapshotMetadataBackend();
     var vm = loadHelp
-        ? new MainWindowViewModel(null, TimeProvider.System, metadataBackend, new InputProbe(metadataBackend, TimeProvider.System), null, null,
+        ? new MainWindowViewModel(null, TimeProvider.System, metadataBackend, TestProcesses.CreateInputProbe(metadataBackend, TimeProvider.System), null, null,
             readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help"
                 ? File.ReadAllText(HelpDataPath("qsvenc-h1.txt")) : "QSVEnc 8.35"))
         : new MainWindowViewModel();

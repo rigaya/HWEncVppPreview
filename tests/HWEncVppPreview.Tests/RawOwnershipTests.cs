@@ -361,7 +361,7 @@ public sealed class RawOwnershipTests
     public async Task RealReaderBackendsRetainOnlyTheAcceptedSinkFrames(bool failCallback)
     {
         var scope = new RawOwnershipScope();
-        await using IPreviewBackend backend = new ServerBackend();
+        await using IPreviewBackend backend = TestProcesses.CreateServerBackend();
         using var sink = new OwnedRecordingSink(failCallback);
         var request = Request with
         {
@@ -410,7 +410,7 @@ public sealed class RawOwnershipTests
         var scope = new RawOwnershipScope();
         var cache = new FrameCache(scope, 4096);
         var backend = new OwnedStreamingBackend();
-        await using var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
+        await using var controller = TestProcesses.CreateController(backend, cache, debounce: TimeSpan.Zero, ownershipScope: scope);
         OwnedPreviewEnvelope? held = null;
         controller.OwnedFrameReady += value =>
         {

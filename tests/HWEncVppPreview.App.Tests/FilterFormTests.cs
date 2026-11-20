@@ -283,33 +283,33 @@ VPP Options:
         Environment.SetEnvironmentVariable("FAKE_ENCODER_HELP_FILE", services.HelpPath);
         try
         {
-            var clock = TimeProvider.System;
-            await using var vm = new MainWindowViewModel(services, clock, new ServerBackend(), null, null, null, debounceOverride: TimeSpan.Zero)
-            { EncoderPath = FakeEncoderPath(), InputPath = "fake input.ts" };
+            await using var vm = TestViewModels.Create(services, TestProcesses.CreateServerBackend(), null, null, null, debounceOverride: TimeSpan.Zero);
+            vm.EncoderPath = FakeEncoderPath();
+            vm.InputPath = "fake input.ts";
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.Equal(new[] { "--vpp-alpha", "--vpp-empty", "--vpp-scalar", "--vpp-legacy" }, vm.FilterCatalog.Select(item => item.OptionName));
             Assert.All(vm.FilterCatalog, item => Assert.False(item.IsInUse));
             vm.AddFilterCommand.Execute("--vpp-alpha");
-            await RunPreparedAsync(vm, clock);
+            await RunPreparedAsync(vm);
             var line = Assert.Single(vm.FilterLines);
             Assert.Same(line, vm.SelectedFilterLine);
             Assert.True(vm.FilterCatalog[0].IsInUse);
             Parameter(line, "sigma").NumberValue = 0.25;
-            await RunPreparedAsync(vm, clock);
+            await RunPreparedAsync(vm);
             Assert.NotNull(vm.PreviewImage);
             Assert.Null(vm.ErrorText);
             Assert.Equal("--vpp-alpha sigma=0.25", line.Text);
             Parameter(line, "sigma").ResetCommand.Execute(null);
-            await RunPreparedAsync(vm, clock);
+            await RunPreparedAsync(vm);
             Assert.Equal("--vpp-alpha", line.Text);
             vm.AddFilterCommand.Execute("--vpp-alpha");
-            await RunPreparedAsync(vm, clock);
+            await RunPreparedAsync(vm);
             Assert.Equal(2, vm.FilterLines.Count);
             Assert.Same(vm.FilterLines[1], vm.SelectedFilterLine);
             vm.RemoveFilterLineCommand.Execute(vm.FilterLines[1]);
             vm.RemoveFilterLineCommand.Execute(vm.FilterLines[0]);
-            await RunPreparedAsync(vm, clock);
+            await RunPreparedAsync(vm);
             Assert.False(vm.FilterCatalog[0].IsInUse);
             vm.EncoderPath = "";
             Assert.Empty(vm.FilterCatalog);
@@ -321,19 +321,19 @@ VPP Options:
     public async Task TextListModePersistsThroughSettings()
     {
         using var services = new FormServices();
-        await using (var vm = new MainWindowViewModel(services))
+        await using (var vm = TestViewModels.Create(services))
         {
             Assert.False(vm.IsTextListMode);
             vm.IsTextListMode = true;
             await vm.SaveSettingsAsync();
         }
-        await using var restored = new MainWindowViewModel(services);
+        await using var restored = TestViewModels.Create(services);
         await restored.InitializeAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.True(restored.IsTextListMode);
         Assert.True(AppSettings.Load(services.SettingsPath).IsTextListMode);
     }
 
-    private static async Task RunPreparedAsync(MainWindowViewModel vm, TimeProvider clock)
+    private static async Task RunPreparedAsync(MainWindowViewModel vm)
     {
         await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);

@@ -117,11 +117,12 @@ public sealed class NavigationTests
         using var pipe = new System.IO.Pipes.NamedPipeServerStream(pipeName, System.IO.Pipes.PipeDirection.InOut,
             1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
         await using var backend = new ControlledBackend();
-        await using var probe = new InputProbe(TimeProvider.System);
-        await using var vm = new MainWindowViewModel(new Services(), TimeProvider.System, backend,
-            probe, new FrameCache(0), ControlledConverter.ConvertNow)
-        { EncoderPath = FakeEncoderPath(), InputPath = "navigation probe input.ts",
-            InputArgsText = "--frames 0 --fake-rc 23 --fake-frame-pipe " + pipeName };
+        await using var probe = TestProcesses.CreateInputProbe();
+        await using var vm = TestViewModels.Create(new Services(), backend,
+            probe, new FrameCache(0), ControlledConverter.ConvertNow);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "navigation probe input.ts";
+        vm.InputArgsText = "--frames 0 --fake-rc 23 --fake-frame-pipe " + pipeName;
         Task initialize = vm.InitializeAsync(false);
         await PipeWaitDiagnostics.ConnectAsync(pipe, pipeName, Safety, () => PipeWaitDiagnostics.State(vm), initialize);
         using var reader = new StreamReader(pipe, System.Text.Encoding.UTF8, leaveOpen: true);
@@ -146,10 +147,12 @@ public sealed class NavigationTests
         using var pipe = new System.IO.Pipes.NamedPipeServerStream(pipeName, System.IO.Pipes.PipeDirection.InOut,
             1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
         await using var backend = new ControlledBackend();
-        await using var probe = new InputProbe(TimeProvider.System);
-        await using var vm = new MainWindowViewModel(new Services(), TimeProvider.System, backend,
-            probe, new FrameCache(0), ControlledConverter.ConvertNow)
-        { EncoderPath = FakeEncoderPath(), InputPath = "navigation failed probe.ts", InputArgsText = "--frames 0 --fake-rc 23" };
+        await using var probe = TestProcesses.CreateInputProbe();
+        await using var vm = TestViewModels.Create(new Services(), backend,
+            probe, new FrameCache(0), ControlledConverter.ConvertNow);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "navigation failed probe.ts";
+        vm.InputArgsText = "--frames 0 --fake-rc 23";
         Task initialize = vm.InitializeAsync(false);
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             PipeWaitDiagnostics.ConnectAsync(pipe, pipeName, Safety, () => PipeWaitDiagnostics.State(vm), initialize));

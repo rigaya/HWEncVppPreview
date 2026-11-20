@@ -10,8 +10,8 @@ public sealed class EncoderPreparationViewModelTests
     public async Task MetadataCompletesWhileEncoderInitializationIsStillPending()
     {
         var backend = new HeldInitializationBackend();
-        await using var vm = new MainWindowViewModel(new Services(), null, backend, null, null, null)
-        { EncoderPath = FakeEncoderPath() };
+        await using var vm = TestViewModels.Create(new Services(), backend, null, null, null);
+        vm.EncoderPath = FakeEncoderPath();
         var metadataReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         vm.PropertyChanged += (_, e) =>
         {

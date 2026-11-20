@@ -18,7 +18,6 @@ public sealed class StitchRejectedStreamingViewModelTests
     {
         using var capability = new CapabilityScope();
         using var services = new Services();
-        var clock = TimeProvider.System;
         var scope = new RawOwnershipScope(new RawBufferPool());
         var cache = new FrameCache(scope);
         var request = new PreviewRequest
@@ -29,7 +28,7 @@ public sealed class StitchRejectedStreamingViewModelTests
         cache.StoreSegment(request, Frames(OldPixels), new(1000, 0, true), 9, 12);
         var backend = new ControlledBackend();
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Avalonia.Threading.Dispatcher.UIThread.Post(action));
-        await using var vm = new MainWindowViewModel(services, clock, backend, null, cache,
+        await using var vm = TestViewModels.Create(services, backend, null, cache,
             (frame, token) =>
             {
                 byte[] result = new byte[frame.Header.Width * frame.Header.Height * 4];
@@ -42,8 +41,11 @@ public sealed class StitchRejectedStreamingViewModelTests
                 }
                 return Task.FromResult(result);
             },
-            debounceOverride: TimeSpan.Zero, owned: dependencies)
-        { EncoderPath = FakeEncoderPath(), InputPath = request.InputFile, CurrentSeconds = 10, InputArgsText = "--avhw" };
+            debounceOverride: TimeSpan.Zero, owned: dependencies);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = request.InputFile;
+        vm.CurrentSeconds = 10;
+        vm.InputArgsText = "--avhw";
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
         // 二つの区間に異なる画素を与え、接続できない状態で操作を続ける。

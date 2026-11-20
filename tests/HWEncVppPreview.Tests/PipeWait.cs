@@ -14,12 +14,22 @@ internal static class PipeWait
     }
 
     // 接続前に対象処理が終われば、結果または例外を付けて直ちに失敗する。
-    internal static async Task UntilConnectedAsync(NamedPipeServerStream pipe, string name, Task operation, TimeSpan timeout)
+    internal static Task UntilConnectedAsync(NamedPipeServerStream pipe, string name, Task operation)
+        => UntilConnectedAsync(pipe, name, operation, timeout: null);
+
+    internal static Task UntilConnectedAsync(NamedPipeServerStream pipe, string name, Task operation, TimeSpan timeout)
+        => UntilConnectedAsync(pipe, name, operation, (TimeSpan?)timeout);
+
+    private static async Task UntilConnectedAsync(NamedPipeServerStream pipe, string name, Task operation, TimeSpan? timeout)
     {
         using var cancellation = new CancellationTokenSource();
         Task connect = pipe.WaitForConnectionAsync(cancellation.Token);
         Task first;
-        try { first = await Task.WhenAny(connect, operation).WaitWithDiagnosticsAsync(timeout); }
+        try
+        {
+            Task<Task> completed = Task.WhenAny(connect, operation);
+            first = timeout is { } limit ? await completed.WaitWithDiagnosticsAsync(limit) : await completed;
+        }
         catch (TimeoutException error)
         {
             cancellation.Cancel();
@@ -47,6 +57,7 @@ internal static class PipeWait
             }
             throw new InvalidOperationException($"pipe {name}の接続前に対象処理が終了: {detail}");
         }
-        await connect.WaitWithDiagnosticsAsync(timeout);
+        if (timeout is { } wait) await connect.WaitWithDiagnosticsAsync(wait);
+        else await connect;
     }
 }

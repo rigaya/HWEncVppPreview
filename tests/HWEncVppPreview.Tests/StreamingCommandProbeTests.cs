@@ -40,7 +40,7 @@ public sealed class StreamingCommandProbeTests
     {
         var backend = new RecordingProbeBackend();
         var commands = backend.Commands;
-        await using var probe = new InputProbe(backend, TimeProvider.System);
+        await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System);
         string[] arguments = ["--fake-origin-seconds", "1234.5"];
         var capabilities = new PreviewCapabilities(true, true);
         var absolute = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", arguments,
@@ -65,7 +65,7 @@ public sealed class StreamingCommandProbeTests
     [InlineData(95383.3, true)]
     public async Task ProbeKeepsNumericOriginButSeparatesWrapConfidence(double origin, bool trusted)
     {
-        await using var probe = new InputProbe();
+        await using var probe = TestProcesses.CreateInputProbe();
         var info = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "origin.ts",
             ["--fake-origin-seconds", origin.ToString(System.Globalization.CultureInfo.InvariantCulture)],
             capabilities: new(true, true)).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
@@ -78,7 +78,7 @@ public sealed class StreamingCommandProbeTests
     {
         var clock = new ProbeShutdownClock();
         var backend = new UnresponsiveProbeBackend();
-        var probe = new InputProbe(backend, clock);
+        var probe = TestProcesses.CreateInputProbe(backend, clock);
         Task<InputInfo> preparation = probe.ProbeAsync("cpu-stub", "input.ts");
         try
         {

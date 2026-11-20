@@ -17,7 +17,7 @@ public sealed class CoreInputDefaultsTests
     {
         var backend = new RecordingProbeBackend();
         var starts = new List<string[]>();
-        await using var probe = new InputProbe(backend, TimeProvider.System, start => starts.Add(start.ArgumentList.ToArray()));
+        await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System, start => starts.Add(start.ArgumentList.ToArray()));
         var commands = backend.Commands;
         var capabilities = new PreviewCapabilities(VpyAssumeScriptDir: true);
         string encoder = BackendTests.FakeEncoderPath();

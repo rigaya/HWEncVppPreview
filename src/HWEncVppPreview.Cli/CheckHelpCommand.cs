@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using HWEncVppPreview.Core;
@@ -18,20 +19,23 @@ internal static class CheckHelpCommand
         return false;
     }
 
-    internal static async Task<int> RunAsync(string[] args, TextWriter output, TimeProvider clock, CancellationToken token)
+    internal static async Task<int> RunAsync(string[] args, TextWriter output, TimeProvider clock,
+        PreviewTimeouts timeouts, Action<ProcessStartInfo>? configureEncoderStartInfo, CancellationToken token)
     {
         var result = new Result();
         try
         {
-            var options = Parse(args);
+            var options = Parse(args, timeouts.CliHelp);
             result.SourceKind = options.Encoder is null ? "file" : "encoder";
             string text;
             if (options.Encoder is null)
                 text = await File.ReadAllTextAsync(options.HelpFile!, token).WaitAsync(options.Timeout, clock, token).ConfigureAwait(false);
             else
             {
-                var captured = await HelpProcessCapture.CaptureAsync(HelpProcessCapture.StartInfo(options.Encoder), clock,
-                    options.Timeout, token).ConfigureAwait(false);
+                var start = HelpProcessCapture.StartInfo(options.Encoder);
+                configureEncoderStartInfo?.Invoke(start);
+                var captured = await HelpProcessCapture.CaptureAsync(start, clock, options.Timeout,
+                    timeouts.HelpCleanup, token).ConfigureAwait(false);
                 result.EncoderExitCode = captured.ExitCode;
                 result.StderrTail = Tail(captured.StandardError);
                 if (captured.ExitCode != 0)
@@ -83,11 +87,10 @@ internal static class CheckHelpCommand
         result.ExitCode = result.Valid ? 0 : 1;
     }
 
-    private static Options Parse(string[] args)
+    private static Options Parse(string[] args, TimeSpan timeout)
     {
         bool seen = false;
         string? encoder = null, file = null;
-        TimeSpan timeout = TimeSpan.FromSeconds(5);
         bool timeoutSeen = false;
         for (int i = 0; i < args.Length; ++i)
         {

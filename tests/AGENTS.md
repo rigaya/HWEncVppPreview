@@ -56,6 +56,7 @@
 - `scripts/lint-test-synchronization.py`が、上の禁止事項のうち機械的に見つけられるものを検出する(CIの「試験同期の検査」)。新しい種類の誤りを見つけたら、まずlintに検査を足し、`--self-test`の例も足す。
 - 試験を足したり直したりしたら、LinuxとWindowsの両方で全件試験を回す(`dotnet test HWEncVppPreview.sln -c Debug`)。
 - 本物のプロセスや同期に関わる試験を変えたら、pushの前に、Windowsでその試験を繰り返し回す。CPUに負荷をかけた状態でも回す。回数と失敗の件数を記録する。1回でも落ちたら原因を直す。
+- push前のWindows負荷確認は、NTFS上で `powershell -File scripts/test-windows-stress.ps1` を実行する。論理CPU4個・負荷スレッド2本を使い、Debugを一度ビルドして全件試験を3回続ける。各回のTRXと停止時のダンプは表示された結果ディレクトリに残し、失敗した回で停止する。
 - 落ちた試験を直すときは、その1件だけで終わらせない。同じ形の箇所をほかの試験からも探し、まとめて直すか、lintで検出できるようにする。
 
 ## 8. 現状

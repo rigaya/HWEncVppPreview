@@ -9,12 +9,8 @@ public sealed partial class PreviewController
     internal PreviewController(RawOwnershipScope scope, IPreviewBackend? backend = null, FrameCache? cache = null,
         TimeProvider? timeProvider = null, TimeSpan? debounce = null, TimeSpan? watchdog = null,
         IPreviewBackend? backgroundBackend = null, TimeSpan? disposeGrace = null, TimeSpan? disposeTimeout = null)
-        : this(backend, cache ?? new FrameCache(scope), timeProvider, debounce, watchdog, backgroundBackend, disposeGrace, disposeTimeout)
-    {
-        _rawScope = scope;
-        if (!ReferenceEquals(_cache.OwnershipScope, scope))
-            throw new ArgumentException("raw scopeが異なるcacheです。", nameof(cache));
-    }
+        : this(ResolveFiniteTimeouts(watchdog, disposeGrace, disposeTimeout), timeProvider ?? TimeProvider.System,
+            backend, cache, debounce, backgroundBackend, scope) { }
     private bool TryPrepareFrameNotification(PreviewFrameResult value, out OwnedPreviewEnvelope? owned)
     {
         owned = null;

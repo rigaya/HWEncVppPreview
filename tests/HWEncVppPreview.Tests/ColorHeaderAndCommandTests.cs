@@ -107,7 +107,7 @@ public sealed class ColorHeaderAndCommandTests
     {
         var backend = new RecordingProbeBackend();
         var commands = backend.Commands;
-        await using var probe = new InputProbe(backend, TimeProvider.System);
+        await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System);
         var info = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts",
             ["--avhw", "--colormatrix", "bt709"], capabilities: AllColors).WaitWithDiagnosticsAsync(SafetyTimeout);
         Assert.Equal(64, info.Width);
@@ -120,7 +120,7 @@ public sealed class ColorHeaderAndCommandTests
     [Fact]
     public async Task 偽エンコーダから色情報を常駐サーバで受け取れる()
     {
-        await using IPreviewBackend backend = new ServerBackend();
+        await using IPreviewBackend backend = TestProcesses.CreateServerBackend();
         var sink = new HeaderSink();
         var request = Request() with
         {

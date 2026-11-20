@@ -17,12 +17,12 @@ public sealed class RawOwnershipViewModelTests
         var cache = new FrameCache(scope);
         var backend = new HdrOwnedBackend();
         var dependencies = new MainWindowViewModel.OwnedPreviewDependencies(scope, action => Dispatcher.UIThread.Post(action));
-        var vm = new MainWindowViewModel(new OwnedInjectionViewModelTests.Services(), TimeProvider.System, backend,
-            null, cache, null, owned: dependencies)
-        {
-            EncoderPath = OwnedInjectionViewModelTests.FakeEncoderPath(), InputPath = "owned-hdr.ts", InputArgsText = "--avhw",
-            CompareMode = PreviewCompareMode.SideBySide
-        };
+        var vm = TestViewModels.Create(new OwnedInjectionViewModelTests.Services(), backend,
+            null, cache, null, owned: dependencies);
+        vm.EncoderPath = OwnedInjectionViewModelTests.FakeEncoderPath();
+        vm.InputPath = "owned-hdr.ts";
+        vm.InputArgsText = "--avhw";
+        vm.CompareMode = PreviewCompareMode.SideBySide;
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         try
         {

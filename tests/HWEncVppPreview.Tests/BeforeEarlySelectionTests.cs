@@ -101,8 +101,8 @@ public sealed class BeforeEarlySelectionTests
         const int GateAfterFrame = 32;
         string name = "before-frame-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        await using var backend = new ServerBackend();
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        await using var backend = TestProcesses.CreateServerBackend();
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero);
         var selected = new TaskCompletionSource<PreviewFrameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completed = new TaskCompletionSource<PreviewCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.FrameReady += value => selected.TrySetResult(value);

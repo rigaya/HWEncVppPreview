@@ -14,7 +14,7 @@ public sealed class ServerInitializationTests
     public async Task ActualRequestCompletesAfterInitialization()
     {
         await using var gate = new InitializationGate();
-        await using var backend = new ServerBackend(configureStartInfo: gate.Configure);
+        await using var backend = TestProcesses.CreateServerBackend(configureStartInfo: gate.Configure);
         Task initialization = backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath());
         await gate.WaitReadyAsync(initialization);
         var sink = new Sink();
@@ -29,7 +29,7 @@ public sealed class ServerInitializationTests
     public async Task DisposeDuringInitializationReapsItsProcess()
     {
         await using var gate = new InitializationGate();
-        var backend = new ServerBackend(configureStartInfo: gate.Configure);
+        var backend = TestProcesses.CreateServerBackend(configureStartInfo: gate.Configure);
         try
         {
             Task initialization = backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath());
@@ -46,7 +46,7 @@ public sealed class ServerInitializationTests
     {
         await using var gate = new InitializationGate();
         int starts = 0;
-        await using var backend = new ServerBackend(configureStartInfo: info =>
+        await using var backend = TestProcesses.CreateServerBackend(configureStartInfo: info =>
         {
             if (Interlocked.Increment(ref starts) == 1) gate.Configure(info);
         });
@@ -65,7 +65,7 @@ public sealed class ServerInitializationTests
     [Fact]
     public async Task InitializationFailureDoesNotFailTheActualRequest()
     {
-        await using var backend = new ServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_INITIALIZE_RC"] = "-24");
+        await using var backend = TestProcesses.CreateServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_INITIALIZE_RC"] = "-24");
         await backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath()).WaitWithDiagnosticsAsync(Safety);
         var sink = new Sink();
         Assert.Equal(0, (await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(Safety)).ExitCode);
@@ -75,7 +75,7 @@ public sealed class ServerInitializationTests
     [Fact]
     public async Task ConcurrentWarmupCreatorsShareOneCompleteFixedFile()
     {
-        var backends = Enumerable.Range(0, 8).Select(_ => new ServerBackend()).ToArray();
+        var backends = Enumerable.Range(0, 8).Select(_ => TestProcesses.CreateServerBackend()).ToArray();
         try
         {
             await Task.WhenAll(backends.Select(backend => backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath()))).WaitWithDiagnosticsAsync(Safety);

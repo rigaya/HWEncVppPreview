@@ -180,7 +180,9 @@ public sealed class CompletionViewTests
             Environment.SetEnvironmentVariable("FAKE_ENCODER_HELP_FILE", Path.Combine(AppContext.BaseDirectory, "Data", "help", "qsvenc-h1.txt"));
             var services = new TestServices();
             // 入力ファイルなしでプレビューは要求せず、ヘルプの読み込みだけを行う。
-            var vm = new MainWindowViewModel(services, TimeProvider.System) { EncoderPath = FakeEncoderPath(), InputPath = "" };
+            var vm = TestViewModels.Create(services);
+            vm.EncoderPath = FakeEncoderPath();
+            vm.InputPath = "";
             await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
             Assert.NotNull(vm.HelpSchema);

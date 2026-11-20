@@ -24,7 +24,7 @@ public sealed class RealEncoderSeekTests
             {
                 EncoderPath = encoder!, InputPath = input!, InputArgsText = "-d 1", CurrentSeconds = 1541.09,
             }.Save(settingsPath);
-            await using var vm = new MainWindowViewModel(new SeekServices(settingsPath));
+            await using var vm = TestViewModels.Create(new SeekServices(settingsPath));
             await vm.InitializeAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
             Assert.Equal(0, vm.CurrentSeconds);
@@ -43,8 +43,10 @@ public sealed class RealEncoderSeekTests
         string? previous = Environment.GetEnvironmentVariable("HWENC_VIEWER_SEEK_PREVIOUS_INPUT");
         if (string.IsNullOrWhiteSpace(encoder) || string.IsNullOrWhiteSpace(input) || string.IsNullOrWhiteSpace(previous))
             Assert.Skip("入力切替の実シーク検証はエンコーダと2つの入力を明示したときだけ実行する");
-        await using var vm = new MainWindowViewModel(new SeekServices())
-        { EncoderPath = encoder!, InputPath = previous!, InputArgsText = "-d 1" };
+        await using var vm = TestViewModels.Create(new SeekServices());
+        vm.EncoderPath = encoder!;
+        vm.InputPath = previous!;
+        vm.InputArgsText = "-d 1";
         var window = new MainWindow { DataContext = vm, Width = 1200, Height = 800 };
         try
         {
@@ -83,11 +85,10 @@ public sealed class RealEncoderSeekTests
         string? input = Environment.GetEnvironmentVariable("HWENC_VIEWER_SEEK_INPUT");
         if (string.IsNullOrWhiteSpace(encoder) || string.IsNullOrWhiteSpace(input))
             Assert.Skip("実シークの検証はエンコーダと入力を明示したときだけ実行する");
-        await using var vm = new MainWindowViewModel(new SeekServices())
-        {
-            EncoderPath = encoder!, InputPath = input!,
-            InputArgsText = Environment.GetEnvironmentVariable("HWENC_VIEWER_SEEK_ARGS") ?? "-d 1",
-        };
+        await using var vm = TestViewModels.Create(new SeekServices());
+        vm.EncoderPath = encoder!;
+        vm.InputPath = input!;
+        vm.InputArgsText = Environment.GetEnvironmentVariable("HWENC_VIEWER_SEEK_ARGS") ?? "-d 1";
         if (filtered) vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
         await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);

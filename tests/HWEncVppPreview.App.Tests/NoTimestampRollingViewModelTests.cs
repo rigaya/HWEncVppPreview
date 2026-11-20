@@ -89,10 +89,16 @@ public sealed class NoTimestampRollingViewModelTests
     }
 
     private static MainWindowViewModel Create(Services services, Backend backend, FrameCache cache)
-        => new(services, TimeProvider.System, backend, null, cache,
-            (frame, token) => Task.FromResult(Enumerable.Repeat(frame.Data[0], frame.Header.Width * frame.Header.Height * 4).ToArray()))
-        { EncoderPath = FakeEncoderPath(), InputPath = "no-xts-rolling.ts", InputArgsText = "--avhw", CurrentSeconds = 10,
-            CompareMode = PreviewCompareMode.SideBySide };
+    {
+        var vm = TestViewModels.Create(services, backend, cache: cache,
+            converter: (frame, token) => Task.FromResult(Enumerable.Repeat(frame.Data[0], frame.Header.Width * frame.Header.Height * 4).ToArray()));
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "no-xts-rolling.ts";
+        vm.InputArgsText = "--avhw";
+        vm.CurrentSeconds = 10;
+        vm.CompareMode = PreviewCompareMode.SideBySide;
+        return vm;
+    }
     private static async Task Start(MainWindowViewModel vm)
     {
         await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);

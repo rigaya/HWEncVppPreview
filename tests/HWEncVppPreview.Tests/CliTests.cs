@@ -4,15 +4,12 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using HWEncVppPreview.Core;
-using HWEncVppPreview.Tests.Testing;
 using CliProgram = HWEncVppPreview.Cli.Program;
 
 namespace HWEncVppPreview.Tests;
 
 public sealed class CliTests
 {
-    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
-
     [Fact]
     public async Task ServerProducesSingleJsonAndMatchingDumps()
     {
@@ -22,7 +19,7 @@ public sealed class CliTests
         string y4m = Path.Combine(directory, "interval.y4m");
         try
         {
-            var run = await RunProcessAsync(Args("--dump", raw, "--dump-y4m", y4m,
+            var run = await RunPreviewAsync(Args("--dump", raw, "--dump-y4m", y4m,
                 "--vpp", "--vpp-nlmeans sigma=0.1"));
             Assert.Equal(0, run.ExitCode);
             using var json = ParseSingleLine(run.Output);
@@ -70,9 +67,9 @@ public sealed class CliTests
     [InlineData("invalid")]
     public async Task InvalidTimeReturnsArgumentExitAndJson(string time)
     {
-        var args = Args();
+        var args = ArgumentErrorArgs();
         args[Array.IndexOf(args, "--time") + 1] = time;
-        var run = await RunProcessAsync(args);
+        var run = await RunArgumentErrorProcessAsync(args);
         Assert.Equal(2, run.ExitCode);
         using var json = ParseSingleLine(run.Output);
         Assert.Equal(2, json.RootElement.GetProperty("rc").GetInt32());
@@ -82,19 +79,32 @@ public sealed class CliTests
     [Fact]
     public async Task UnknownOptionAndMissingRequiredArgumentsReturnArgumentExit()
     {
-        foreach (var args in new[] { Array.Empty<string>(), Args("--invalid", "value"), Args("--mode", "invalid") })
+        foreach (var args in new[] { Array.Empty<string>(), ArgumentErrorArgs("--invalid", "value"), ArgumentErrorArgs("--mode", "invalid") })
         {
-            var run = await RunProcessAsync(args);
+            var run = await RunArgumentErrorProcessAsync(args);
             Assert.Equal(2, run.ExitCode);
             using var json = ParseSingleLine(run.Output);
             Assert.Equal(2, json.RootElement.GetProperty("rc").GetInt32());
         }
     }
 
+    [Theory]
+    [InlineData("-0.001")]
+    [InlineData("-1")]
+    [InlineData("0")]
+    public async Task PublicCliRejectsNonPositiveWatchdog(string seconds)
+    {
+        var run = await RunArgumentErrorProcessAsync(ArgumentErrorArgs("--watchdog-seconds", seconds));
+        Assert.Equal(2, run.ExitCode);
+        using var json = ParseSingleLine(run.Output);
+        Assert.Equal(2, json.RootElement.GetProperty("rc").GetInt32());
+        Assert.NotEmpty(json.RootElement.GetProperty("error").GetString()!);
+    }
+
     [Fact]
     public async Task ProbeEncoderErrorReturnsExitOneWithDiagnostics()
     {
-        var run = await RunProcessAsync(Args("--input-args", "--frames 0 --fake-rc 23"));
+        var run = await RunPreviewAsync(Args("--input-args", "--frames 0 --fake-rc 23"));
         Assert.Equal(1, run.ExitCode);
         using var json = ParseSingleLine(run.Output);
         Assert.Equal(23, json.RootElement.GetProperty("rc").GetInt32());
@@ -104,7 +114,7 @@ public sealed class CliTests
     [Fact]
     public async Task PreviewEncoderErrorReturnsExitOneWithDiagnostics()
     {
-        var run = await RunProcessAsync(Args("--vpp", "--fake-rc 19"));
+        var run = await RunPreviewAsync(Args("--vpp", "--fake-rc 19"));
         Assert.Equal(1, run.ExitCode);
         using var json = ParseSingleLine(run.Output);
         Assert.Equal(19, json.RootElement.GetProperty("rc").GetInt32());
@@ -147,7 +157,7 @@ public sealed class CliTests
         string path = Path.Combine(Path.GetTempPath(), $"viewer-cli-physical-{Guid.NewGuid():N}.y4m");
         try
         {
-            var run = await RunProcessAsync(Args("--time", "10", "--pre-margin", "2",
+            var run = await RunPreviewAsync(Args("--time", "10", "--pre-margin", "2",
                 "--post-margin", "1", "--dump-y4m", path, "--vpp", filter), capabilities: true);
             Assert.Equal(0, run.ExitCode);
             using var json = ParseSingleLine(run.Output);
@@ -173,7 +183,7 @@ public sealed class CliTests
         string path = Path.Combine(Path.GetTempPath(), $"viewer-cli-replay-{Guid.NewGuid():N}.y4m");
         try
         {
-            var run = await RunProcessAsync(Args("--time", "10", "--pre-margin", "2",
+            var run = await RunPreviewAsync(Args("--time", "10", "--pre-margin", "2",
                 "--post-margin", "1", "--input-args", "--avhw " + anomaly + " 95 --fake-origin-seconds "
                     + origin.ToString(CultureInfo.InvariantCulture), "--dump-y4m", path), capabilities: true);
             Assert.Equal(0, run.ExitCode);
@@ -209,9 +219,9 @@ public sealed class CliTests
         var args = Args("--time", "10", "--pre-margin", "2", "--post-margin", "1",
             "--input-args", "--avhw");
         if (filter.Length > 0) args = args.Concat(new[] { "--vpp", filter }).ToArray();
-        var run = await RunProcessAsync(args, capabilities: true, readyEncoder: encoder);
+        var run = await RunPreviewAsync(args, capabilities: true, readyEncoder: encoder);
         Assert.True(run.ExitCode == 0,
-            $"CLI終了コードが0ではありません: rc={run.ExitCode}, encoder={encoder}, filter={filter}\nstdout:\n{run.Output}\nstderr:\n{run.StandardError}");
+            $"CLI終了コードが0ではありません: rc={run.ExitCode}, encoder={encoder}, filter={filter}\nJSON:\n{run.Output}");
         using var json = ParseSingleLine(run.Output);
         var root = json.RootElement;
         Assert.True(root.GetProperty("trustedAbsolute").GetBoolean());
@@ -222,9 +232,14 @@ public sealed class CliTests
         Assert.Equal(1010, root.GetProperty("selectedXts").GetDouble(), 5);
     }
 
-    private static string[] Args(params string[] extra) => new[]
+    private static string[] Args(params string[] extra) => ArgsWithEncoder(BackendTests.FakeEncoderPath(), extra);
+
+    private static string[] ArgumentErrorArgs(params string[] extra)
+        => ArgsWithEncoder(Path.Combine(Path.GetTempPath(), $"存在しない-encoder-{Guid.NewGuid():N}"), extra);
+
+    private static string[] ArgsWithEncoder(string encoder, string[] extra) => new[]
     {
-        "--enc", BackendTests.FakeEncoderPath(), "--input", "fake input.ts", "--time", "0:00:00.300",
+        "--enc", encoder, "--input", "fake input.ts", "--time", "0:00:00.300",
         "--pre-margin", "0.1", "--post-margin", "0.1",
     }.Concat(extra).ToArray();
 
@@ -235,7 +250,22 @@ public sealed class CliTests
         return JsonDocument.Parse(lines[0]);
     }
 
-    private static async Task<ProcessResult> RunProcessAsync(string[] args, bool capabilities = false, string? readyEncoder = null)
+    private static async Task<RunResult> RunPreviewAsync(string[] args, bool capabilities = false, string? readyEncoder = null)
+    {
+        using var output = new StringWriter(CultureInfo.InvariantCulture);
+        int code = await CliProgram.RunAsync(args, output, PreviewTimeouts.Infinite, configureEncoderStartInfo: start =>
+        {
+            if (capabilities) start.Environment["FAKE_ENCODER_PREVIEW_CAPABILITIES"] = "1";
+            if (readyEncoder is not null)
+            {
+                start.Environment["FAKE_ENCODER_READY_ENCODER"] = readyEncoder;
+                start.Environment["FAKE_ENCODER_PROBE_SUPPORTED"] = "1";
+            }
+        });
+        return new(code, output.ToString());
+    }
+
+    private static async Task<RunResult> RunArgumentErrorProcessAsync(string[] args)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         string configuration = directory.Parent!.Name;
@@ -248,30 +278,23 @@ public sealed class CliTests
             UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true,
             StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
         };
-        if (capabilities) start.Environment["FAKE_ENCODER_PREVIEW_CAPABILITIES"] = "1";
-        if (readyEncoder is not null)
-        {
-            start.Environment["FAKE_ENCODER_READY_ENCODER"] = readyEncoder;
-            start.Environment["FAKE_ENCODER_PROBE_SUPPORTED"] = "1";
-        }
         foreach (string arg in args) start.ArgumentList.Add(arg);
         using var process = Process.Start(start)!;
         Task<string> output = process.StandardOutput.ReadToEndAsync();
         Task<string> error = process.StandardError.ReadToEndAsync();
         try
         {
-            await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-            return new(process.ExitCode, await output, await error);
+            await Task.WhenAll(output, error, process.WaitForExitAsync());
+            return new(process.ExitCode, await output);
         }
         finally
         {
             if (!process.HasExited) process.Kill(entireProcessTree: true);
             await process.WaitForExitAsync();
-            await Task.WhenAll(output, error);
         }
     }
 
-    private sealed record ProcessResult(int ExitCode, string Output, string StandardError);
+    private sealed record RunResult(int ExitCode, string Output);
     private sealed class UnsupportedBackend : IPreviewBackend
     {
         public int Calls { get; private set; }

@@ -14,11 +14,10 @@ public sealed class ColorInfoViewTests
     public async Task 表示画像の色とHDRの印を表示し言語と前後の切り替えに追従する()
     {
         string previous = UiLanguage.Preference;
-        await using var vm = new MainWindowViewModel(null, TimeProvider.System, new ServerBackend(), null, null, null,
-            debounceOverride: TimeSpan.Zero)
-        {
-            EncoderPath = FakeEncoderPath(), InputPath = "fake.ts"
-        };
+        await using var vm = TestViewModels.Create(null, TestProcesses.CreateServerBackend(), null, null, null,
+            debounceOverride: TimeSpan.Zero);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "fake.ts";
         vm.FilterLines.Add(new FilterLineViewModel
         {
             Text = "--fake-colormatrix bt2020nc --fake-colorrange full --fake-transfer smpte2084"
@@ -65,11 +64,10 @@ public sealed class ColorInfoViewTests
     [AvaloniaFact]
     public async Task SDRだけの表示では基準白の設定を出さない()
     {
-        await using var vm = new MainWindowViewModel(null, TimeProvider.System, new ServerBackend(), null, null, null,
-            debounceOverride: TimeSpan.Zero)
-        {
-            EncoderPath = FakeEncoderPath(), InputPath = "fake.ts"
-        };
+        await using var vm = TestViewModels.Create(null, TestProcesses.CreateServerBackend(), null, null, null,
+            debounceOverride: TimeSpan.Zero);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "fake.ts";
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--fake-colormatrix bt709 --fake-colorrange limited" });
         var window = new MainWindow { DataContext = vm, Width = 1440, Height = 900 };
         try

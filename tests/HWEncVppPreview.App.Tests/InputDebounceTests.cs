@@ -15,7 +15,7 @@ public sealed class InputDebounceTests
         var clock = new FakeTimeProvider();
         var backend = new ImageBackend();
         bool processAttempted = false;
-        await using var probe = new InputProbe(backend, clock, _ =>
+        await using var probe = TestProcesses.CreateInputProbe(backend, clock, _ =>
         {
             processAttempted = true;
             throw new InvalidOperationException("この試験ではプロセスを起動しません。");

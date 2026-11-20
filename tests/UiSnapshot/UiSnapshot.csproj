@@ -15,4 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\HWEncVppPreview.App\HWEncVppPreview.App.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\TestProcesses.cs" Link="Testing\TestProcesses.cs" />
+  </ItemGroup>
 </Project>

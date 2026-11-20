@@ -16,8 +16,8 @@ public sealed class HistoryProbeTests
         TargetSeconds = 10, Capabilities = new(true), TimestampOriginSeconds = 1000,
     };
 
-    private static ServerBackend Backend(Action<ProcessStartInfo>? configure = null, TimeSpan? probeTimeout = null)
-        => new(probeTimeout: probeTimeout, configureStartInfo: start =>
+    private static ServerBackend Backend(Action<ProcessStartInfo>? configure = null)
+        => TestProcesses.CreateServerBackend(configureStartInfo: start =>
         {
             start.Environment["FAKE_ENCODER_PROBE_SUPPORTED"] = "1";
             configure?.Invoke(start);
@@ -26,7 +26,7 @@ public sealed class HistoryProbeTests
     private static async Task<PreviewSegmentSnapshot> RunAsync(IPreviewBackend backend, bool continuous = false,
         bool background = false, PreviewRequest? request = null)
     {
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero, backgroundBackend: backend);
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero, backgroundBackend: backend);
         PreviewSegmentSnapshot? segment = null;
         controller.SegmentUpdated += value => segment = value.Segment;
         controller.Completed += value => segment = value.Segment ?? segment;
@@ -161,7 +161,7 @@ public sealed class HistoryProbeTests
     public async Task ProbeFailureIsReported()
     {
         await using var backend = Backend(start => start.Environment["FAKE_ENCODER_PROBE_REPLY"] = "broken");
-        await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero);
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request());

@@ -89,25 +89,35 @@ public sealed class AmatsukazeEngineTests
     [Fact]
     public async Task 偽常駐サーバではavsのoutputStartを送らない()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var cancellation = new CancellationTokenSource();
         string log = Path.Combine(Path.GetTempPath(), "amt-preview-" + Guid.NewGuid().ToString("N") + ".jsonl");
         try
         {
             var input = new ChannelStream(); var output = new ChannelStream();
             await using (var engine = new AmatsukazeEngine(input, output, TextWriter.Null, "/tmp", "/tmp",
                 new() { ["QSVEnc"] = BackendTests.FakeEncoderPath() }, (_, _) => new Source(),
-                () => new ServerBackend(configureStartInfo: p => { p.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"] = log; p.Environment["FAKE_ENCODER_WINDOW_SEEK"] = "1"; p.Environment["FAKE_ENCODER_OUTPUT_START"] = "1"; })))
+                () => TestProcesses.CreateServerBackend(configureStartInfo: p => { p.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"] = log; p.Environment["FAKE_ENCODER_WINDOW_SEEK"] = "1"; p.Environment["FAKE_ENCODER_OUTPUT_START"] = "1"; })))
             {
-                Task run = engine.RunAsync(timeout.Token); _ = await output.LineAsync(timeout.Token);
-                input.Send("{\"cmd\":\"config\",\"gen\":1,\"kind\":\"encoder\",\"encoder\":\"QSVEnc\"}");
-                _ = await output.LineAsync(timeout.Token);
-                input.Send("{\"cmd\":\"frame\",\"id\":3,\"gen\":1,\"pos\":15}");
-                string header = await output.LineAsync(timeout.Token);
-                int length = int.Parse(header.Split(' ').Single(x => x.StartsWith("bytes=", StringComparison.Ordinal))[6..]);
-                var response3 = await output.BytesAsync(length, timeout.Token);
-                input.Send("{\"cmd\":\"quit\"}"); await run.WaitAsync(timeout.Token);
-                Assert.Contains("FRAME id=3", header);
-                Assert.Equal(64 * 36 * 3 / 2, response3.Length);
+                Task run = engine.RunAsync(cancellation.Token);
+                try
+                {
+                    _ = await output.LineAsync(cancellation.Token);
+                    input.Send("{\"cmd\":\"config\",\"gen\":1,\"kind\":\"encoder\",\"encoder\":\"QSVEnc\"}");
+                    _ = await output.LineAsync(cancellation.Token);
+                    input.Send("{\"cmd\":\"frame\",\"id\":3,\"gen\":1,\"pos\":15}");
+                    string header = await output.LineAsync(cancellation.Token);
+                    int length = int.Parse(header.Split(' ').Single(x => x.StartsWith("bytes=", StringComparison.Ordinal))[6..]);
+                    var response3 = await output.BytesAsync(length, cancellation.Token);
+                    input.Send("{\"cmd\":\"quit\"}");
+                    await run;
+                    Assert.Contains("FRAME id=3", header);
+                    Assert.Equal(64 * 36 * 3 / 2, response3.Length);
+                }
+                finally
+                {
+                    cancellation.Cancel();
+                    await run.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+                }
             }
             var entries = FakeLogFiles.ReadAllLines(log).Select(line => System.Text.Json.JsonDocument.Parse(line)).ToArray();
             try

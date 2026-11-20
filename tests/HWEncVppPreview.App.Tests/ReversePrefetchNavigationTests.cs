@@ -156,7 +156,7 @@ public sealed class ReversePrefetchNavigationTests
         private Fixture(bool mismatch, double seconds)
         {
             Backend = new PrefetchBackend(mismatch);
-            var probe = new InputProbe(new ProbeBackend(), Clock, _ =>
+            var probe = TestProcesses.CreateInputProbe(new ProbeBackend(), Clock, _ =>
             {
                 _processAttempted = true;
                 throw new InvalidOperationException("この試験ではプロセスを起動しません。");

@@ -38,8 +38,10 @@ public sealed class RealClockFallbackTests
                 "F0" or "NONE" => "", "AFS" => "--vpp-afs", "KFM" => "--vpp-kfm",
                 _ => throw new ArgumentException("未知の実時計フィルタ条件"),
             };
-            await using var vm = new MainWindowViewModel(new ClockServices())
-            { EncoderPath = encoder!, InputPath = item.Input, InputArgsText = "--avhw" };
+            await using var vm = TestViewModels.Create(new ClockServices());
+            vm.EncoderPath = encoder!;
+            vm.InputPath = item.Input;
+            vm.InputArgsText = "--avhw";
             if (options.Length > 0) vm.FilterLines.Add(new FilterLineViewModel { Text = options });
             PerfTrace.Write("clock.case.begin", new { item.Id, item.Input, item.Filter, item.EventSeconds, item.Expectation, item.Positions, item.Steps });
             PerfTrace.Flush();

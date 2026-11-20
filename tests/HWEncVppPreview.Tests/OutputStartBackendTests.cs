@@ -39,7 +39,7 @@ public sealed class OutputStartBackendTests
         string log=Path.Combine(Path.GetTempPath(),"output-start-"+Guid.NewGuid().ToString("N")+".jsonl");
         try
         {
-            await using(var backend=new ServerBackend(configureStartInfo:start=>
+            await using(var backend=TestProcesses.CreateServerBackend(configureStartInfo:start=>
             {
                 start.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"]=log;
                 start.Environment["FAKE_ENCODER_WINDOW_SEEK"]="1";

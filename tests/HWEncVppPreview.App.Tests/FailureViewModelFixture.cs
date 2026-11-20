@@ -9,10 +9,11 @@ internal static class FailureViewModelFixture
     internal static MainWindowViewModel Create(string diagnostics, int exitCode, Exception? exception = null)
     {
         var backend = new FailureBackend(diagnostics, exitCode, exception);
-        return new MainWindowViewModel(new Services(), TimeProvider.System, backend)
-        {
-            EncoderPath = FakeEncoderPath(), InputPath = "diagnostics.ts", InputArgsText = "--avhw"
-        };
+        var vm = TestViewModels.Create(new Services(), backend);
+        vm.EncoderPath = FakeEncoderPath();
+        vm.InputPath = "diagnostics.ts";
+        vm.InputArgsText = "--avhw";
+        return vm;
     }
 
     internal static async Task RunAsync(MainWindowViewModel vm)

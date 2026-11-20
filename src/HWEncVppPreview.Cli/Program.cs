@@ -24,17 +24,30 @@ public static class Program
     }
 
     /// <summary>結果JSONを指定ライターへ1行出力する。時間依存処理は注入した時計を使う。</summary>
-    public static async Task<int> RunAsync(string[] args, TextWriter output, TimeProvider? timeProvider = null,
+    public static Task<int> RunAsync(string[] args, TextWriter output, TimeProvider? timeProvider = null,
         CancellationToken cancellationToken = default)
+        => RunCoreAsync(args, output, timeProvider ?? TimeProvider.System, null, null, cancellationToken);
+
+    internal static Task<int> RunAsync(string[] args, TextWriter output, PreviewTimeouts timeouts,
+        CancellationToken cancellationToken = default, Action<ProcessStartInfo>? configureEncoderStartInfo = null)
+        => RunCoreAsync(args, output, TimeProvider.System, timeouts, configureEncoderStartInfo, cancellationToken);
+
+    private static async Task<int> RunCoreAsync(string[] args, TextWriter output, TimeProvider clock,
+        PreviewTimeouts? timeouts, Action<ProcessStartInfo>? configureEncoderStartInfo, CancellationToken cancellationToken)
     {
         if (CheckHelpCommand.IsRequested(args))
-            return await CheckHelpCommand.RunAsync(args, output, timeProvider ?? TimeProvider.System, cancellationToken).ConfigureAwait(false);
+            return await CheckHelpCommand.RunAsync(args, output, clock, timeouts ?? PreviewTimeouts.Default,
+                configureEncoderStartInfo, cancellationToken).ConfigureAwait(false);
         var watch = Stopwatch.StartNew();
         var result = new CliResult();
         try
         {
             var options = Options.Parse(args);
-            await ExecuteAsync(options, result, timeProvider ?? TimeProvider.System, cancellationToken).ConfigureAwait(false);
+            var effectiveTimeouts = timeouts ?? PreviewTimeouts.Default;
+            if (options.Watchdog is { } watchdog)
+                effectiveTimeouts = effectiveTimeouts with { Input = watchdog, Watchdog = watchdog };
+            await ExecuteAsync(options, result, clock, effectiveTimeouts, configureEncoderStartInfo,
+                cancellationToken).ConfigureAwait(false);
         }
         catch (ArgumentException exception)
         {
@@ -76,10 +89,12 @@ public static class Program
         else if (exception is InputProbeTimeoutException probeTimeout) result.StderrTail = Tail(probeTimeout.StandardError);
     }
 
-    private static async Task ExecuteAsync(Options options, CliResult result, TimeProvider clock, CancellationToken cancellationToken)
+    private static async Task ExecuteAsync(Options options, CliResult result, TimeProvider clock,
+        PreviewTimeouts timeouts, Action<ProcessStartInfo>? configureEncoderStartInfo, CancellationToken cancellationToken)
     {
-        var capabilities = await ReadHelpAsync(options.Encoder, clock, cancellationToken).ConfigureAwait(false);
-        await using var probe = new InputProbe(timeProvider: clock, timeout: options.Watchdog);
+        var capabilities = await ReadHelpAsync(options.Encoder, clock, timeouts, configureEncoderStartInfo,
+            cancellationToken).ConfigureAwait(false);
+        await using var probe = new InputProbe(timeouts, clock, configureEncoderStartInfo);
         var input = await probe.ProbeAsync(options.Encoder, options.Input, options.InputArgs, cancellationToken, capabilities).ConfigureAwait(false);
         var request = new PreviewRequest
         {
@@ -97,9 +112,10 @@ public static class Program
         result.SeekSeconds = plan.SeekSeconds;
         result.Frames = plan.FrameCount;
         var recording = new Recording();
-        IPreviewBackend backend = new RecordingBackend(new ServerBackend(timeProvider: clock), recording);
-        await using var controller = new PreviewController(backend, cache: new FrameCache(0),
-            timeProvider: clock, debounce: TimeSpan.Zero, watchdog: options.Watchdog);
+        IPreviewBackend backend = new RecordingBackend(
+            new ServerBackend(timeouts, clock, configureStartInfo: configureEncoderStartInfo), recording);
+        await using var controller = new PreviewController(timeouts, clock, backend: backend,
+            cache: new FrameCache(0), debounce: TimeSpan.Zero);
         PreviewFrameResult? selected = null;
         PreviewCompletion? completion = null;
         PreviewFailure? failure = null;
@@ -170,12 +186,15 @@ public static class Program
         if (options.DumpY4m != null) await DumpY4mAsync(options.DumpY4m, recording.Frames, input.Fps, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<PreviewCapabilities> ReadHelpAsync(string encoder, TimeProvider clock, CancellationToken token)
+    private static async Task<PreviewCapabilities> ReadHelpAsync(string encoder, TimeProvider clock,
+        PreviewTimeouts timeouts, Action<ProcessStartInfo>? configureEncoderStartInfo, CancellationToken token)
     {
         try
         {
-            var captured = await HelpProcessCapture.CaptureAsync(HelpProcessCapture.StartInfo(encoder), clock,
-                TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+            var start = HelpProcessCapture.StartInfo(encoder);
+            configureEncoderStartInfo?.Invoke(start);
+            var captured = await HelpProcessCapture.CaptureAsync(start, clock, timeouts.CliHelp,
+                timeouts.HelpCleanup, token).ConfigureAwait(false);
             if (captured.ExitCode != 0) return new();
             string help = string.IsNullOrWhiteSpace(captured.StandardOutput) ? captured.StandardError : captured.StandardOutput;
             return CommandBuilder.CapabilitiesFromHelp(new HelpIndex(help));
@@ -249,7 +268,7 @@ public static class Program
         public double Time { get; private set; }
         public double PreMargin { get; private set; } = 2;
         public double PostMargin { get; private set; } = 0.5;
-        public TimeSpan Watchdog { get; private set; } = TimeSpan.FromSeconds(30);
+        public TimeSpan? Watchdog { get; private set; }
         public string[] VppArgs { get; private set; } = Array.Empty<string>();
         public string[] InputArgs { get; private set; } = Array.Empty<string>();
         public string? Dump { get; private set; }
