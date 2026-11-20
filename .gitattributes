@@ -10,3 +10,4 @@
 *.axaml text eol=crlf
 *.txt text eol=crlf
 *.sh text eol=lf
+*.bat text eol=crlf
