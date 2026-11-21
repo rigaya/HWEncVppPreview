@@ -9,8 +9,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class FakeProcessControlTests
 {
-    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
-
     [Fact]
     public async Task IgnoredQuitIsLoggedAndNextRequestStillRuns()
     {
@@ -31,7 +29,7 @@ public sealed class FakeProcessControlTests
             while (await NextAsync(reader) is not PreviewEnd end || end.Id != 7) { }
             Assert.False(process.HasExited);
             process.StandardInput.Close();
-            await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            await process.WaitForExitAsync();
             Assert.Equal(0, process.ExitCode);
             string[] commands = FakeLogFiles.ReadAllLines(log);
             Assert.Equal(2, commands.Length);
@@ -43,7 +41,7 @@ public sealed class FakeProcessControlTests
         finally
         {
             await StopAsync(process);
-            await stderr.WaitWithDiagnosticsAsync(SafetyTimeout);
+            await stderr;
             Directory.Delete(directory, recursive: true);
         }
     }
@@ -54,7 +52,7 @@ public sealed class FakeProcessControlTests
         string name = "early-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         Task operation = Task.FromException(new InputProbeException("失敗", 23, "子の診断"));
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => PipeWait.UntilConnectedAsync(pipe, name, operation, SafetyTimeout));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => PipeWait.UntilConnectedAsync(pipe, name, operation));
         Assert.Contains(name, error.Message);
         Assert.Contains("子の診断", error.Message);
     }
@@ -67,38 +65,37 @@ public sealed class FakeProcessControlTests
         string pipeName = "fake-output-" + Guid.NewGuid().ToString("N");
         using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         using var parent = Start(new Dictionary<string, string> { ["FAKE_ENCODER_HOLD_OUTPUT_PIPE"] = pipeName });
-        Process? child = null;
-        var stderr = new StringBuilder();
-        Task stderrEof = CaptureStandardErrorAsync(parent.StandardError, stderr);
+        Task<string> stderrEof = parent.StandardError.ReadToEndAsync();
         string stage = "親のREADY";
         try
         {
             var reader = new PreviewProtocolReader(parent.StandardOutput.BaseStream);
             Assert.IsType<PreviewReady>(await NextAsync(reader));
             stage = "親へのquit送信";
-            await SendAsync(parent, new { cmd = "quit" }).WaitWithDiagnosticsAsync(SafetyTimeout);
+            await SendAsync(parent, new { cmd = "quit" });
+            Task parentExit = parent.WaitForExitAsync();
             stage = "子の制御パイプへの接続";
-            await PipeWait.UntilConnectedAsync(pipe, pipeName, SafetyTimeout);
+            await PipeWait.UntilConnectedAsync(pipe, pipeName, parentExit);
             using var pipeReader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
             stage = "子のPIDの受信";
-            string pid = await pipeReader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout) ?? throw new EndOfStreamException();
-            child = Process.GetProcessById(int.Parse(pid, System.Globalization.CultureInfo.InvariantCulture));
+            string? pid = await pipeReader.ReadLineAsync();
+            Assert.True(int.TryParse(pid, out int childPid) && childPid > 0);
             stage = "親の終了";
-            await parent.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            await parentExit;
             Assert.Equal(0, parent.ExitCode);
 
             // 親が終了してから確認行を要求し、子が継承した標準出力に書けることを確かめる。
             stage = "継承した標準出力の確認";
-            await pipe.WriteAsync("check\n"u8.ToArray()).AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-            Assert.Equal("held", await parent.StandardOutput.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
+            await pipe.WriteAsync("check\n"u8.ToArray()).AsTask();
+            Assert.Equal("held", await parent.StandardOutput.ReadLineAsync());
 
             if (sendRelease)
             {
                 stage = "子へのrelease送信";
-                await pipe.WriteAsync("release\n"u8.ToArray()).AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+                await pipe.WriteAsync("release\n"u8.ToArray()).AsTask();
                 // 子は応答を書き終えてから終了するため、継承したパイプのEOFを待つ前に応答を読む。
                 stage = "子の終了コードの受信";
-                Assert.Equal("0", await pipeReader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
+                Assert.Equal("0", await pipeReader.ReadLineAsync());
             }
             else
             {
@@ -107,57 +104,26 @@ public sealed class FakeProcessControlTests
             }
 
             stage = "継承した標準出力と標準エラーのEOF";
-            Assert.Equal("", await parent.StandardOutput.ReadToEndAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
-            await stderrEof.WaitWithDiagnosticsAsync(SafetyTimeout);
-            Assert.Equal("", Snapshot(stderr));
+            Assert.Equal("", await parent.StandardOutput.ReadToEndAsync());
+            Assert.Equal("", await stderrEof);
         }
         catch (Exception error)
         {
-            // 最初の失敗を残したまま制御パイプを閉じ、子の診断が届くまで待つ。
+            // 制御パイプを先に閉じ、継承パイプの診断を読んでから元の失敗と一緒に報告する。
             pipe.Dispose();
-            Exception? cleanupError = null;
+            string stderr;
             try
             {
-                if (!parent.HasExited) await StopAsync(parent);
-                try { await stderrEof.WaitWithDiagnosticsAsync(SafetyTimeout); }
-                catch (TimeoutException) when (child != null)
-                {
-                    await StopAsync(child);
-                    await stderrEof.WaitWithDiagnosticsAsync(SafetyTimeout);
-                }
+                await StopAsync(parent);
+                stderr = await stderrEof;
             }
             catch (Exception cleanup)
             {
-                cleanupError = cleanup;
+                throw new AggregateException($"{stage}で失敗しました (制御パイプ: {pipeName})。", error, cleanup);
             }
-
-            if (error is TimeoutException)
-            {
-                Exception cause = cleanupError == null ? error : new AggregateException(error, cleanupError);
-                throw new TimeoutException($"{stage}で期限切れ (制御パイプ: {pipeName})。標準エラー: {Snapshot(stderr)}。{error.Message}", cause);
-            }
-            if (cleanupError != null) throw new AggregateException(error, cleanupError);
-            throw;
+            throw new InvalidOperationException(
+                $"{stage}で失敗しました (制御パイプ: {pipeName})。標準エラー: {stderr}", error);
         }
-        finally
-        {
-            child?.Dispose();
-        }
-    }
-
-    private static async Task CaptureStandardErrorAsync(StreamReader reader, StringBuilder stderr)
-    {
-        var buffer = new char[1024];
-        int count;
-        while ((count = await reader.ReadAsync(buffer.AsMemory())) != 0)
-        {
-            lock (stderr) stderr.Append(buffer, 0, count);
-        }
-    }
-
-    private static string Snapshot(StringBuilder stderr)
-    {
-        lock (stderr) return stderr.ToString();
     }
 
     private static string CreateDirectory()
@@ -181,11 +147,11 @@ public sealed class FakeProcessControlTests
     private static async Task StopAsync(Process process)
     {
         if (!process.HasExited) process.Kill(entireProcessTree: true);
-        await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await process.WaitForExitAsync();
     }
 
     private static async Task<PreviewEvent> NextAsync(PreviewProtocolReader reader)
-        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException()).WaitWithDiagnosticsAsync(SafetyTimeout);
+        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException());
 
     private static async Task SendAsync(Process process, object command)
     {

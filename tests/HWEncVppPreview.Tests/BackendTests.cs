@@ -8,8 +8,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class BackendTests
 {
-    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
-
     [Fact]
     public async Task ServerReusesProcessAndKeepsRequestsIndependent()
     {
@@ -19,9 +17,9 @@ public sealed class BackendTests
         var a2 = new RecordingSink();
         var requestA = Request() with { VppArgs = new[] { "--vpp-nlmeans", "sigma=0.1" } };
         var requestB = Request() with { VppArgs = new[] { "--vpp-nlmeans", "sigma=0.2" } };
-        Assert.Equal(0, (await backend.RunAsync(requestA, a1).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
-        Assert.Equal(0, (await backend.RunAsync(requestB, b).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
-        Assert.Equal(0, (await backend.RunAsync(requestA, a2).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(requestA, a1)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(requestB, b)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(requestA, a2)).ExitCode);
         Assert.Equal(a1.ProcessId, b.ProcessId);
         Assert.Equal(a1.ProcessId, a2.ProcessId);
         Assert.Equal(a1.Frames[0].Data, a2.Frames[0].Data);
@@ -37,13 +35,13 @@ public sealed class BackendTests
         using var cancellation = new CancellationTokenSource();
         var sink = new RecordingSink();
         var run = backend.RunAsync(Request("--fake-hang-after", "1"), sink, cancellation.Token);
-        await sink.FirstFrame.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+        await sink.FirstFrame.Task;
         cancellation.Cancel();
-        var result = await run.WaitWithDiagnosticsAsync(SafetyTimeout);
+        var result = await run;
         Assert.True(result.IsCancelled);
         Assert.Equal(-12, result.ExitCode);
         var recovery = new RecordingSink();
-        Assert.Equal(0, (await backend.RunAsync(Request(), recovery).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(Request(), recovery)).ExitCode);
         Assert.Equal(sink.ProcessId, recovery.ProcessId);
     }
 
@@ -53,11 +51,11 @@ public sealed class BackendTests
         await using var backend = TestProcesses.CreateServerBackend();
         var first = new RecordingSink();
         var firstRun = backend.RunAsync(Request("--fake-hang-after", "1"), first);
-        await first.FirstFrame.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+        await first.FirstFrame.Task;
         var second = new RecordingSink();
         var secondRun = backend.RunAsync(Request(), second);
-        Assert.True((await firstRun.WaitWithDiagnosticsAsync(SafetyTimeout)).IsCancelled);
-        Assert.Equal(0, (await secondRun.WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.True((await firstRun).IsCancelled);
+        Assert.Equal(0, (await secondRun).ExitCode);
         Assert.Equal(first.ProcessId, second.ProcessId);
     }
 
@@ -68,13 +66,13 @@ public sealed class BackendTests
         using var cancellation = new CancellationTokenSource();
         var sink = new RecordingSink();
         var run = backend.RunAsync(Request("--fake-hang-after", "1", "--fake-ignore-cancel"), sink, cancellation.Token);
-        await sink.FirstFrame.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+        await sink.FirstFrame.Task;
         cancellation.Cancel();
-        await backend.AbortAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-        Assert.True((await run.WaitWithDiagnosticsAsync(SafetyTimeout)).IsCancelled);
+        await backend.AbortAsync().AsTask();
+        Assert.True((await run).IsCancelled);
         AssertStopped(sink.ProcessId);
         var next = new RecordingSink();
-        Assert.Equal(0, (await backend.RunAsync(Request(), next).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(Request(), next)).ExitCode);
         Assert.NotEqual(sink.ProcessId, next.ProcessId);
     }
 
@@ -121,10 +119,10 @@ public sealed class BackendTests
             info.Environment["FAKE_ENCODER_PID_PIPE"] = name;
         });
         var run = backend.RunAsync(Request(), new RecordingSink());
-        await PipeWait.UntilConnectedAsync(pipe, name, run, SafetyTimeout);
+        await PipeWait.UntilConnectedAsync(pipe, name, run);
         using var reader = new StreamReader(pipe);
-        int pid = int.Parse(await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout) ?? throw new EndOfStreamException());
-        await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => run.WaitWithDiagnosticsAsync(SafetyTimeout));
+        int pid = int.Parse(await reader.ReadLineAsync() ?? throw new EndOfStreamException());
+        await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => run);
         AssertStopped(pid);
     }
 
@@ -134,14 +132,14 @@ public sealed class BackendTests
         await using var backend = TestProcesses.CreateServerBackend();
         var broken = new RecordingSink();
         var exception = await Assert.ThrowsAsync<PreviewBackendException>(() =>
-            backend.RunAsync(Request("--fake-crash-at", "1"), broken).WaitWithDiagnosticsAsync(SafetyTimeout));
+            backend.RunAsync(Request("--fake-crash-at", "1"), broken));
         Assert.IsType<Y4mTruncatedException>(exception.InnerException);
         Assert.Contains("RGYPREVIEW BEGIN id=", exception.StandardError);
         Assert.Contains($"FAKEPID {broken.ProcessId}", exception.StandardError);
         Assert.Single(broken.Frames);
         AssertStopped(broken.ProcessId);
         var recovery = new RecordingSink();
-        Assert.Equal(0, (await backend.RunAsync(Request(), recovery).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(Request(), recovery)).ExitCode);
         Assert.NotEqual(broken.ProcessId, recovery.ProcessId);
     }
 
@@ -152,9 +150,9 @@ public sealed class BackendTests
         var first = new RecordingSink();
         var second = new RecordingSink();
         var third = new RecordingSink();
-        await backend.RunAsync(Request(), first).WaitWithDiagnosticsAsync(SafetyTimeout);
-        await backend.RunAsync(Request(), second).WaitWithDiagnosticsAsync(SafetyTimeout);
-        await backend.RunAsync(Request(), third).WaitWithDiagnosticsAsync(SafetyTimeout);
+        await backend.RunAsync(Request(), first);
+        await backend.RunAsync(Request(), second);
+        await backend.RunAsync(Request(), third);
         Assert.Equal(first.ProcessId, second.ProcessId);
         Assert.NotEqual(first.ProcessId, third.ProcessId);
         AssertStopped(first.ProcessId);
@@ -170,11 +168,11 @@ public sealed class BackendTests
     {
         await using var backend = TestProcesses.CreateServerBackend();
         var first = new RecordingSink();
-        var result = await backend.RunAsync(Request("--fake-rc", rc.ToString(System.Globalization.CultureInfo.InvariantCulture)), first).WaitWithDiagnosticsAsync(SafetyTimeout);
+        var result = await backend.RunAsync(Request("--fake-rc", rc.ToString(System.Globalization.CultureInfo.InvariantCulture)), first);
         Assert.Equal(rc, result.ExitCode);
         if (rc != 0) Assert.Contains($"FAKE requested rc={rc}", result.StandardError);
         var next = new RecordingSink();
-        await backend.RunAsync(Request(), next).WaitWithDiagnosticsAsync(SafetyTimeout);
+        await backend.RunAsync(Request(), next);
         Assert.Equal(restarts, first.ProcessId != next.ProcessId);
     }
 
@@ -194,7 +192,7 @@ public sealed class BackendTests
     {
         await using var backend = TestProcesses.CreateServerBackend();
         var sink = new RecordingSink();
-        var result = await backend.RunAsync(Request("--fake-step", "2"), sink).WaitWithDiagnosticsAsync(SafetyTimeout);
+        var result = await backend.RunAsync(Request("--fake-step", "2"), sink);
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(2, sink.Frames.Count);
         Assert.Equal(2 / 30.0, sink.Frames[1].Xts!.Value, 7);
@@ -206,14 +204,14 @@ public sealed class BackendTests
         await using var backend = TestProcesses.CreateServerBackend();
         var broken = new RecordingSink();
         var exception = await Assert.ThrowsAsync<PreviewBackendException>(() =>
-            backend.RunAsync(Request("--fake-bad-control-at", "1"), broken).WaitWithDiagnosticsAsync(SafetyTimeout));
+            backend.RunAsync(Request("--fake-bad-control-at", "1"), broken));
         Assert.IsType<PreviewProtocolException>(exception.InnerException);
         Assert.Contains("RGYPREVIEW BEGIN id=", exception.StandardError);
         Assert.Contains($"FAKEPID {broken.ProcessId}", exception.StandardError);
         Assert.Single(broken.Frames);
         AssertStopped(broken.ProcessId);
         var recovery = new RecordingSink();
-        Assert.Equal(0, (await backend.RunAsync(Request(), recovery).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(Request(), recovery)).ExitCode);
         Assert.NotEqual(broken.ProcessId, recovery.ProcessId);
     }
 
@@ -222,15 +220,15 @@ public sealed class BackendTests
     {
         await using var backend = TestProcesses.CreateServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_DROP_AFTER"] = "1");
         var first = new RecordingSink();
-        Assert.Equal(0, (await backend.RunAsync(Request(), first).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(Request(), first)).ExitCode);
         try
         {
             using var process = Process.GetProcessById(first.ProcessId);
-            await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            await process.WaitForExitAsync();
         }
         catch (ArgumentException) { }
         var next = new RecordingSink();
-        Assert.Equal(0, (await backend.RunAsync(Request(), next).WaitWithDiagnosticsAsync(SafetyTimeout)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(Request(), next)).ExitCode);
         Assert.NotEqual(first.ProcessId, next.ProcessId);
     }
 

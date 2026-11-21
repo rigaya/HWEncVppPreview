@@ -37,7 +37,7 @@ public sealed class ExceptionDiagnosticTests
             TargetSeconds = 0, PreMarginSeconds = 0, PostMarginSeconds = 0.1, InputArgs = ["--avhw"],
         };
         var failure = await Assert.ThrowsAsync<PreviewBackendException>(() =>
-            backend.RunAsync(request, new ThrowingSink(original)).WaitWithDiagnosticsAsync(TestTimeouts.Hang));
+            backend.RunAsync(request, new ThrowingSink(original)));
         Assert.Equal(CoreText.ServerRequestFailed, failure.Message);
         Assert.Same(original, failure.InnerException);
         Assert.Same(root, failure.InnerException!.InnerException);

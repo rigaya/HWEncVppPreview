@@ -7,8 +7,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class FakeClockDiscontinuityTests
 {
-    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
-
     [Theory]
     [InlineData("--fake-clock-backstep-at")]
     [InlineData("--fake-clock-jump-at")]
@@ -74,13 +72,13 @@ public sealed class FakeClockDiscontinuityTests
             result.Add(frames);
         }
         await SendAsync(child.Process, new { cmd = "quit" });
-        await child.Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await child.Process.WaitForExitAsync();
         Assert.Equal(0, child.Process.ExitCode);
         return result;
     }
 
     private static async Task<PreviewEvent> NextAsync(PreviewProtocolReader reader)
-        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException()).WaitWithDiagnosticsAsync(SafetyTimeout);
+        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException());
 
     private static async Task SendAsync(Process process, object command)
     {
@@ -108,8 +106,8 @@ public sealed class FakeClockDiscontinuityTests
         public async ValueTask DisposeAsync()
         {
             if (!Process.HasExited) Process.Kill(entireProcessTree: true);
-            await Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-            await _stderr.WaitWithDiagnosticsAsync(SafetyTimeout);
+            await Process.WaitForExitAsync();
+            await _stderr;
             Process.Dispose();
         }
     }

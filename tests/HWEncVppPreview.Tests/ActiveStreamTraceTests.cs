@@ -30,16 +30,16 @@ public sealed class ActiveStreamTraceTests
         try
         {
             controller.Submit(request);
-            await stream.Paused.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await stream.Paused.Task;
             // 取得中の区間を保ったまま、重なりのある別の有限区間を受け取る。
             controller.Submit(request with { CorrelationId = 2, Continuous = false }, bypassCache: true, background: true);
-            await backgroundDone.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await backgroundDone.Task;
             controller.Submit(request with { CorrelationId = 3, TargetSeconds = 12.2 }, navigation: true);
-            image = await latest.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            image = await latest.Task;
         }
         finally
         {
-            await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await controller.DisposeAsync().AsTask();
             cache.Clear();
         }
         Assert.All(image, value => Assert.Equal((byte)80, value));

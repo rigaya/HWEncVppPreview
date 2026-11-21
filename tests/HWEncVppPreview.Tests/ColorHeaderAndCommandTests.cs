@@ -9,8 +9,6 @@ public sealed class ColorHeaderAndCommandTests
     private static readonly string[] ColorOptions = ["--colormatrix", "--colorprim", "--transfer", "--colorrange", "--chromaloc"];
     private static readonly PreviewCapabilities AllColors = new(ColorMatrix: true, ColorPrimaries: true,
         Transfer: true, ColorRange: true, ChromaLocation: true);
-    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
-
     [Fact]
     public void 色拡張は原文を保って各項目から取得できる()
     {
@@ -109,7 +107,7 @@ public sealed class ColorHeaderAndCommandTests
         var commands = backend.Commands;
         await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System);
         var info = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts",
-            ["--avhw", "--colormatrix", "bt709"], capabilities: AllColors).WaitWithDiagnosticsAsync(SafetyTimeout);
+            ["--avhw", "--colormatrix", "bt709"], capabilities: AllColors);
         Assert.Equal(64, info.Width);
         var args = Assert.Single(commands);
         foreach (string option in ColorOptions) Assert.Equal("auto", args[Array.IndexOf(args, option) + 1]);
@@ -128,7 +126,7 @@ public sealed class ColorHeaderAndCommandTests
             VppArgs = ["--fake-colormatrix", "smpte240m", "--fake-colorrange", "full", "--fake-colorprim", "bt2020",
                 "--fake-transfer", "arib-std-b67", "--fake-chromaloc", "topleft"],
         };
-        var result = await backend.RunAsync(request, sink).WaitWithDiagnosticsAsync(SafetyTimeout);
+        var result = await backend.RunAsync(request, sink);
         Assert.Equal(0, result.ExitCode);
         var frame = Assert.Single(sink.Frames);
         Assert.Same(sink.Header, frame.Header);
@@ -156,7 +154,7 @@ public sealed class ColorHeaderAndCommandTests
         Task<string> stderr = process.StandardError.ReadToEndAsync();
         try
         {
-            await process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            await process.WaitForExitAsync();
             Assert.Equal(0, process.ExitCode);
             Assert.Equal(AllColors, CommandBuilder.CapabilitiesFromHelp(new HelpIndex(await stdout)));
         }

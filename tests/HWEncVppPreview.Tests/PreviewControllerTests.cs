@@ -47,7 +47,7 @@ public sealed class PreviewControllerTests
         controller.Submit(Request("old"));
         var old = await backend.NextAsync();
         controller.Submit(Request("new"));
-        await old.Cancelled.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await old.Cancelled.Task;
         old.Sink.OnFrame(Frame(0));
         old.Sink.OnFrame(Frame(1.5));
         old.End(0);
@@ -75,7 +75,7 @@ public sealed class PreviewControllerTests
         run.Sink.OnFrame(Frame(0));
         run.Sink.OnFrame(Frame(0.9, 7));
         run.Sink.OnFrame(Frame(1.8));
-        var image = await selected.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        var image = await selected.Task;
         Assert.Equal(7, image.Frame.Data[0]);
         Assert.False(image.TargetNotReached);
         Assert.Equal(0, completed);
@@ -182,10 +182,10 @@ public sealed class PreviewControllerTests
             await backend.NextAsync();
             dispose = controller.DisposeAsync().AsTask();
             // 猶予タイマーが登録される前に時計を進めると、後から登録された期限を待ち続けてしまう。
-            await clock.GraceArmed.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await clock.GraceArmed.Task;
             Assert.Equal(0, backend.Aborts);
             clock.Advance(TimeSpan.FromSeconds(2));
-            await dispose.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await dispose;
             Assert.Equal(1, backend.Aborts);
             Assert.True(backend.Disposed);
             Assert.Throws<ObjectDisposedException>(() => controller.Submit(Request()));
@@ -198,7 +198,7 @@ public sealed class PreviewControllerTests
                 await backend.AbortAsync();
                 clock.Advance(TimeSpan.FromSeconds(5));
             }
-            await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await controller.DisposeAsync().AsTask();
         }
     }
 
@@ -253,7 +253,7 @@ public sealed class PreviewControllerTests
         controller.Completed += _ => disposal = controller.DisposeAsync().AsTask();
         controller.Submit(Request());
         Assert.NotNull(disposal);
-        await disposal.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await disposal;
         await controller.WaitForIdleAsync();
         Assert.True(backend.Disposed);
     }
@@ -317,7 +317,7 @@ public sealed class PreviewControllerTests
         var first = await backend.NextAsync();
         first.Sink.OnFrame(Frame(1, 3));
         first.End(0);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         completions.Clear();
         images.Clear();
         controller.Submit(Request() with { CorrelationId = 2 }, bypassCache: true);
@@ -325,7 +325,7 @@ public sealed class PreviewControllerTests
         var second = await backend.NextAsync();
         second.Sink.OnFrame(Frame(1, 9));
         second.End(0);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.Equal(9, Assert.Single(images).Frame.Data[0]);
         var completion = Assert.Single(completions);
         Assert.False(completion.FromCache);
@@ -371,7 +371,7 @@ public sealed class PreviewControllerTests
         public int Calls { get; private set; }
         public int Aborts { get; private set; }
         public bool Disposed { get; private set; }
-        public Task<Invocation> NextAsync() => _runs.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        public Task<Invocation> NextAsync() => _runs.Reader.ReadAsync().AsTask();
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
         {
             ++Calls;

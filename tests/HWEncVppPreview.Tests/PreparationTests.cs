@@ -3,8 +3,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class PreparationTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [Fact]
     public async Task InputProbeBorrowsBackendWithoutNotificationsCacheOrDuplicateDispose()
     {
@@ -16,7 +14,7 @@ public sealed class PreparationTests
         controller.FrameReady += _ => notifications++;
         controller.Completed += _ => notifications++;
         controller.Failed += _ => notifications++;
-        var info = await controller.ProbeInputAsync(probe, "encoder", "input.ts", ["--avhw"], new()).WaitWithDiagnosticsAsync(Safety);
+        var info = await controller.ProbeInputAsync(probe, "encoder", "input.ts", ["--avhw"], new());
         Assert.Equal(30, info.Fps);
         Assert.Equal(1, backend.Calls);
         Assert.Equal(0, notifications);
@@ -35,8 +33,8 @@ public sealed class PreparationTests
         var controller = new PreviewController(backend);
         await using var probe = TestProcesses.CreateInputProbe();
         Task<InputInfo> pending = controller.ProbeInputAsync(probe, "encoder", "input.ts", [], new());
-        await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
-        await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        await backend.Started.Task;
+        await controller.DisposeAsync().AsTask();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
         Assert.Equal(1, backend.Disposals);
         Assert.False(controller.ShutdownIncomplete);

@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Using Include="HWEncVppPreview.Testing" />
   </ItemGroup>
 
   <ItemGroup>
@@ -28,9 +29,6 @@
     <None Include="..\Data\**" Link="Data\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Compile Include="..\TestTimeouts.cs" Link="Testing\TestTimeouts.cs" />
-  </ItemGroup>
   <ItemGroup>
     <Compile Include="..\TestProcesses.cs" Link="Testing\TestProcesses.cs" />
   </ItemGroup>

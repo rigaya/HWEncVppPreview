@@ -29,8 +29,8 @@ public sealed class CoreSelectionResultTests
             image = envelope.FrameReady!.Frame.RawPixels.ToArray();
         };
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
+        await controller.DisposeAsync().AsTask();
         cache.Clear();
         Assert.Equal(new byte[] { 1, 1, 1, 1, 1, 1 }, image);
         Assert.True(scope.Capture().IsEmpty);
@@ -54,8 +54,8 @@ public sealed class CoreSelectionResultTests
             EncoderPath = "fake", InputFile = "input", TargetSeconds = 1, Fps = 30, Continuous = true,
             Capabilities = new(TimestampPassthrough: true), TimestampOriginSeconds = 1000, DependsOnHistory = false,
         });
-        var image = await selected.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        var image = await selected.Task;
+        await controller.DisposeAsync().AsTask();
         cache.Clear();
         Assert.Equal(new byte[] { 42, 42, 42, 42, 42, 42 }, image);
         Assert.True(scope.Capture().IsEmpty);
@@ -76,8 +76,8 @@ public sealed class CoreSelectionResultTests
             EncoderPath = "fake", InputFile = "input", TargetSeconds = 1, Fps = 30, Continuous = true,
             Capabilities = new(TimestampPassthrough: true), TimestampOriginSeconds = 1000, DependsOnHistory = false,
         });
-        var failure = await failed.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        var failure = await failed.Task;
+        await controller.DisposeAsync().AsTask();
         cache.Clear();
         Assert.Equal(CoreText.FrameUnavailable, failure.Reason);
         Assert.True(scope.Capture().IsEmpty);
@@ -103,11 +103,11 @@ public sealed class CoreSelectionResultTests
             Capabilities = new(TimestampPassthrough: true), TimestampOriginSeconds = 1000, DependsOnHistory = false,
         };
         controller.Submit(request);
-        await backend.FirstPaused.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await backend.FirstPaused.Task;
         cache.Clear();
         controller.Submit(request with { TargetSeconds = 2, CorrelationId = 2 }, navigation: true);
-        var image = await latest.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        var image = await latest.Task;
+        await controller.DisposeAsync().AsTask();
         cache.Clear();
         Assert.Equal(new byte[] { 80, 80, 80, 80, 80, 80 }, image);
         Assert.True(scope.Capture().IsEmpty);

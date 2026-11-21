@@ -8,8 +8,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class ServerInitializationTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [Fact]
     public async Task ActualRequestCompletesAfterInitialization()
     {
@@ -20,8 +18,8 @@ public sealed class ServerInitializationTests
         var sink = new Sink();
         Task<PreviewRunResult> actual = backend.RunAsync(Request(), sink);
         await gate.ReleaseAsync();
-        await initialization.WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(0, (await actual.WaitWithDiagnosticsAsync(Safety)).ExitCode);
+        await initialization;
+        Assert.Equal(0, (await actual).ExitCode);
         Assert.Equal(2, sink.Frames);
     }
 
@@ -34,11 +32,11 @@ public sealed class ServerInitializationTests
         {
             Task initialization = backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath());
             int pid = await gate.WaitReadyAsync(initialization);
-            await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
-            await initialization.WaitWithDiagnosticsAsync(Safety);
+            await backend.DisposeAsync().AsTask();
+            await initialization;
             AssertStopped(pid);
         }
-        finally { await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety); }
+        finally { await backend.DisposeAsync().AsTask(); }
     }
 
     [Fact]
@@ -54,10 +52,10 @@ public sealed class ServerInitializationTests
         Task old = backend.InitializeEncoderAsync(encoder);
         int pid = await gate.WaitReadyAsync(old);
         string alternate = Path.GetDirectoryName(encoder) + Path.DirectorySeparatorChar + "." + Path.DirectorySeparatorChar + Path.GetFileName(encoder);
-        await backend.InitializeEncoderAsync(alternate).WaitWithDiagnosticsAsync(Safety);
-        await old.WaitWithDiagnosticsAsync(Safety);
+        await backend.InitializeEncoderAsync(alternate);
+        await old;
         var sink = new Sink();
-        Assert.Equal(0, (await backend.RunAsync(Request() with { EncoderPath = alternate }, sink).WaitWithDiagnosticsAsync(Safety)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(Request() with { EncoderPath = alternate }, sink)).ExitCode);
         Assert.Equal(2, sink.Frames);
         AssertStopped(pid);
     }
@@ -66,9 +64,9 @@ public sealed class ServerInitializationTests
     public async Task InitializationFailureDoesNotFailTheActualRequest()
     {
         await using var backend = TestProcesses.CreateServerBackend(configureStartInfo: info => info.Environment["FAKE_ENCODER_INITIALIZE_RC"] = "-24");
-        await backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath()).WaitWithDiagnosticsAsync(Safety);
+        await backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath());
         var sink = new Sink();
-        Assert.Equal(0, (await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(Safety)).ExitCode);
+        Assert.Equal(0, (await backend.RunAsync(Request(), sink)).ExitCode);
         Assert.Equal(2, sink.Frames);
     }
 
@@ -78,11 +76,11 @@ public sealed class ServerInitializationTests
         var backends = Enumerable.Range(0, 8).Select(_ => TestProcesses.CreateServerBackend()).ToArray();
         try
         {
-            await Task.WhenAll(backends.Select(backend => backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath()))).WaitWithDiagnosticsAsync(Safety);
+            await Task.WhenAll(backends.Select(backend => backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath())));
             foreach (var backend in backends)
             {
                 var sink = new Sink();
-                Assert.Equal(0, (await backend.RunAsync(Request(), sink).WaitWithDiagnosticsAsync(Safety)).ExitCode);
+                Assert.Equal(0, (await backend.RunAsync(Request(), sink)).ExitCode);
                 Assert.Equal(2, sink.Frames);
             }
             string path = Path.Combine(Path.GetTempPath(), "HWEncVppPreview", "warmup-64x64.y4m");
@@ -95,7 +93,7 @@ public sealed class ServerInitializationTests
         }
         finally
         {
-            foreach (var backend in backends) await backend.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+            foreach (var backend in backends) await backend.DisposeAsync().AsTask();
         }
     }
 
@@ -131,10 +129,10 @@ public sealed class ServerInitializationTests
 
         public async Task<int> WaitReadyAsync(Task initialization)
         {
-            await PipeWait.UntilConnectedAsync(_pipe, _name, initialization, Safety);
+            await PipeWait.UntilConnectedAsync(_pipe, _name, initialization);
             using var reader = new StreamReader(_pipe, Encoding.UTF8, leaveOpen: true);
             _writer = new StreamWriter(_pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-            string pid = await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Safety) ?? throw new EndOfStreamException();
+            string pid = await reader.ReadLineAsync() ?? throw new EndOfStreamException();
             return int.Parse(pid, System.Globalization.CultureInfo.InvariantCulture);
         }
 

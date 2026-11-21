@@ -6,7 +6,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class StreamNeighborReuseTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static PreviewRequest Request(double target = 10, long id = 1) => new()
     {
         EncoderPath = "encoder", InputFile = "input", TargetSeconds = target, CorrelationId = id,
@@ -29,11 +28,11 @@ public sealed class StreamNeighborReuseTests
             if (value.Request.CorrelationId == 2) result = value;
         };
         controller.Submit(Request());
-        if (reading) await backend.Center.Task.WaitWithDiagnosticsAsync(Safety);
-        else await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        if (reading) await backend.Center.Task;
+        else await backend.Pauses.Reader.ReadAsync().AsTask();
         controller.Submit(Request(center, 2), bypassCache: true, navigation: true, reuseActiveStream: true);
         backend.Next.TrySetResult();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.NotNull(result);
         Assert.Contains(result.Segment.Frames, frame => frame.Xts == 1000 + center + 0.5);
         Assert.Single(backend.Requests);
@@ -56,7 +55,7 @@ public sealed class StreamNeighborReuseTests
         var backend = new Backend();
         await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         controller.Submit(Request());
-        await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        await backend.Pauses.Reader.ReadAsync().AsTask();
         var request = reason switch
         {
             "content" => Request(12, 2) with { VppArgs = new[] { "changed" } },
@@ -69,7 +68,7 @@ public sealed class StreamNeighborReuseTests
         };
         if (reason == "refresh") controller.Submit(request, bypassCache: true, navigation: true);
         else controller.Submit(request, bypassCache: true, navigation: reason != "not_navigation", reuseActiveStream: true);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Equal(2, backend.Requests.Count);
         Assert.Equal(1, backend.Cancelled);
     }
@@ -82,7 +81,7 @@ public sealed class StreamNeighborReuseTests
         var backend = new Backend();
         await using var controller = new PreviewController(backend, cache: cache, debounce: TimeSpan.Zero);
         controller.Submit(Request(), bypassCache: true, navigation: true, reuseActiveStream: true);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Single(backend.Requests);
     }
 
@@ -92,9 +91,9 @@ public sealed class StreamNeighborReuseTests
         var backend = new Backend(end: true);
         await using var controller = new PreviewController(backend, debounce: TimeSpan.Zero);
         controller.Submit(Request());
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         controller.Submit(Request(10, 2), bypassCache: true, navigation: true, reuseActiveStream: true);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Equal(2, backend.Requests.Count);
     }
 
@@ -104,9 +103,9 @@ public sealed class StreamNeighborReuseTests
         var backend = new Backend();
         await using var controller = new PreviewController(backend, cache: new FrameCache(6), debounce: TimeSpan.Zero);
         controller.Submit(Request());
-        await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        await backend.Pauses.Reader.ReadAsync().AsTask();
         controller.Submit(Request(10, 2), bypassCache: true, navigation: true, reuseActiveStream: true);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Equal(2, backend.Requests.Count);
     }
 

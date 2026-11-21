@@ -7,8 +7,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class FakeLogFilesTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [Fact]
     public void 旧baseとPID別記録を集約して各PIDの受信順を守る()
     {
@@ -70,22 +68,20 @@ public sealed class FakeLogFilesTests
         })).ToArray();
         try
         {
-            await Task.WhenAll(backends.Select(backend => backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath())))
-                .WaitWithDiagnosticsAsync(Safety);
+            await Task.WhenAll(backends.Select(backend => backend.InitializeEncoderAsync(BackendTests.FakeEncoderPath())));
             var sinks = backends.Select(_ => new Sink()).ToArray();
             var request = new PreviewRequest
             {
                 EncoderPath = BackendTests.FakeEncoderPath(), InputFile = "log-test.ts", Fps = 30,
                 TargetSeconds = 0, PreMarginSeconds = 0, PostMarginSeconds = 0,
             };
-            PreviewRunResult[] results = await Task.WhenAll(backends.Select((backend, index) => backend.RunAsync(request, sinks[index])))
-                .WaitWithDiagnosticsAsync(Safety);
+            PreviewRunResult[] results = await Task.WhenAll(backends.Select((backend, index) => backend.RunAsync(request, sinks[index])));
             Assert.All(results, result => Assert.Equal(0, result.ExitCode));
             Assert.All(sinks, sink => Assert.Equal(1, sink.Frames));
         }
         finally
         {
-            await Task.WhenAll(backends.Select(backend => backend.DisposeAsync().AsTask())).WaitWithDiagnosticsAsync(Safety);
+            await Task.WhenAll(backends.Select(backend => backend.DisposeAsync().AsTask()));
         }
         int[] pids = FakeLogFiles.ReadAllLines(files.Pids).Select(int.Parse).Order().ToArray();
         Assert.Equal(backends.Length, pids.Length);

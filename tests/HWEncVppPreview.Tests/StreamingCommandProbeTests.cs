@@ -44,7 +44,7 @@ public sealed class StreamingCommandProbeTests
         string[] arguments = ["--fake-origin-seconds", "1234.5"];
         var capabilities = new PreviewCapabilities(true, true);
         var absolute = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", arguments,
-            capabilities: capabilities).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            capabilities: capabilities);
         Assert.Equal(1234.5, absolute.TimestampOriginSeconds);
         Assert.DoesNotContain("--seek", commands[0]);
         Assert.Contains("--timestamp-passthrough", commands[0]);
@@ -52,7 +52,7 @@ public sealed class StreamingCommandProbeTests
         Assert.DoesNotContain("--vpp-nlmeans", commands[0]);
         Assert.Same(absolute, await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", arguments,
             capabilities: capabilities));
-        var legacy = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", arguments).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        var legacy = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", arguments);
         Assert.Null(legacy.TimestampOriginSeconds);
         Assert.Equal(2, commands.Count);
         Assert.DoesNotContain("--timestamp-passthrough", commands[1]);
@@ -68,7 +68,7 @@ public sealed class StreamingCommandProbeTests
         await using var probe = TestProcesses.CreateInputProbe();
         var info = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "origin.ts",
             ["--fake-origin-seconds", origin.ToString(System.Globalization.CultureInfo.InvariantCulture)],
-            capabilities: new(true, true)).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            capabilities: new(true, true));
         Assert.Equal(origin, info.TimestampOriginSeconds!.Value, 6);
         Assert.Equal(trusted, info.TimestampOriginTrusted);
     }
@@ -82,17 +82,17 @@ public sealed class StreamingCommandProbeTests
         Task<InputInfo> preparation = probe.ProbeAsync("cpu-stub", "input.ts");
         try
         {
-            await backend.Started.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await backend.Started.Task;
             Task dispose = probe.DisposeAsync().AsTask();
-            await backend.Aborted.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await backend.Disposed.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await clock.TwoDeadlinesArmed.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await backend.Aborted.Task;
+            await backend.Disposed.Task;
+            await clock.TwoDeadlinesArmed.Task;
             clock.Advance(TimeSpan.FromSeconds(5));
-            await dispose.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await preparation.WaitWithDiagnosticsAsync(TestTimeouts.Hang));
+            await dispose;
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await preparation);
         }
         finally { backend.Release(); await probe.DisposeAsync(); }
-        await backend.Running.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await backend.Running;
     }
 
     private sealed class ProbeShutdownClock : TimeProvider

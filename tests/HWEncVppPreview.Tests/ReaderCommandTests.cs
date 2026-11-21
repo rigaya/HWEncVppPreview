@@ -95,7 +95,7 @@ public sealed class ReaderCommandTests
         var commands = backend.Commands;
         await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System);
         await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input" + extension,
-            Array.Empty<string>(), capabilities: Capabilities).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            Array.Empty<string>(), capabilities: Capabilities);
         string[] args = Assert.Single(commands);
         foreach (string option in ColorOptions) Assert.DoesNotContain(option, args);
         Assert.Equal(vpy, args.Contains("--vpy-assume-script-dir"));
@@ -114,7 +114,7 @@ public sealed class ReaderCommandTests
         string[] args = [.. string.IsNullOrEmpty(reader) ? Array.Empty<string>() : new[] { reader },
             "--fake-duration", "00:00:10.00"];
         var duration = await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input" + extension,
-            args, capabilities: Capabilities).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            args, capabilities: Capabilities);
         Assert.Equal(TimeSpan.FromSeconds(10), duration);
         string[] command = Assert.Single(commands);
         Assert.Equal(expected, command.Contains("--vpy-assume-script-dir"));
@@ -134,15 +134,13 @@ public sealed class ReaderCommandTests
         });
         string[] args = ["--fake-duration", "00:00:10.00"];
         string encoder = BackendTests.FakeEncoderPath();
-        Assert.Null(await probe.ProbeDurationAsync(encoder, "input.vpy", args)
-            .WaitWithDiagnosticsAsync(TestTimeouts.Hang));
+        Assert.Null(await probe.ProbeDurationAsync(encoder, "input.vpy", args));
         Assert.DoesNotContain("--vpy-assume-script-dir", Assert.Single(commands));
         Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(encoder, "input.vpy", args,
-            capabilities: Capabilities).WaitWithDiagnosticsAsync(TestTimeouts.Hang));
+            capabilities: Capabilities));
         Assert.Equal(2, commands.Count);
         Assert.Contains("--vpy-assume-script-dir", commands[1]);
-        await probe.ProbeDurationAsync(encoder, "input.vpy", args, capabilities: Capabilities)
-            .WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await probe.ProbeDurationAsync(encoder, "input.vpy", args, capabilities: Capabilities);
         Assert.Equal(2, commands.Count);
     }
 

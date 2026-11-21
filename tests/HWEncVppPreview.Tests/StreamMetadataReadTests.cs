@@ -4,7 +4,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class StreamMetadataReadTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static PreviewRequest Request => new()
     {
         EncoderPath = "fake", InputFile = "input", Fps = 30, TargetSeconds = 0,
@@ -20,8 +19,8 @@ public sealed class StreamMetadataReadTests
         var backend = new Backend(false);
         var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
         controller.Submit(Request);
-        await backend.Paused.Task.WaitWithDiagnosticsAsync(Safety);
-        await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        await backend.Paused.Task;
+        await controller.DisposeAsync().AsTask();
         cache.Clear();
         Assert.False(controller.ShutdownIncomplete);
         Assert.True(scope.Capture().IsEmpty);
@@ -38,8 +37,8 @@ public sealed class StreamMetadataReadTests
         var controller = new PreviewController(scope, backend, cache, debounce: TimeSpan.Zero);
         controller.Failed += value => failed.TrySetResult(value);
         controller.Submit(Request);
-        var failure = await failed.Task.WaitWithDiagnosticsAsync(Safety);
-        await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        var failure = await failed.Task;
+        await controller.DisposeAsync().AsTask();
         cache.Clear();
         Assert.Equal(CoreText.FrameUnavailable, failure.Reason);
         Assert.False(controller.ShutdownIncomplete);

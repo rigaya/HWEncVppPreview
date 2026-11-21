@@ -223,13 +223,13 @@ public sealed class NativeExtractionCleanupTests
     }
 
     [Fact]
-    public void Cleanは直接のリンクをたどらず他の古い兄弟を処理する()
+    public async Task Cleanは直接のリンクをたどらず他の古い兄弟を処理する()
     {
         using var tree = new TestTree();
         string current = tree.Entry("current", Now);
         string target = tree.OutsideEntry("target");
         string link = Path.Combine(tree.Parent, "link");
-        tree.Link(link, target);
+        await tree.LinkAsync(link, target);
         string old = tree.Entry("old", Now.AddHours(-1));
         NativeExtractionCleanup.Clean(current, configuredBase: null, new FixedClock());
         AssertPayload(target);
@@ -238,14 +238,14 @@ public sealed class NativeExtractionCleanupTests
     }
 
     [Fact]
-    public void Cleanは配下のリンク先を残して古い木を削除する()
+    public async Task Cleanは配下のリンク先を残して古い木を削除する()
     {
         using var tree = new TestTree();
         string current = tree.Entry("current", Now);
         string linked = tree.Entry("linked", Now.AddHours(-1));
         string target = tree.OutsideEntry("target");
         Directory.CreateDirectory(Path.Combine(linked, "nested"));
-        tree.Link(Path.Combine(linked, "nested", "nested-link"), target);
+        await tree.LinkAsync(Path.Combine(linked, "nested", "nested-link"), target);
         Directory.SetLastWriteTimeUtc(linked, Now.AddHours(-1).UtcDateTime);
         string old = tree.Entry("old", Now.AddHours(-1));
         NativeExtractionCleanup.Clean(current, configuredBase: null, new FixedClock());
@@ -318,7 +318,7 @@ public sealed class NativeExtractionCleanupTests
             return path;
         }
 
-        public void Link(string link, string target)
+        public async Task LinkAsync(string link, string target)
         {
             try { Directory.CreateSymbolicLink(link, target); }
             catch (Exception exception) when (OperatingSystem.IsWindows()
@@ -335,14 +335,8 @@ public sealed class NativeExtractionCleanupTests
                 using var process = Process.Start(start) ?? throw new IOException("ジャンクション作成を開始できません。");
                 Task<string> stdout = process.StandardOutput.ReadToEndAsync();
                 Task<string> stderr = process.StandardError.ReadToEndAsync();
-                if (!process.WaitForExit((int)TestTimeouts.Hang.TotalMilliseconds))
-                {
-                    process.Kill(entireProcessTree: true);
-                    process.WaitForExit((int)TestTimeouts.Hang.TotalMilliseconds);
-                    throw new IOException("ジャンクション作成が期限内に完了しません。");
-                }
-                Assert.True(process.ExitCode == 0, "ジャンクション作成失敗: "
-                    + stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult());
+                await Task.WhenAll(process.WaitForExitAsync(), stdout, stderr);
+                Assert.True(process.ExitCode == 0, "ジャンクション作成失敗: " + await stdout + await stderr);
             }
             Assert.True((File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0);
             _links.Add(link);

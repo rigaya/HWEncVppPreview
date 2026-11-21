@@ -21,15 +21,11 @@ public sealed class CoreInputDefaultsTests
         var commands = backend.Commands;
         var capabilities = new PreviewCapabilities(VpyAssumeScriptDir: true);
         string encoder = BackendTests.FakeEncoderPath();
-        var image = await probe.ProbeAsync(encoder, "image.vpy", capabilities: capabilities)
-            .WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        Assert.Same(image, await probe.ProbeAsync(encoder, "image.vpy", Array.Empty<string>(), capabilities: capabilities)
-            .WaitWithDiagnosticsAsync(TestTimeouts.Hang));
+        var image = await probe.ProbeAsync(encoder, "image.vpy", capabilities: capabilities);
+        Assert.Same(image, await probe.ProbeAsync(encoder, "image.vpy", Array.Empty<string>(), capabilities: capabilities));
         Assert.Single(commands);
-        Assert.Null(await probe.ProbeDurationAsync(encoder, "duration.vpy", capabilities: capabilities)
-            .WaitWithDiagnosticsAsync(TestTimeouts.Hang));
-        Assert.Null(await probe.ProbeDurationAsync(encoder, "duration.vpy", Array.Empty<string>(), capabilities: capabilities)
-            .WaitWithDiagnosticsAsync(TestTimeouts.Hang));
+        Assert.Null(await probe.ProbeDurationAsync(encoder, "duration.vpy", capabilities: capabilities));
+        Assert.Null(await probe.ProbeDurationAsync(encoder, "duration.vpy", Array.Empty<string>(), capabilities: capabilities));
         Assert.Single(commands);
         Assert.Single(starts);
         Assert.All(commands.Concat(starts), args =>

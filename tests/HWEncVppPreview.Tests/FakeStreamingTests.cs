@@ -7,8 +7,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class FakeStreamingTests
 {
-    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
-
     [Fact]
     public async Task MissingFrameLimitStreamsUntilInputEndInServerMode()
     {
@@ -118,7 +116,7 @@ public sealed class FakeStreamingTests
         Assert.Equal(1001, recovered[0].Xts);
         Assert.Equal(first.Header.ExtTags["XPID"], recovered[0].Header.ExtTags["XPID"]);
         await SendAsync(child.Process, new { cmd = "quit" });
-        await child.Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await child.Process.WaitForExitAsync();
         Assert.Equal(0, child.Process.ExitCode);
     }
 
@@ -126,12 +124,12 @@ public sealed class FakeStreamingTests
     public async Task CapabilitiesAreAdvertisedOnlyWhenExplicitlyEnabled()
     {
         await using var legacy = Start(["--help"], capabilities: false);
-        string oldHelp = await legacy.Process.StandardOutput.ReadToEndAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        await legacy.Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        string oldHelp = await legacy.Process.StandardOutput.ReadToEndAsync();
+        await legacy.Process.WaitForExitAsync();
         Assert.DoesNotContain("--timestamp-passthrough", oldHelp);
         await using var modern = Start(["--help"], capabilities: true);
-        string help = await modern.Process.StandardOutput.ReadToEndAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        await modern.Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        string help = await modern.Process.StandardOutput.ReadToEndAsync();
+        await modern.Process.WaitForExitAsync();
         Assert.Contains("--timestamp-passthrough", help);
         Assert.Contains("--opencl-task-threads", help);
     }
@@ -143,7 +141,7 @@ public sealed class FakeStreamingTests
     }
 
     private static async Task<PreviewEvent> NextAsync(PreviewProtocolReader reader)
-        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException()).WaitWithDiagnosticsAsync(SafetyTimeout);
+        => await Task.Run(() => reader.ReadEvent() ?? throw new EndOfStreamException());
 
     private static async Task SendAsync(Process process, object command)
     {
@@ -166,7 +164,7 @@ public sealed class FakeStreamingTests
             if (item is PreviewEnd end) { rc = end.Rc; break; }
         }
         await SendAsync(child.Process, new { cmd = "quit" });
-        await child.Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await child.Process.WaitForExitAsync();
         Assert.Equal(0, child.Process.ExitCode);
         return (rc, frames);
     }
@@ -194,8 +192,8 @@ public sealed class FakeStreamingTests
         public async ValueTask DisposeAsync()
         {
             if (!Process.HasExited) Process.Kill(entireProcessTree: true);
-            await Process.WaitForExitAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-            await _stderr.WaitWithDiagnosticsAsync(SafetyTimeout);
+            await Process.WaitForExitAsync();
+            await _stderr;
             Process.Dispose();
         }
     }

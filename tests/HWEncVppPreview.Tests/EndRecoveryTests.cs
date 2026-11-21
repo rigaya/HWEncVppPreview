@@ -25,14 +25,14 @@ public sealed class EndRecoveryTests
         controller.Completed += value => completed = value;
         controller.FrameReady += value => image = value;
         controller.Submit(Request(10.5, continuous), background: background);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.Null(failure);
         Assert.NotNull(image);
         Assert.Equal(1009.9, image.Frame.Xts!.Value, 6);
         Assert.True(completed!.Segment!.ReachedInputEnd);
         int runs = backend.Requests.Count;
         controller.Submit(Request(20, continuous), background: background);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.Null(failure);
         Assert.Equal(runs, backend.Requests.Count);
     }
@@ -50,7 +50,7 @@ public sealed class EndRecoveryTests
         controller.Failed += value => failure = value;
         controller.FrameReady += value => image = value;
         controller.Submit(Request(20, continuous), background: background);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.Null(failure);
         Assert.NotNull(image);
         Assert.Equal(1009.9, image.Frame.Xts!.Value, 6);
@@ -67,7 +67,7 @@ public sealed class EndRecoveryTests
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request(100));
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.NotNull(failure);
         Assert.InRange(backend.Requests.Count, 2, 7);
     }
@@ -82,10 +82,10 @@ public sealed class EndRecoveryTests
         controller.Completed += value => completion = value;
         controller.FrameReady += value => image = value;
         controller.Submit(Request(9.5) with { InputDurationSeconds = 10 });
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.False(completion!.Segment!.ReachedInputEnd);
         controller.Submit(Request(15) with { InputDurationSeconds = 10 });
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.Equal(1015, image!.Frame.Xts);
         Assert.Equal(2, backend.Requests.Count);
     }
@@ -100,7 +100,7 @@ public sealed class EndRecoveryTests
         controller.Failed += value => failure = value;
         controller.Completed += value => completion = value;
         controller.Submit(Request(10));
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.Null(failure);
         Assert.Equal(2, backend.Requests.Count);
         Assert.False(completion!.Segment!.ReachedInputEnd);

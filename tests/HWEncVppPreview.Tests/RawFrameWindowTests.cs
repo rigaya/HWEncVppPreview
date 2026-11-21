@@ -11,7 +11,6 @@ public sealed class RawFrameWindowTests
     private const int SharingIterations = 32;
     private const int RaceIterations = 64;
     private const byte PixelValue = 0x2a;
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static readonly Y4mHeader Header = new() { Width = 2, Height = 2, FpsNum = FrameRate, FpsDen = 1 };
 
     [Fact]
@@ -101,7 +100,7 @@ public sealed class RawFrameWindowTests
             Task share = ShareAsync();
             Task release = ReleaseAsync();
             start.SetResult();
-            await Task.WhenAll(share, release).WaitWithDiagnosticsAsync(Safety);
+            await Task.WhenAll(share, release);
             if (shared == null) Assert.True(rejected);
             else
             {
@@ -177,8 +176,7 @@ public sealed class RawFrameWindowTests
         var ownership = new CountingOwnership(onDispose: () =>
         {
             // 別threadから共有入口へ戻れることで、返却先の処理と排他が循環しないことを確かめる。
-            _ = Task.Run(() => Assert.Throws<ObjectDisposedException>(() => window!.Share()))
-                .WaitWithDiagnosticsAsync(Safety).GetAwaiter().GetResult();
+            _ = Task.Run(() => Assert.Throws<ObjectDisposedException>(() => window!.Share())).GetAwaiter().GetResult();
         });
         window = RawFrameWindow.Adopt(Array.Empty<Y4mFrame>(), ownership);
         window.Dispose();

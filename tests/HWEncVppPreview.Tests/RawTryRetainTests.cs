@@ -4,7 +4,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class RawTryRetainTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static readonly Y4mHeader Header = new() { Width = 2, Height = 2, FpsNum = 30, FpsDen = 1 };
     private static RawFrameLease Frame(RawOwnershipScope scope, byte pixel = 17)
         => scope.Create(Header, 10, 1d / 30, Enumerable.Repeat(pixel, 6).ToArray(), scope.NewRunId(), "Reader");
@@ -197,11 +196,11 @@ public sealed class RawTryRetainTests
             var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             Task acquire = Task.Run(async () =>
             {
-                Assert.True(start.SignalAndWait(Safety));
+                start.SignalAndWait();
                 bool success = RawFrameLease.TryCapture(descriptor, "競合", out var selected);
                 using (selected)
                 {
-                    await released.Task.WaitWithDiagnosticsAsync(Safety);
+                    await released.Task;
                     if (success)
                     {
                         Assert.NotNull(selected);
@@ -212,11 +211,11 @@ public sealed class RawTryRetainTests
             });
             Task release = Task.Run(() =>
             {
-                Assert.True(start.SignalAndWait(Safety));
+                start.SignalAndWait();
                 producer.Dispose();
                 released.TrySetResult();
             });
-            await Task.WhenAll(acquire, release).WaitWithDiagnosticsAsync(Safety);
+            await Task.WhenAll(acquire, release);
             var state = scope.Capture();
             Assert.Equal(1, state.TryRetainAttempts);
             Assert.Equal(1, state.TryRetainSuccesses + state.TryRetainFailures);
@@ -237,7 +236,7 @@ public sealed class RawTryRetainTests
         string[] callers = { "同時A", "同時a", "同時B", "同時C" };
         Task[] workers = callers.Select(caller => Task.Run(async () =>
         {
-            await start.Task.WaitWithDiagnosticsAsync(Safety);
+            await start.Task;
             for (int i = 0; i < 100; ++i)
             {
                 Assert.True(RawFrameLease.TryCapture(producer.Frame, caller, out var selected));
@@ -247,7 +246,7 @@ public sealed class RawTryRetainTests
             }
         })).ToArray();
         start.SetResult();
-        await Task.WhenAll(workers).WaitWithDiagnosticsAsync(Safety);
+        await Task.WhenAll(workers);
         producer.Dispose();
         var state = scope.Capture();
         Assert.Equal(800, state.TryRetainAttempts);

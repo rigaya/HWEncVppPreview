@@ -7,8 +7,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class NavigationControllerTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [Fact]
     public async Task FinishedRunningNavigationCanPublishWhileANewerRequestIsPending()
     {
@@ -23,9 +21,9 @@ public sealed class NavigationControllerTests
         // 先行要求の実行中に次の移動を受け付け、最後の画像が残ることを確かめる。
         controller.Submit(Request(1), navigation: true);
         first.End();
-        var latest = await backend.NextAsync().WaitWithDiagnosticsAsync(Safety);
+        var latest = await backend.NextAsync();
         latest.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.NotEmpty(images);
         Assert.Equal(1, images.Last().Request.TargetSeconds);
     }
@@ -47,7 +45,7 @@ public sealed class NavigationControllerTests
         first.End();
         var latest = await backend.NextAsync();
         latest.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.NotEmpty(images);
         Assert.Equal(3, images.Last().Request.TargetSeconds);
     }
@@ -70,7 +68,7 @@ public sealed class NavigationControllerTests
         first.End();
         var edit = await backend.NextAsync();
         edit.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Equal(2, Assert.Single(images).Request.TargetSeconds);
         Assert.Equal(2, Assert.Single(completions).Request.TargetSeconds);
     }
@@ -93,7 +91,7 @@ public sealed class NavigationControllerTests
         clock.Advance(TimeSpan.FromMilliseconds(150));
         var edit = await backend.NextAsync();
         edit.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Equal(1, Assert.Single(images).Request.TargetSeconds);
         Assert.Equal(1, Assert.Single(completions).Request.TargetSeconds);
     }
@@ -113,7 +111,7 @@ public sealed class NavigationControllerTests
         first.Fail();
         var latest = await backend.NextAsync();
         latest.Fail();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Equal(1, Assert.Single(failures).Request.TargetSeconds);
     }
 
@@ -136,7 +134,7 @@ public sealed class NavigationControllerTests
         first.End();
         var edit = await backend.NextAsync();
         edit.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Equal(new[] { "frame:0", "frame:1", "completed:1" }, notifications);
     }
 
@@ -162,7 +160,7 @@ public sealed class NavigationControllerTests
         Assert.Equal(0, Assert.Single(frames).Request.TargetSeconds);
         Assert.Equal(0, Assert.Single(completions).Request.TargetSeconds);
         background.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Equal(new[] { 0.0, 10.0 }, completions.Select(value => value.Request.TargetSeconds));
     }
 
@@ -185,7 +183,7 @@ public sealed class NavigationControllerTests
         latest.End();
         var background = await backend.NextAsync();
         background.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Contains(completions, item => item.Request.TargetSeconds == 2);
         Assert.Contains(completions, item => item.Request.TargetSeconds == 10);
         Assert.DoesNotContain(completions, item => item.Request.TargetSeconds == 1);
@@ -208,7 +206,7 @@ public sealed class NavigationControllerTests
         background.End();
         var foreground = await backend.NextAsync();
         foreground.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Equal(1, Assert.Single(frames).Request.TargetSeconds);
         Assert.Equal(1, Assert.Single(completions).Request.TargetSeconds);
     }
@@ -227,7 +225,7 @@ public sealed class NavigationControllerTests
         var background = await backend.NextAsync();
         cancellation.Cancel();
         background.End();
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Empty(frames);
     }
 
@@ -240,7 +238,7 @@ public sealed class NavigationControllerTests
         await using var teardown = new ControllerLifetime(controller, clock);
         controller.Submit(Request(0));
         controller.Submit(Request(10), background: true);
-        await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        await controller.DisposeAsync().AsTask();
         Assert.Equal(0, backend.Starts);
     }
 
@@ -250,9 +248,9 @@ public sealed class NavigationControllerTests
         {
             Task dispose = controller.DisposeAsync().AsTask();
             // このstubはcancelを観測するだけで終了しない。既定の協調猶予を時計で進めてAbort回収する。
-            Task winner = await Task.WhenAny(dispose, clock.GraceArmed.Task).WaitWithDiagnosticsAsync(Safety);
+            Task winner = await Task.WhenAny(dispose, clock.GraceArmed.Task);
             if (ReferenceEquals(winner, clock.GraceArmed.Task)) clock.Advance(TimeSpan.FromSeconds(2));
-            await dispose.WaitWithDiagnosticsAsync(Safety);
+            await dispose;
             Assert.False(controller.ShutdownIncomplete);
         }
     }
@@ -284,7 +282,7 @@ public sealed class NavigationControllerTests
         private int _starts;
         public int Starts => Volatile.Read(ref _starts);
         public int Cancels => Volatile.Read(ref _cancels);
-        public Task<Run> NextAsync() => _started.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        public Task<Run> NextAsync() => _started.Reader.ReadAsync().AsTask();
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
         {
             var run = new Run(request, sink, cancellationToken);

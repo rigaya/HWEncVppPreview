@@ -6,7 +6,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class BeforeEarlySelectionTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static readonly Y4mHeader Header = new() { Width = 2, Height = 2, FpsNum = 2, FpsDen = 1 };
     private static PreviewRequest Request => new()
     {
@@ -28,7 +27,7 @@ public sealed class BeforeEarlySelectionTests
         try
         {
             controller.Submit(Request, background: true, bypassDebounce: true);
-            var early = await selected.Task.WaitWithDiagnosticsAsync(Safety);
+            var early = await selected.Task;
             Assert.True(early.CanDisplayBeforeEnd);
             Assert.False(early.TargetNotReached);
             Assert.Equal(1001, early.Frame.Xts);
@@ -36,8 +35,8 @@ public sealed class BeforeEarlySelectionTests
             Assert.Single(early.Segment.Frames);
             Assert.False(completed.Task.IsCompleted);
             backend.Release.TrySetResult();
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            Assert.Null((await completed.Task.WaitWithDiagnosticsAsync(Safety)).EarlyDisplayFallbackReason);
+            await controller.WaitForIdleAsync();
+            Assert.Null((await completed.Task).EarlyDisplayFallbackReason);
         }
         finally { backend.Release.TrySetResult(); }
     }
@@ -63,10 +62,10 @@ public sealed class BeforeEarlySelectionTests
         try
         {
             controller.Submit(Request, background: true, bypassDebounce: true);
-            await backend.Reached.Task.WaitWithDiagnosticsAsync(Safety);
+            await backend.Reached.Task;
             Assert.DoesNotContain(images, image => image.CanDisplayBeforeEnd);
             backend.Release.TrySetResult();
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await controller.WaitForIdleAsync();
             Assert.DoesNotContain(images, image => image.CanDisplayBeforeEnd);
         }
         finally { backend.Release.TrySetResult(); }
@@ -85,9 +84,9 @@ public sealed class BeforeEarlySelectionTests
         try
         {
             controller.Submit(Request, background: true, bypassDebounce: true);
-            Assert.True((await selected.Task.WaitWithDiagnosticsAsync(Safety)).CanDisplayBeforeEnd);
+            Assert.True((await selected.Task).CanDisplayBeforeEnd);
             backend.Release.TrySetResult();
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await controller.WaitForIdleAsync();
             Assert.NotNull(completed);
             Assert.Equal("受信した表示時間が一致しない", completed.EarlyDisplayFallbackReason);
             Assert.Same(tail, completed.Frames[FrameSelector.Select(completed.Segment!, 1, 2)]);
@@ -111,14 +110,14 @@ public sealed class BeforeEarlySelectionTests
         controller.Submit(Request with { EncoderPath = BackendTests.FakeEncoderPath(), Fps = 30,
             InputArgs = new[] { "--fake-gate-pipe", name, "--fake-gate-after", GateAfterFrame.ToString(System.Globalization.CultureInfo.InvariantCulture) } },
             background: true, bypassDebounce: true);
-        var frame = await selected.Task.WaitWithDiagnosticsAsync(Safety);
-        await PipeWait.UntilConnectedAsync(pipe, name, completed.Task, Safety);
+        var frame = await selected.Task;
+        await PipeWait.UntilConnectedAsync(pipe, name, completed.Task);
         using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
         using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-        Assert.Equal("ready", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Safety));
+        Assert.Equal("ready", await reader.ReadLineAsync());
         await writer.WriteLineAsync("release");
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-        Assert.Equal(0, (await completed.Task.WaitWithDiagnosticsAsync(Safety)).Result.ExitCode);
+        await controller.WaitForIdleAsync();
+        Assert.Equal(0, (await completed.Task).Result.ExitCode);
         Assert.True(frame.CanDisplayBeforeEnd);
         Assert.Equal(1001, frame.Frame.Xts!.Value, 6);
     }
@@ -184,11 +183,11 @@ public sealed class BeforeEarlySelectionTests
         try
         {
             controller.Submit(Request, background: true, bypassDebounce: true);
-            Assert.True((await selected.Task.WaitWithDiagnosticsAsync(Safety)).CanDisplayBeforeEnd);
+            Assert.True((await selected.Task).CanDisplayBeforeEnd);
             Assert.False(completed.Task.IsCompleted);
             backend.Release.TrySetResult();
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            var final = await completed.Task.WaitWithDiagnosticsAsync(Safety);
+            await controller.WaitForIdleAsync();
+            var final = await completed.Task;
             Assert.Equal(durationChanges ? "受信した表示時間が一致しない" : "受信時刻の間隔が一定でない", final.EarlyDisplayFallbackReason);
             Assert.Contains(tail, final.Frames);
             Assert.Equal(1001, final.Frames[FrameSelector.Select(final.Segment!, 1, 2)].Xts);
@@ -207,14 +206,14 @@ public sealed class BeforeEarlySelectionTests
         try
         {
             controller.Submit(request, background: true, bypassDebounce: true);
-            var frame = await selected.Task.WaitWithDiagnosticsAsync(Safety);
+            var frame = await selected.Task;
             Assert.Equal(eligible, frame.CanDisplayBeforeEnd);
             Assert.Same(expected, frame.Frame);
             Assert.False(frame.TargetNotReached);
             Assert.False(completed.Task.IsCompleted);
             backend.Release.TrySetResult();
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
-            var final = await completed.Task.WaitWithDiagnosticsAsync(Safety);
+            await controller.WaitForIdleAsync();
+            var final = await completed.Task;
             Assert.Equal(0, final.Result.ExitCode);
             Assert.Same(expected, final.Frames[FrameSelector.Select(final.Segment!, request.TargetSeconds, request.Fps)]);
         }

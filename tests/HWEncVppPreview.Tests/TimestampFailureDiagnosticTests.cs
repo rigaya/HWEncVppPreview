@@ -87,9 +87,9 @@ public sealed class TimestampFailureDiagnosticTests
             TimestampOriginSeconds = 1000, Capabilities = new(legacy), Continuous = continuous, CorrelationId = 73,
         });
         Task idle = controller.WaitForIdleAsync();
-        await backend.FailureRunStarted.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await backend.FailureRunStarted.Task;
         if (kind == "timeout") clock.Advance(TimeSpan.FromSeconds(31));
-        await idle.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await idle;
         Assert.NotNull(failure);
         return (failure, backend);
     }

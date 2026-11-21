@@ -25,7 +25,7 @@ public sealed class StreamingControllerTests
         controller.SegmentUpdated += updates.Add;
         controller.FrameReady += frames.Add;
         controller.Submit(Request());
-        await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await backend.Pauses.Reader.ReadAsync().AsTask();
         // 中心だけの確定では隣を選べないため、次の1枚もpause前の更新に含まれる必要がある。
         Assert.Contains(updates, update => !update.IsReadPaused && update.DemandSatisfied
             && update.Segment.Frames.Any(frame => frame.Xts == 1010.5));
@@ -349,7 +349,7 @@ public sealed class StreamingControllerTests
         controller.FrameReady += value => image = value;
         controller.Failed += value => failure = value;
         controller.Submit(Request(10.2) with { Continuous = continuous, Fps = 10, InputDurationSeconds = 10.2 });
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.Equal(accepted, image != null);
         Assert.Equal(!accepted, failure != null);
         Assert.Equal(continuous ? 1 : 2, backend.Requests.Count);
@@ -464,7 +464,7 @@ public sealed class StreamingControllerTests
         controller.Submit(request with { TargetSeconds = 30 }, navigation: true);
         await controller.WaitForIdleAsync();
         // 読み取り停止まで待っても、その通知は残る。前の要求の通知を次の入力の開始と取り違えないよう、ここで受け取る。
-        await backend.Pauses.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await backend.Pauses.Reader.ReadAsync().AsTask();
         Assert.Equal(3, backend.Calls);
         // 区間間の照合が失敗しても、新しい1本のstream内では連続取得を維持する。
         Assert.True(backend.Requests[^1].Continuous);

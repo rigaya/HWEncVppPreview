@@ -6,35 +6,12 @@ namespace HWEncVppPreview.Tests;
 
 internal static class PipeWait
 {
-    // 子の識別前に親が正常終了する場合は期限とpipe名を診断へ残す。
-    internal static async Task UntilConnectedAsync(NamedPipeServerStream pipe, string name, TimeSpan timeout)
-    {
-        try { await pipe.WaitForConnectionAsync().WaitWithDiagnosticsAsync(timeout); }
-        catch (TimeoutException error) { throw new TimeoutException($"pipe {name}の接続待ち", error); }
-    }
-
     // 接続前に対象処理が終われば、結果または例外を付けて直ちに失敗する。
-    internal static Task UntilConnectedAsync(NamedPipeServerStream pipe, string name, Task operation)
-        => UntilConnectedAsync(pipe, name, operation, timeout: null);
-
-    internal static Task UntilConnectedAsync(NamedPipeServerStream pipe, string name, Task operation, TimeSpan timeout)
-        => UntilConnectedAsync(pipe, name, operation, (TimeSpan?)timeout);
-
-    private static async Task UntilConnectedAsync(NamedPipeServerStream pipe, string name, Task operation, TimeSpan? timeout)
+    internal static async Task UntilConnectedAsync(NamedPipeServerStream pipe, string name, Task operation)
     {
         using var cancellation = new CancellationTokenSource();
         Task connect = pipe.WaitForConnectionAsync(cancellation.Token);
-        Task first;
-        try
-        {
-            Task<Task> completed = Task.WhenAny(connect, operation);
-            first = timeout is { } limit ? await completed.WaitWithDiagnosticsAsync(limit) : await completed;
-        }
-        catch (TimeoutException error)
-        {
-            cancellation.Cancel();
-            throw new TimeoutException($"pipe {name}の接続待ち", error);
-        }
+        Task first = await Task.WhenAny(connect, operation);
         if (first == operation && !connect.IsCompleted)
         {
             cancellation.Cancel();
@@ -57,7 +34,6 @@ internal static class PipeWait
             }
             throw new InvalidOperationException($"pipe {name}の接続前に対象処理が終了: {detail}");
         }
-        if (timeout is { } wait) await connect.WaitWithDiagnosticsAsync(wait);
-        else await connect;
+        await connect;
     }
 }

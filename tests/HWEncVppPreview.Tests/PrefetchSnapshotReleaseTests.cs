@@ -5,8 +5,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class PrefetchSnapshotReleaseTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -43,9 +41,9 @@ public sealed class PrefetchSnapshotReleaseTests
         try
         {
             controller.Submit(request);
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await controller.WaitForIdleAsync();
             for (int i = 1; i <= 5; i++) controller.NotifyNavigation(request with { TargetSeconds = 10 - i / 30d }, -1);
-            await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await controller.WaitForIdleAsync();
             var weak = backend.PrefetchedRaw;
             Assert.NotNull(weak);
             // 順序の違う両経路とも、全操作の終了後に保持が残らないことを確かめる。

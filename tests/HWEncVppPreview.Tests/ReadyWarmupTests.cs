@@ -9,7 +9,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class HistoryProbeTests
 {
-    private static readonly TimeSpan Timeout = TestTimeouts.Hang;
     private static PreviewRequest Request() => new()
     {
         EncoderPath = BackendTests.FakeEncoderPath(), InputFile = "input.ts", Fps = 30,
@@ -33,7 +32,7 @@ public sealed class HistoryProbeTests
         PreviewFailure? failed = null;
         controller.Failed += value => failed = value;
         controller.Submit((request ?? Request()) with { Continuous = continuous }, background: background);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Timeout);
+        await controller.WaitForIdleAsync();
         Assert.Null(failed);
         return Assert.IsType<PreviewSegmentSnapshot>(segment);
     }
@@ -107,7 +106,7 @@ public sealed class HistoryProbeTests
         await using var backend = Backend(start => start.Environment["FAKE_ENCODER_PROBE_FIRST_RC"] = "-5");
         bool? first = await backend.GetHistoryRequirementAsync(Request());
         bool? second = await backend.GetHistoryRequirementAsync(Request());
-        PreviewRunResult result = await backend.RunAsync(Request(), new EmptySink()).WaitWithDiagnosticsAsync(Timeout);
+        PreviewRunResult result = await backend.RunAsync(Request(), new EmptySink());
         Assert.Null(first);
         Assert.False(second);
         Assert.Equal(0, result.ExitCode);
@@ -148,11 +147,11 @@ public sealed class HistoryProbeTests
         var sink = new EmptySink();
         var run = backend.RunAsync(Request() with { Continuous = true, TargetSeconds = 0, PreMarginSeconds = 0,
             InputArgs = new[] { "--avhw", "--fake-hang-after", "1" } }, sink, cancellation.Token);
-        await sink.FirstFrame.Task.WaitWithDiagnosticsAsync(Timeout);
+        await sink.FirstFrame.Task;
         var probe = backend.GetHistoryRequirementAsync(Request());
         cancellation.Cancel();
-        PreviewRunResult result = await run.WaitWithDiagnosticsAsync(Timeout);
-        bool? history = await probe.WaitWithDiagnosticsAsync(Timeout);
+        PreviewRunResult result = await run;
+        bool? history = await probe;
         Assert.True(result.IsCancelled);
         Assert.False(history);
     }
@@ -165,7 +164,7 @@ public sealed class HistoryProbeTests
         PreviewFailure? failure = null;
         controller.Failed += value => failure = value;
         controller.Submit(Request());
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Timeout);
+        await controller.WaitForIdleAsync();
         Assert.IsType<PreviewServerNotSupportedException>(failure?.Exception);
     }
 
@@ -181,12 +180,12 @@ public sealed class HistoryProbeTests
         });
         using var cancellation = new CancellationTokenSource();
         var query = backend.GetHistoryRequirementAsync(Request(), cancellation.Token);
-        await PipeWait.UntilConnectedAsync(pipe, name, query, Timeout);
+        await PipeWait.UntilConnectedAsync(pipe, name, query);
         using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-        Assert.Equal("ready", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Timeout));
+        Assert.Equal("ready", await reader.ReadLineAsync());
         cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => query.WaitWithDiagnosticsAsync(Timeout));
-        Assert.False(await backend.GetHistoryRequirementAsync(Request()).WaitWithDiagnosticsAsync(Timeout));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => query);
+        Assert.False(await backend.GetHistoryRequirementAsync(Request()));
     }
 
     [Fact]
@@ -201,12 +200,12 @@ public sealed class HistoryProbeTests
         });
         using var cancellation = new CancellationTokenSource();
         Task<bool?> run = backend.GetHistoryRequirementAsync(Request(), cancellation.Token);
-        await PipeWait.UntilConnectedAsync(pipe, name, run, Timeout);
+        await PipeWait.UntilConnectedAsync(pipe, name, run);
         using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-        string value = await reader.ReadLineAsync().WaitWithDiagnosticsAsync(Timeout) ?? throw new EndOfStreamException();
+        string value = await reader.ReadLineAsync() ?? throw new EndOfStreamException();
         int pid = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
         cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitWithDiagnosticsAsync(Timeout));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
         try { using var process = Process.GetProcessById(pid); Assert.True(process.HasExited); }
         catch (ArgumentException) { }
     }

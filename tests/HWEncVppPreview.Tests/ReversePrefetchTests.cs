@@ -5,7 +5,6 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class ReversePrefetchTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static PreviewRequest Request(double target = 10, double fps = 100) => new()
     {
         EncoderPath = "prefetch-stub", InputFile = "input", TargetSeconds = target, Fps = fps,
@@ -31,11 +30,11 @@ public sealed class ReversePrefetchTests
         controller.Completed += _ => ++completed;
         var request = Request();
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Equal(9, cache.GetConnectedSafeRange(request)!.Value.Start);
         Assert.Equal(1, images);
         ReverseFive(controller, request);
-        await backend.PrefetchStarted.Task.WaitWithDiagnosticsAsync(Safety);
+        await backend.PrefetchStarted.Task;
         Task pending = controller.GetPendingReversePrefetch(request with { TargetSeconds = 9 })!;
         Assert.NotNull(pending);
         Assert.Same(pending, controller.GetPendingReversePrefetch(request with { TargetSeconds = 8.99 }));
@@ -49,7 +48,7 @@ public sealed class ReversePrefetchTests
         Assert.Equal(4, CommandBuilder.Plan(physical).SeekSeconds);
         Assert.Equal(1, physical.PostMarginSeconds);
         backend.ReleasePrefetch.TrySetResult();
-        await pending.WaitWithDiagnosticsAsync(Safety);
+        await pending;
         Assert.Equal(2, backend.Requests.Count);
         Assert.Equal(6, cache.GetConnectedSafeRange(request)!.Value.Start);
         Assert.True(cache.TryGetAt(request, 8.99, out _));
@@ -70,9 +69,9 @@ public sealed class ReversePrefetchTests
         controller.Failed += _ => ++failures;
         var request = Request();
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         ReverseFive(controller, request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
 
         Assert.Equal(2, backend.Requests.Count);
         var partial = cache.GetSegment(2);
@@ -94,7 +93,7 @@ public sealed class ReversePrefetchTests
         controller.FrameReady += value => displayed = value;
         var request = Request(fps: fps);
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         controller.NotifyNavigation(request with { TargetSeconds = 10 - 1 / fps }, -1);
 
 
@@ -115,11 +114,11 @@ public sealed class ReversePrefetchTests
         controller.FrameReady += value => displayed = value;
         var request = Request(fps: 2);
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         controller.NotifyNavigation(request with { TargetSeconds = 9.5 }, -1);
         controller.NotifyNavigation(request with { TargetSeconds = 9 }, -1);
-        await backend.PrefetchStarted.Task.WaitWithDiagnosticsAsync(Safety);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await backend.PrefetchStarted.Task;
+        await controller.WaitForIdleAsync();
 
 
         Assert.NotNull(displayed);
@@ -138,18 +137,18 @@ public sealed class ReversePrefetchTests
         controller.FrameReady += value => displayed = value;
         var request = Request();
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         ReverseFive(controller, request);
-        await backend.PrefetchStarted.Task.WaitWithDiagnosticsAsync(Safety);
+        await backend.PrefetchStarted.Task;
         Task pending = controller.GetPendingReversePrefetch(request)!;
         controller.NotifyNavigation(request, 1);
         controller.Submit(request with { TargetSeconds = 12.1 }, navigation: true);
         // 先読みのgateを保持している間は同じbackendで次の要求を開始できない。
         Assert.Equal(2, backend.Requests.Count);
         backend.ReleasePrefetch.TrySetResult();
-        await pending.WaitWithDiagnosticsAsync(Safety);
+        await pending;
         Assert.False(backend.PrefetchToken.IsCancellationRequested);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
 
         Assert.NotNull(displayed);
         Assert.Equal(12.1, displayed!.Request.TargetSeconds);
@@ -170,11 +169,11 @@ public sealed class ReversePrefetchTests
         controller.FrameReady += value => displayed = value;
         var request = Request();
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         ReverseFive(controller, request);
-        await backend.PrefetchStarted.Task.WaitWithDiagnosticsAsync(Safety);
+        await backend.PrefetchStarted.Task;
         controller.Submit(seek ? request with { TargetSeconds = 20 } : request with { VppArgs = new[] { "edited" } }, navigation: seek);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
 
         Assert.True(backend.PrefetchToken.IsCancellationRequested);
         Assert.Null(controller.GetPendingReversePrefetch(request));
@@ -195,19 +194,19 @@ public sealed class ReversePrefetchTests
         controller.FrameReady += _ => ++images;
         var request = Request();
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         ReverseFive(controller, request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
 
         Assert.Equal(2, backend.Requests.Count);
         Assert.False(cache.CanStitch(request));
         Assert.Equal(1, images);
         Assert.False(cache.TryGetAt(request, 10, out _));
         controller.NotifyNavigation(request with { TargetSeconds = 9.8 }, -1);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         Assert.Equal(2, backend.Requests.Count);
         controller.Submit(request with { TargetSeconds = 8.9, Continuous = false, PreMarginSeconds = 5 }, navigation: true);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
 
         Assert.Equal(3, backend.Requests.Count);
         Assert.Equal(2, images);
@@ -222,9 +221,9 @@ public sealed class ReversePrefetchTests
         controller.FrameReady += value => displayed = value;
         var request = Request(1);
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         ReverseFive(controller, request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
 
 
         Assert.NotNull(displayed);
@@ -242,9 +241,9 @@ public sealed class ReversePrefetchTests
         await using var controller = new PreviewController(backend, cache: cache, timeProvider: new FakeTimeProvider(), debounce: TimeSpan.Zero);
         var request = Request(4);
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         ReverseFive(controller, request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
 
         Assert.Equal(2, backend.Requests.Count);
         Assert.Null(CommandBuilder.Plan(backend.Requests[1]).SeekSeconds);
@@ -260,15 +259,15 @@ public sealed class ReversePrefetchTests
         controller.FrameReady += value => displayed = value;
         var request = Request();
         controller.Submit(request);
-        await backend.ContinuousHeld.Task.WaitWithDiagnosticsAsync(Safety);
+        await backend.ContinuousHeld.Task;
         ReverseFive(controller, request with { TargetSeconds = 9.1 });
 
 
         Assert.Single(backend.Requests);
         Assert.Equal(0, backend.Cancelled);
         backend.ReleaseContinuous.TrySetResult();
-        await backend.PrefetchStarted.Task.WaitWithDiagnosticsAsync(Safety);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await backend.PrefetchStarted.Task;
+        await controller.WaitForIdleAsync();
 
 
         Assert.NotNull(displayed);
@@ -285,11 +284,11 @@ public sealed class ReversePrefetchTests
         var controller = new PreviewController(backend, timeProvider: new FakeTimeProvider(), debounce: TimeSpan.Zero);
         var request = Request();
         controller.Submit(request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await controller.WaitForIdleAsync();
         ReverseFive(controller, request);
-        await backend.PrefetchStarted.Task.WaitWithDiagnosticsAsync(Safety);
+        await backend.PrefetchStarted.Task;
         Task pending = controller.GetPendingReversePrefetch(request)!;
-        await controller.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        await controller.DisposeAsync().AsTask();
         Assert.True(pending.IsCompletedSuccessfully);
 
         Assert.True(backend.PrefetchToken.IsCancellationRequested);

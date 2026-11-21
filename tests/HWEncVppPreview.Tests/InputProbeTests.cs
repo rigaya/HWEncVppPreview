@@ -9,16 +9,14 @@ namespace HWEncVppPreview.Tests;
 
 public sealed class InputProbeTests
 {
-    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
-
     [Fact]
     public async Task ReadsInputFormatWithFrameLimitAndCachesByArgumentValues()
     {
         var backend = new RecordingProbeBackend();
         var commands = backend.Commands;
         await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System);
-        InputInfo first = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", new[] { "--avhw" }).WaitWithDiagnosticsAsync(SafetyTimeout);
-        InputInfo cached = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", new List<string> { "--avhw" }).WaitWithDiagnosticsAsync(SafetyTimeout);
+        InputInfo first = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", new[] { "--avhw" });
+        InputInfo cached = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", new List<string> { "--avhw" });
         Assert.Same(first, cached);
         Assert.Equal(64, first.Width);
         Assert.Equal(36, first.Height);
@@ -41,14 +39,14 @@ public sealed class InputProbeTests
         await using var probe = TestProcesses.CreateInputProbe(backend, TimeProvider.System);
         string encoder = BackendTests.FakeEncoderPath();
         var arguments = new List<string> { "--avhw" };
-        await probe.ProbeAsync(encoder, "first.ts", arguments).WaitWithDiagnosticsAsync(SafetyTimeout);
+        await probe.ProbeAsync(encoder, "first.ts", arguments);
         arguments[0] = "--avsw";
-        await probe.ProbeAsync(encoder, "first.ts", new[] { "--avhw" }).WaitWithDiagnosticsAsync(SafetyTimeout);
+        await probe.ProbeAsync(encoder, "first.ts", new[] { "--avhw" });
         Assert.Single(backend.Commands);
-        await probe.ProbeAsync(encoder, "first.ts", arguments).WaitWithDiagnosticsAsync(SafetyTimeout);
-        await probe.ProbeAsync(encoder, "other.ts", arguments).WaitWithDiagnosticsAsync(SafetyTimeout);
+        await probe.ProbeAsync(encoder, "first.ts", arguments);
+        await probe.ProbeAsync(encoder, "other.ts", arguments);
         string alternate = Path.GetDirectoryName(encoder) + Path.DirectorySeparatorChar + "." + Path.DirectorySeparatorChar + Path.GetFileName(encoder);
-        await probe.ProbeAsync(alternate, "other.ts", arguments).WaitWithDiagnosticsAsync(SafetyTimeout);
+        await probe.ProbeAsync(alternate, "other.ts", arguments);
         Assert.Equal(4, backend.Commands.Count);
     }
 
@@ -58,7 +56,7 @@ public sealed class InputProbeTests
         int starts = 0;
         await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: _ => ++starts);
         var results = await Task.WhenAll(Enumerable.Range(0, 5)
-            .Select(_ => probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts"))).WaitWithDiagnosticsAsync(SafetyTimeout);
+            .Select(_ => probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts")));
         Assert.Equal(1, starts);
         Assert.All(results, item => Assert.Same(results[0], item));
     }
@@ -71,7 +69,7 @@ public sealed class InputProbeTests
         for (int i = 0; i < 2; ++i)
         {
             var error = await Assert.ThrowsAsync<InputProbeException>(() =>
-                probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-rc", "23", "--fake-input-end", "0" }).WaitWithDiagnosticsAsync(SafetyTimeout));
+                probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-rc", "23", "--fake-input-end", "0" }));
             Assert.Equal(23, error.ExitCode);
             Assert.Contains("FAKE requested rc=23", error.StandardError);
         }
@@ -87,7 +85,7 @@ public sealed class InputProbeTests
         // 2枚目以降が応答しなくても、最初の1枚を受け取ったら取得と子の回収が終わる。
         Task<InputInfo> operation = probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-hang-after", "1" });
         int pid = await ReadPidFromPipeAsync(pipe, pipeName, operation);
-        InputInfo input = await operation.WaitWithDiagnosticsAsync(SafetyTimeout);
+        InputInfo input = await operation;
         Assert.Equal(30, input.Fps);
         await probe.DisposeAsync();
         AssertStopped(pid);
@@ -98,7 +96,7 @@ public sealed class InputProbeTests
     {
         await using var probe = TestProcesses.CreateInputProbe();
         InputInfo input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts",
-            new[] { "--fake-rc", "23" }).WaitWithDiagnosticsAsync(SafetyTimeout);
+            new[] { "--fake-rc", "23" });
         Assert.Equal(30, input.Fps);
     }
 
@@ -110,7 +108,7 @@ public sealed class InputProbeTests
         for (int i = 0; i < 2; ++i)
         {
             var error = await Assert.ThrowsAsync<InputProbeException>(() =>
-                probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", ["--fake-input-end", "0"]).WaitWithDiagnosticsAsync(SafetyTimeout));
+                probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", ["--fake-input-end", "0"]));
             Assert.Equal(-1, error.ExitCode);
         }
         Assert.Equal(2, backend.Commands.Count);
@@ -124,9 +122,9 @@ public sealed class InputProbeTests
         Task<InputInfo> run = probe.ProbeAsync("fake", "in.ts");
         // 要求を開始した時点で期限が時計に登録されている。
         clock.Advance(TimeSpan.FromSeconds(30));
-        var error = await Assert.ThrowsAsync<InputProbeTimeoutException>(() => run.WaitWithDiagnosticsAsync(SafetyTimeout));
+        var error = await Assert.ThrowsAsync<InputProbeTimeoutException>(() => run);
         Assert.Equal("fake diagnostics", error.StandardError);
-        InputInfo recovered = await probe.ProbeAsync("fake", "in.ts").WaitWithDiagnosticsAsync(SafetyTimeout);
+        InputInfo recovered = await probe.ProbeAsync("fake", "in.ts");
         Assert.Equal(30, recovered.Fps);
     }
 
@@ -138,15 +136,15 @@ public sealed class InputProbeTests
         await using var probe = TestProcesses.CreateInputProbe();
         using var waitingCancellation = new CancellationTokenSource();
         Task<InputInfo> active = probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-frame-pipe", name });
-        await PipeWait.UntilConnectedAsync(pipe, name, active, SafetyTimeout);
+        await PipeWait.UntilConnectedAsync(pipe, name, active);
         using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
         using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-        Assert.Equal("ready", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
+        Assert.Equal("ready", await reader.ReadLineAsync());
         Task<InputInfo> waiting = probe.ProbeAsync(BackendTests.FakeEncoderPath(), "next.ts", cancellationToken: waitingCancellation.Token);
         waitingCancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting.WaitWithDiagnosticsAsync(SafetyTimeout));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
         await writer.WriteLineAsync("release");
-        InputInfo result = await active.WaitWithDiagnosticsAsync(SafetyTimeout);
+        InputInfo result = await active;
         Assert.Equal(64, result.Width);
     }
 
@@ -160,8 +158,8 @@ public sealed class InputProbeTests
         {
             Task<InputInfo> run = probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-hang-after", "0" });
             int pid = await ReadPidFromPipeAsync(pipe, pipeName, run);
-            await probe.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitWithDiagnosticsAsync(SafetyTimeout));
+            await probe.DisposeAsync().AsTask();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
             AssertStopped(pid);
             await Assert.ThrowsAsync<ObjectDisposedException>(() => probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts"));
             await probe.DisposeAsync();
@@ -238,7 +236,7 @@ public sealed class InputProbeTests
     {
         await using var probe = TestProcesses.CreateInputProbe();
         var info = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts",
-            new[] { "--avhw", "--fake-duration", value, "--fake-hang-after", "1" }).WaitWithDiagnosticsAsync(SafetyTimeout);
+            new[] { "--avhw", "--fake-duration", value, "--fake-hang-after", "1" });
         if (seconds.HasValue) Assert.Equal(TimeSpan.FromSeconds(seconds.Value), info.Duration);
         else Assert.Null(info.Duration);
     }
@@ -261,12 +259,12 @@ public sealed class InputProbeTests
         var commands = new List<string[]>();
         await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info => commands.Add(info.ArgumentList.ToArray()));
         string[] args = ["--avhw", "--fake-duration", "00:30:07.56", "--fake-duration-at-exit"];
-        var input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout);
+        var input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args);
         Assert.Null(input.Duration);
-        var duration = await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout);
+        var duration = await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args);
         Assert.Equal(TimeSpan.FromSeconds(1807.56), duration);
-        Assert.Equal(duration, await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout));
-        Assert.Equal(duration, (await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout)).Duration);
+        Assert.Equal(duration, await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args));
+        Assert.Equal(duration, (await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args)).Duration);
         Assert.Equal(2, commands.Count);
         Assert.Equal(args.Concat(new[] { "-i", "input.ts", "--log-level", "input=debug", "--frames", "1", "-c", "raw", "-o", "-" }), commands[1]);
     }
@@ -277,9 +275,9 @@ public sealed class InputProbeTests
         int starts = 0;
         await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: _ => ++starts);
         string[] args = ["--fake-duration", "00:00:10.00", "--fake-hang-after", "1"];
-        var input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout);
+        var input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts", args);
         Assert.Equal(TimeSpan.FromSeconds(10), input.Duration);
-        Assert.Equal(input.Duration, await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout));
+        Assert.Equal(input.Duration, await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args));
         Assert.Equal(1, starts);
     }
 
@@ -297,7 +295,7 @@ public sealed class InputProbeTests
         string[] args = ["--fake-duration", value, "--fake-duration-at-exit", "--fake-rc", "23"];
         for (int i = 0; i < 2; ++i)
         {
-            var result = await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout);
+            var result = await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", args);
             Assert.Equal(expected.HasValue ? TimeSpan.FromSeconds(expected.Value) : null, result);
         }
         Assert.Equal(1, starts);
@@ -310,14 +308,14 @@ public sealed class InputProbeTests
         await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: _ => ++starts);
         string encoder = BackendTests.FakeEncoderPath();
         var args = new List<string> { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit" };
-        Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(encoder, "a.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout));
+        Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(encoder, "a.ts", args));
         args[1] = "00:00:20.00";
         Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(encoder, "a.ts",
-            new[] { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit" }).WaitWithDiagnosticsAsync(SafetyTimeout));
-        Assert.Equal(TimeSpan.FromSeconds(20), await probe.ProbeDurationAsync(encoder, "a.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout));
-        await probe.ProbeDurationAsync(encoder, "b.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout);
+            new[] { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit" }));
+        Assert.Equal(TimeSpan.FromSeconds(20), await probe.ProbeDurationAsync(encoder, "a.ts", args));
+        await probe.ProbeDurationAsync(encoder, "b.ts", args);
         string alternate = Path.GetDirectoryName(encoder) + Path.DirectorySeparatorChar + "." + Path.DirectorySeparatorChar + Path.GetFileName(encoder);
-        await probe.ProbeDurationAsync(alternate, "b.ts", args).WaitWithDiagnosticsAsync(SafetyTimeout);
+        await probe.ProbeDurationAsync(alternate, "b.ts", args);
         Assert.Equal(4, starts);
     }
 
@@ -327,7 +325,7 @@ public sealed class InputProbeTests
         int starts = 0;
         await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: _ => ++starts);
         for (int i = 0; i < 2; ++i)
-            Assert.Null(await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "a.ts", new[] { "--version" }).WaitWithDiagnosticsAsync(SafetyTimeout));
+            Assert.Null(await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "a.ts", new[] { "--version" }));
         Assert.Equal(1, starts);
     }
 
@@ -337,7 +335,7 @@ public sealed class InputProbeTests
         await using var probe = TestProcesses.CreateInputProbe(configureStartInfo: info =>
             info.ArgumentList[info.ArgumentList.IndexOf("--frames") + 1] = "1000");
         Assert.Equal(TimeSpan.FromSeconds(10), await probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts",
-            new[] { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit", "--fake-stderr-bytes", "131072" }).WaitWithDiagnosticsAsync(SafetyTimeout));
+            new[] { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit", "--fake-stderr-bytes", "131072" }));
     }
 
     [Fact]
@@ -348,13 +346,13 @@ public sealed class InputProbeTests
         await using var probe = TestProcesses.CreateInputProbe();
         string[] durationArgs = ["--fake-duration", "00:00:10.00", "--fake-duration-at-exit", "--fake-duration-exit-pipe", name];
         var duration = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts", durationArgs);
-        await PipeWait.UntilConnectedAsync(pipe, name, duration, SafetyTimeout);
+        await PipeWait.UntilConnectedAsync(pipe, name, duration);
         using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
         using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-        Assert.Equal("ready", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
-        var input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts").WaitWithDiagnosticsAsync(SafetyTimeout);
+        Assert.Equal("ready", await reader.ReadLineAsync());
+        var input = await probe.ProbeAsync(BackendTests.FakeEncoderPath(), "input.ts");
         await writer.WriteLineAsync("release");
-        Assert.Equal(TimeSpan.FromSeconds(10), await duration.WaitWithDiagnosticsAsync(SafetyTimeout));
+        Assert.Equal(TimeSpan.FromSeconds(10), await duration);
         Assert.Equal(64, input.Width);
         Assert.Null(input.Duration);
     }
@@ -399,9 +397,9 @@ public sealed class InputProbeTests
             int pid = await ReadPidFromPipeAsync(pipe, pipeName, active);
             var waiting = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "other.ts", cancellationToken: waitingCancellation.Token);
             waitingCancellation.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting.WaitWithDiagnosticsAsync(SafetyTimeout));
-            await probe.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => active.WaitWithDiagnosticsAsync(SafetyTimeout));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+            await probe.DisposeAsync().AsTask();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => active);
             AssertStopped(pid);
             await Assert.ThrowsAsync<ObjectDisposedException>(() => probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts"));
         }
@@ -417,15 +415,15 @@ public sealed class InputProbeTests
         using var waitingCancellation = new CancellationTokenSource();
         var active = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "input.ts",
             new[] { "--fake-duration", "00:00:10.00", "--fake-duration-at-exit", "--fake-duration-exit-pipe", name });
-        await PipeWait.UntilConnectedAsync(pipe, name, active, SafetyTimeout);
+        await PipeWait.UntilConnectedAsync(pipe, name, active);
         using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
         using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-        Assert.Equal("ready", await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout));
+        Assert.Equal("ready", await reader.ReadLineAsync());
         var waiting = probe.ProbeDurationAsync(BackendTests.FakeEncoderPath(), "other.ts", cancellationToken: waitingCancellation.Token);
         waitingCancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting.WaitWithDiagnosticsAsync(SafetyTimeout));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
         await writer.WriteLineAsync("release");
-        Assert.Equal(TimeSpan.FromSeconds(10), await active.WaitWithDiagnosticsAsync(SafetyTimeout));
+        Assert.Equal(TimeSpan.FromSeconds(10), await active);
     }
 
     [Fact]
@@ -520,9 +518,9 @@ public sealed class InputProbeTests
 
     private static async Task<int> ReadPidFromPipeAsync(NamedPipeServerStream pipe, string name, Task operation)
     {
-        await PipeWait.UntilConnectedAsync(pipe, name, operation, SafetyTimeout);
+        await PipeWait.UntilConnectedAsync(pipe, name, operation);
         using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-        string line = await reader.ReadLineAsync().WaitWithDiagnosticsAsync(SafetyTimeout) ?? throw new EndOfStreamException();
+        string line = await reader.ReadLineAsync() ?? throw new EndOfStreamException();
         return int.Parse(line, System.Globalization.CultureInfo.InvariantCulture);
     }
 

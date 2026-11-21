@@ -231,7 +231,7 @@ public sealed class RawOwnershipTests
         using var input = new BlockedBody(eof);
         var reader = new Y4mReader(input, Header);
         Task<RawFrameLease?> reading = Task.Run(() => reader.ReadOwnedFrame(scope, 1));
-        await input.Entered.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await input.Entered.Task;
         input.Release.TrySetResult();
         if (eof)
             await Assert.ThrowsAsync<Y4mTruncatedException>(async () => await reading);
@@ -264,13 +264,13 @@ public sealed class RawOwnershipTests
             queued = value.Retain("UiPost");
         };
         controller.Submit(Request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.NotNull(queued);
         Assert.Equal(2, queued.Completed!.Frames.Count);
         Assert.Equal(0, publicEvents);
         Assert.Equal(1, backend.Runs);
         controller.Submit(Request);
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.Equal(1, backend.Runs);
         cache.Clear();
         Assert.Equal(0, cache.PendingRawReleaseCount);
@@ -306,7 +306,7 @@ public sealed class RawOwnershipTests
             Capabilities = new(true),
             TimestampOriginSeconds = 1000
         });
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.Null(failure);
         Assert.NotNull(selected);
         Assert.Equal(10, selected.Pixels.Span[0]);
@@ -337,7 +337,7 @@ public sealed class RawOwnershipTests
             Capabilities = new(true),
             TimestampOriginSeconds = 1000
         });
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.Null(failure);
         Assert.Equal(2, backend.Runs);
         Assert.NotNull(held);
@@ -370,10 +370,10 @@ public sealed class RawOwnershipTests
         };
         var run = ((IRawOwnedBackend)backend).RunOwnedAsync(request, sink, scope);
         if (failCallback)
-            await Assert.ThrowsAsync<PreviewBackendException>(async () => await run.WaitWithDiagnosticsAsync(TestTimeouts.Hang));
+            await Assert.ThrowsAsync<PreviewBackendException>(async () => await run);
         else
         {
-            Assert.Equal(0, (await run.WaitWithDiagnosticsAsync(TestTimeouts.Hang)).ExitCode);
+            Assert.Equal(0, (await run).ExitCode);
             Assert.Equal(4, sink.Frames.Count);
             Assert.All(sink.Frames, lease => Assert.Equal(64 * 36 * 3 / 2, lease.Pixels.Length));
         }
@@ -424,7 +424,7 @@ public sealed class RawOwnershipTests
             TimestampOriginSeconds = 1000,
             Continuous = true
         });
-        await controller.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await controller.WaitForIdleAsync();
         Assert.NotNull(held);
         Assert.True(scope.Capture().LiveOwners > 0);
         await controller.DisposeAsync();
