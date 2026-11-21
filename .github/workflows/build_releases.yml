@@ -20,7 +20,7 @@ jobs:
       version_name: ${{ steps.version.outputs.version_name }}
       release_sha: ${{ steps.version.outputs.release_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -72,13 +72,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.release_sha }}
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: 試験同期の検査
@@ -97,7 +97,7 @@ jobs:
           --blame-hang-timeout 5m
       - name: 試験結果の保存
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-${{ matrix.os }}
           path: test-results/
@@ -123,10 +123,10 @@ jobs:
             cli_executable: HWEncVppPreviewCLI
             extension: tar.xz
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.release_sha }}
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
       - name: 配布用の発行
@@ -216,7 +216,7 @@ jobs:
           tar -cJf "$RUNNER_TEMP/archives/HWEncVppPreviewCLI_${VERSION_NAME}_linux-x64.tar.xz" \
             -C "$RUNNER_TEMP/publish/linux-x64" HWEncVppPreviewCLI
       - name: 配布物の保存
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HWEncVppPreview_${{ needs.version.outputs.version_name }}_${{ matrix.rid }}
           path: ${{ runner.temp }}/archives/
@@ -228,10 +228,10 @@ jobs:
     needs: [version, publish]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.release_sha }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: HWEncVppPreview_*
           path: release-assets
