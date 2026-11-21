@@ -93,15 +93,15 @@ public sealed class OwnedProcessLifetimeViewModelTests
     public async Task 実serverの取消後は新しい入力を表示できる()
     {
         string name = "owned-body-" + Guid.NewGuid().ToString("N");
-        using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await using var session = OwnedProcessSession.Create(beforeEnabled: false);
+        using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await session.InitializeAsync();
         await session.WaitIdleAsync();
         session.Vm.InputArgsText = "--avhw --fake-body-pipe " + name;
         session.Vm.OpenInput("owned-cancel.ts");
-        await pipe.WaitForConnectionAsync().WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
+        await pipe.WaitForConnectionAsync();
         using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-        Assert.NotNull(await reader.ReadLineAsync().WaitWithDiagnosticsAsync(OwnedProcessSession.Safety));
+        Assert.NotNull(await reader.ReadLineAsync());
         session.Vm.InputArgsText = "--avhw";
         session.Vm.OpenInput("owned-recovered.ts");
         await session.WaitIdleAsync();
@@ -116,17 +116,17 @@ public sealed class OwnedProcessLifetimeViewModelTests
     public async Task 表示後と読取途中の破棄は所有と子を回収する(bool active)
     {
         string name = "owned-dispose-" + Guid.NewGuid().ToString("N");
-        using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await using var session = OwnedProcessSession.Create(beforeEnabled: false);
+        using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await session.InitializeAsync();
         await session.WaitIdleAsync();
         if (active)
         {
             session.Vm.InputArgsText = "--avhw --fake-body-pipe " + name;
             session.Vm.OpenInput("owned-active-dispose.ts");
-            await pipe.WaitForConnectionAsync().WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
+            await pipe.WaitForConnectionAsync();
             using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-            Assert.NotNull(await reader.ReadLineAsync().WaitWithDiagnosticsAsync(OwnedProcessSession.Safety));
+            Assert.NotNull(await reader.ReadLineAsync());
         }
         await session.DisposeAsync();
         Assert.True(session.Scope.Capture().IsEmpty);

@@ -22,7 +22,7 @@ public sealed class OwnedNavigationProcessViewModelTests
         Assert.Equal(new byte[] { 150, 130, 147, 255 }, initial[..4]);
         Assert.Equal(new byte[] { 245, 129, 230, 255 }, moved[..4]);
         Assert.Null(session.Vm.ErrorText);
-        await session.Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await session.Vm.DisposeAsync().AsTask();
         Assert.Single(session.CompletedRuns(), args => args.Contains("--vpp-nlmeans"));
     }
 
@@ -40,7 +40,7 @@ public sealed class OwnedNavigationProcessViewModelTests
         Assert.Equal(40, session.Vm.CurrentSeconds, 5);
         Assert.False(previous.SequenceEqual(session.ImageBytes()));
         Assert.Null(session.Vm.ErrorText);
-        await session.Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await session.Vm.DisposeAsync().AsTask();
         var request = session.CompletedRuns().Last(args => args.Contains("--vpp-nlmeans"));
         int seek = Array.IndexOf(request, "--seek");
         Assert.True(seek >= 0);

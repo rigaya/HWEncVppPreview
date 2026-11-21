@@ -48,10 +48,10 @@ public sealed class SafeBoundaryViewModelTests
         vm.CompareMode = PreviewCompareMode.SideBySide;
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await vm.WaitForIdleAsync();
             vm.StepFrameCommand.Execute(lowerBoundary ? -1 : 1);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForIdleAsync();
             Assert.Equal(expected, Math.Abs(vm.CurrentSeconds - 5) < 0.0000001);
             Assert.Equal(expected, vm.ErrorText == null);
             if (expected)
@@ -65,7 +65,7 @@ public sealed class SafeBoundaryViewModelTests
         }
         finally
         {
-            try { await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang); }
+            try { await vm.DisposeAsync().AsTask(); }
             finally { Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", previous); }
         }
         Assert.True(scope.Capture().IsEmpty);

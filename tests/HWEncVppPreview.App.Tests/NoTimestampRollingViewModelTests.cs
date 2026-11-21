@@ -10,7 +10,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class NoTimestampRollingViewModelTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static readonly Y4mHeader Header = Y4mHeader.Parse("YUV4MPEG2 W64 H36 F30:1 Ip A1:1 C420");
 
     [AvaloniaTheory]
@@ -27,7 +26,7 @@ public sealed class NoTimestampRollingViewModelTests
         foreach (int direction in new[] { 1, 1, -1, -1 })
         {
             vm.StepFrameCommand.Execute(direction);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForIdleAsync();
         }
         Assert.Equal(10, vm.CurrentSeconds, 8);
         AssertImages(vm, 300);
@@ -44,12 +43,12 @@ public sealed class NoTimestampRollingViewModelTests
         {
             await Start(vm);
             vm.StepFrameCommand.Execute(1);
-            await backend.SecondStarted.Task.WaitWithDiagnosticsAsync(Safety);
+            await backend.SecondStarted.Task;
             // 最初の3枚窓の末尾から、次の隣だけを有限の完了列で選ばせる。
             vm.StepFrameCommand.Execute(1);
-            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForPreparationAsync();
             backend.ReleaseSecond.TrySetResult();
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForIdleAsync();
             Assert.InRange(vm.CurrentSeconds, 10 + 2.0 / 30 - 0.001, 10 + 2.0 / 30 + 0.001);
             AssertImages(vm, 302);
         }
@@ -101,8 +100,8 @@ public sealed class NoTimestampRollingViewModelTests
     }
     private static async Task Start(MainWindowViewModel vm)
     {
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.Null(vm.ErrorText);
     }
     private static void AssertImages(MainWindowViewModel vm, int tick)

@@ -9,8 +9,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class StreamingNavigationTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [AvaloniaFact]
     public async Task CachedReverseTargetBeforeStreamFirstFrameFinishesIdle()
     {
@@ -23,22 +21,22 @@ public sealed class StreamingNavigationTests
         vm.InputPath = "gap-navigation.ts";
         vm.CurrentSeconds = 103;
         vm.InputArgsText = "--avhw";
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         vm.CurrentSeconds = 100;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         vm.StepFrameCommand.Execute(-1);
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.Null(vm.ErrorText);
         vm.CurrentSeconds = 101;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         // 順逆の移動を経て、先頭位置へ戻した最終表示を確認する。
         vm.CurrentSeconds = 100;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.Equal(100, vm.CurrentSeconds);
         var image = Assert.IsType<Avalonia.Media.Imaging.WriteableBitmap>(vm.PreviewImage);
         using var pixels = image.Lock();
@@ -69,8 +67,8 @@ public sealed class StreamingNavigationTests
         vm.InputArgsText = "--avhw";
         vm.IsShowingBefore = true;
         if (filter.Length > 0) vm.FilterLines.Add(new FilterLineViewModel { Text = filter });
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         var after = Assert.Single(foreground);
         Assert.Equal(warmup, after.WarmupSeconds);
         Assert.Equal(seek, CommandBuilder.Plan(after).SeekSeconds);
@@ -86,7 +84,7 @@ public sealed class StreamingNavigationTests
         }
         // 暖機0でもGOP用の前余白は残り、直後の1枚戻りを追加取得なしで表示する。
         vm.StepFrameCommand.Execute(-1);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync();
         Assert.Single(foreground);
         Assert.True(vm.CurrentSeconds < 10);
         Assert.False(vm.IsBusy);
@@ -109,8 +107,8 @@ public sealed class StreamingNavigationTests
         vm.InputPath = "stream.ts";
         vm.CurrentSeconds = 10;
         vm.InputArgsText = "--avhw --fake-duration 00:01:00.00";
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.Null(vm.ErrorText);
         Assert.NotNull(vm.PreviewImage);
         Assert.Single(requests);
@@ -123,23 +121,23 @@ public sealed class StreamingNavigationTests
         Assert.Equal(1010, displayed.Last()!.Value, 5);
         Assert.False(vm.IsBusy);
         vm.CurrentSeconds = 11;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.Equal(1011, displayed.Last()!.Value, 5);
         vm.CurrentSeconds = 15;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.Equal(1015, displayed.Last()!.Value, 5);
         Assert.Single(requests);
         int beforeStep = requests.Count;
         vm.StepFrameCommand.Execute(-1);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync();
         Assert.Equal(15 - 1.0 / 30, vm.CurrentSeconds, 6);
         Assert.Equal(beforeStep, requests.Count);
         Assert.Equal(1000 + vm.CurrentSeconds, displayed.Last()!.Value, 5);
         vm.CurrentSeconds = 1;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.Equal(2, requests.Count);
         // 大きく戻るシークも通常の前方計画を使い、逆コマ用の過去窓を作らない。
         Assert.True(requests.Last().Continuous);
@@ -161,13 +159,13 @@ public sealed class StreamingNavigationTests
         vm.EncoderPath = FakeEncoderPath();
         vm.InputPath = "legacy.ts";
         vm.CurrentSeconds = 15;
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.NotNull(vm.PreviewImage);
         Assert.Equal(2, requests.Single().PreMarginSeconds);
         vm.CurrentSeconds = 1;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.Equal(2, requests.Count);
         Assert.Equal(2, requests.Last().PreMarginSeconds);
         Assert.Null(vm.ErrorText);
@@ -195,8 +193,8 @@ public sealed class StreamingNavigationTests
         vm.InputPath = "unfiltered-concurrent.ts";
         vm.CurrentSeconds = 5;
         vm.InputArgsText = "--avhw --fake-duration 00:01:00.00";
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.NotNull(vm.PreviewImage);
         Assert.NotNull(vm.BeforeImage);
         Assert.NotSame(vm.PreviewImage, vm.BeforeImage);
@@ -224,8 +222,8 @@ public sealed class StreamingNavigationTests
         vm.InputArgsText = "--avhw --fake-duration 00:01:00.00";
         vm.IsShowingBefore = true;
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.01" });
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.NotNull(vm.PreviewImage);
         Assert.Null(vm.ErrorText);
         Assert.Single(foreground);
@@ -267,16 +265,16 @@ public sealed class StreamingNavigationTests
                 + (outputRate == null ? "" : " --fake-output-rate " + outputRate);
         vm.IsShowingBefore = true;
         vm.FilterLines.Add(new FilterLineViewModel { Text = filter });
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.Single(background);
         // 入力枚数制限と出力レートが違っても、最初の実取得末尾より先まで小刻みに移動する。
         int steps = Math.Max(90, (int)Math.Ceiling((beforeFrames.Keys.Max(frame => frame.Xts!.Value) - 1000 - 10 + 1) * afterFps));
         for (int i = 0; i < steps; ++i)
         {
             vm.StepFrameCommand.Execute(1);
-            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForPreparationAsync();
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             Assert.True(Math.Abs(beforeDisplay.Last() - vm.CurrentSeconds) <= 1.0 / (2 * (outputRate == "double" ? 60 : outputRate == "film" ? 24 : 30)) + 1e-6,
                 $"step={i}, target={vm.CurrentSeconds:R}, before={beforeDisplay.Last():R}, requests={background.Count}");
@@ -306,15 +304,15 @@ public sealed class StreamingNavigationTests
         window.Show();
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-            await foreground.Paused.Task.WaitWithDiagnosticsAsync(Safety);
-            await background.Finished.Task.WaitWithDiagnosticsAsync(Safety);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.InitializeAsync(false);
+            await foreground.Paused.Task;
+            await background.Finished.Task;
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             Assert.NotNull(vm.PreviewImage);
             Assert.NotNull(vm.BeforeImage);
             window.Close();
-            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+            await vm.DisposeAsync().AsTask();
             foreach (int pid in foreground.ProcessIds.Concat(background.ProcessIds).Distinct())
             {
                 try { using var process = System.Diagnostics.Process.GetProcessById(pid); Assert.True(process.HasExited, $"偽エンコーダが残っています: {pid}"); }
@@ -332,29 +330,36 @@ public sealed class StreamingNavigationTests
         var clock = new VmShutdownClock();
         await using var input = new SyntheticInputProbe(clock);
         var backend = new UnresponsiveVmBackend();
-        var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        var vmDeadline = TimeSpan.FromSeconds(5);
+        var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null, null,
+            readTextOverride: SyntheticInputProbe.ReadTextAsync, timeouts: PreviewTimeouts.Infinite with
+            {
+                DisposeGrace = TimeSpan.FromSeconds(2),
+                ControllerDispose = TimeSpan.FromSeconds(5),
+                ViewModelDispose = vmDeadline,
+            })
         { EncoderPath = FakeEncoderPath(), InputPath = "dispose-unresponsive.ts" };
         Task? dispose = null;
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+            await vm.InitializeAsync(false);
             clock.Advance(TimeSpan.FromMilliseconds(150));
-            await backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
+            await backend.Started.Task;
             dispose = vm.DisposeAsync().AsTask();
-            await clock.GraceArmed.Task.WaitWithDiagnosticsAsync(Safety);
+            await clock.GraceArmed.Task;
             clock.Advance(TimeSpan.FromSeconds(2));
-            await backend.Aborted.Task.WaitWithDiagnosticsAsync(Safety);
-            await clock.RemainingArmed.Task.WaitWithDiagnosticsAsync(Safety);
+            await backend.Aborted.Task;
+            await clock.RemainingArmed.Task;
             clock.Advance(TimeSpan.FromSeconds(3));
             // Coreが期限で放棄したRunをVMのIdle待ちから再び無期限に待たない。
-            await dispose.WaitWithDiagnosticsAsync(Safety);
+            await dispose;
             Assert.False(backend.Running.IsCompleted);
             Assert.Null(vm.PreviewImage);
         }
         finally
         {
             backend.Release();
-            if (dispose != null) await dispose.WaitWithDiagnosticsAsync(Safety);
+            if (dispose != null) await dispose;
             else await vm.DisposeAsync();
         }
     }
@@ -364,28 +369,29 @@ public sealed class StreamingNavigationTests
     {
         using var capabilities = new CapabilityScope(false);
         using var services = new Services();
-        var clock = new VmShutdownClock();
+        var vmDeadline = TimeSpan.FromSeconds(7);
+        var clock = new VmShutdownClock(vmDeadline);
         await using var input = new SyntheticInputProbe(clock);
         var backend = new SingleFrameVmBackend();
         var converting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var converted = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         Y4mFrame? pending = null;
         var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null,
-            (frame, token) => { pending = frame; converting.TrySetResult(); return converted.Task; }, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+            (frame, token) => { pending = frame; converting.TrySetResult(); return converted.Task; }, readTextOverride: SyntheticInputProbe.ReadTextAsync,
+            timeouts: PreviewTimeouts.Infinite with { ViewModelDispose = vmDeadline })
         { EncoderPath = FakeEncoderPath(), InputPath = "dispose-converter.ts" };
         Task? dispose = null;
-        string? firstFailedStage = null;
         try
         {
-            await WaitStageAsync(vm.InitializeAsync(false), "初期化");
+            await vm.InitializeAsync(false);
             clock.Advance(TimeSpan.FromMilliseconds(150));
-            await WaitStageAsync(converting.Task, "変換開始");
+            await converting.Task;
             dispose = vm.DisposeAsync().AsTask();
-            await WaitStageAsync(backend.Disposed.Task, "backend.Disposed");
-            // この通知は他の5秒タイマーでも成立するため、VMの総期限だけを識別した証拠にはしない。
-            await WaitStageAsync(clock.FullDeadlineArmed.Task, "clock.FullDeadlineArmed");
-            clock.Advance(TimeSpan.FromSeconds(5));
-            await WaitStageAsync(dispose, "Dispose完了");
+            await backend.Disposed.Task;
+            // 他の処理と異なる期限を使い、VM自身のタイマーが登録されてから進める。
+            await clock.VmDeadlineArmed.Task;
+            clock.Advance(vmDeadline);
+            await dispose;
             Assert.False(converted.Task.IsCompleted);
             Assert.Null(vm.PreviewImage);
         }
@@ -393,27 +399,11 @@ public sealed class StreamingNavigationTests
         {
             if (pending != null) converted.TrySetResult(YuvToBgra.Convert(pending));
             else converted.TrySetCanceled();
-            if (dispose != null) await WaitStageAsync(dispose, "finallyのDispose完了");
-            else await WaitStageAsync(vm.DisposeAsync().AsTask(), "finallyのDispose開始・完了");
+            if (dispose != null) await dispose;
+            else await vm.DisposeAsync();
         }
-        await WaitStageAsync(vm.WaitForIdleAsync(), "WaitForIdle完了");
+        await vm.WaitForIdleAsync();
         Assert.Null(vm.PreviewImage);
-
-        async Task WaitStageAsync(Task task, string stage)
-        {
-            try { await task.WaitWithDiagnosticsAsync(Safety); }
-            catch (Exception exception)
-            {
-                firstFailedStage ??= stage;
-                // 同じSafetyで止まっても、どの待ちと未完了処理かを失敗ログだけで区別できるようにする。
-                throw new InvalidOperationException(
-                    $"取消を無視する変換の終了検査: 最初の失敗段階={firstFailedStage}、今回の待機段階={stage}。"
-                    + $"backend.Disposed={backend.Disposed.Task.Status}, "
-                    + $"FullDeadlineArmed={clock.FullDeadlineArmed.Task.Status}, "
-                    + $"Dispose={dispose?.Status.ToString() ?? "未開始"}, "
-                    + $"converter={converted.Task.Status}, fakeTimestamp={clock.GetTimestamp()}", exception);
-            }
-        }
     }
 
     [AvaloniaFact]
@@ -421,32 +411,34 @@ public sealed class StreamingNavigationTests
     {
         using var capabilities = new CapabilityScope(false);
         using var services = new Services();
-        var clock = new VmShutdownClock();
+        var vmDeadline = TimeSpan.FromSeconds(7);
+        var clock = new VmShutdownClock(vmDeadline);
         await using var input = new SyntheticInputProbe(clock);
         var backend = new SingleFrameVmBackend();
-        var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync)
+        var vm = new MainWindowViewModel(services, clock, backend, input.Probe, null, null, readTextOverride: SyntheticInputProbe.ReadTextAsync,
+            timeouts: PreviewTimeouts.Infinite with { ViewModelDispose = vmDeadline })
         { EncoderPath = FakeEncoderPath(), InputPath = "dispose-ui-pump.ts" };
         Task? dispose = null;
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+            await vm.InitializeAsync(false);
             clock.Advance(TimeSpan.FromMilliseconds(150));
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForIdleAsync();
             Assert.NotNull(vm.PreviewImage);
             // UIを同期的に占有しても、終了期限の監視はThreadPool上で進み続ける。
             Task advance = Task.Run(async () =>
             {
-                await backend.Disposed.Task.WaitWithDiagnosticsAsync(Safety);
-                await clock.FullDeadlineArmed.Task.WaitWithDiagnosticsAsync(Safety);
-                clock.Advance(TimeSpan.FromSeconds(5));
+                await backend.Disposed.Task;
+                await clock.VmDeadlineArmed.Task;
+                clock.Advance(vmDeadline);
             });
             dispose = vm.DisposeAsync().AsTask();
-            dispose.WaitWithDiagnosticsAsync(Safety).GetAwaiter().GetResult();
-            await advance.WaitWithDiagnosticsAsync(Safety);
+            dispose.GetAwaiter().GetResult();
+            await advance;
             await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
             Assert.Null(vm.PreviewImage);
         }
-        finally { if (dispose != null) await dispose.WaitWithDiagnosticsAsync(Safety); else await vm.DisposeAsync(); }
+        finally { if (dispose != null) await dispose; else await vm.DisposeAsync(); }
     }
 
     [AvaloniaTheory]
@@ -465,8 +457,8 @@ public sealed class StreamingNavigationTests
         vm.InputPath = "end.ts";
         vm.CurrentSeconds = target;
         vm.InputArgsText = "--avhw --fake-duration 00:00:03.00 --fake-input-end 3";
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.NotNull(vm.PreviewImage);
         Assert.Null(vm.ErrorText);
         Assert.False(vm.IsBusy);
@@ -491,15 +483,15 @@ public sealed class StreamingNavigationTests
         vm.IsShowingBefore = true;
         var filter = new FilterLineViewModel { Text = "--vpp-nlmeans sigma=0.01" };
         vm.FilterLines.Add(filter);
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await background.Started.Task.WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await background.Started.Task;
         // 前景の需要が確定しても、実行中の元画像の取消源は維持される。
         await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
         Assert.True(vm.IsBeforeBusy);
         filter.Text = "--vpp-nlmeans sigma=0.02";
-        await background.Cancelled.Task.WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await background.Cancelled.Task;
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.False(vm.IsBusy);
         Assert.False(vm.IsBeforeBusy);
         Assert.Null(vm.ErrorText);
@@ -530,22 +522,22 @@ public sealed class StreamingNavigationTests
         await using var vm = new MainWindowViewModel(services, clock, backend, input.Probe, cache,
             (frame, token) => { converted.Enqueue(frame.Data[0]); return Task.FromResult(YuvToBgra.Convert(frame)); }, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = request.InputFile, CurrentSeconds = 1 };
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync();
         Assert.Equal((byte)24, converted.Last());
         var shown = new List<byte> { converted.Last() };
         foreach (int expected in Enumerable.Range(25, 6))
         {
             vm.StepFrameCommand.Execute(1);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForIdleAsync();
             Assert.Equal((byte)expected, converted.Last());
             shown.Add(converted.Last());
         }
         foreach (int expected in Enumerable.Range(24, 6).Reverse())
         {
             vm.StepFrameCommand.Execute(-1);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForIdleAsync();
             Assert.Equal((byte)expected, converted.Last());
             shown.Add(converted.Last());
         }
@@ -590,8 +582,8 @@ public sealed class StreamingNavigationTests
         vm.EncoderPath = FakeEncoderPath();
         vm.InputPath = request.InputFile;
         vm.CurrentSeconds = 1;
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.Empty(requests);
         var rejected = Assert.IsType<PreviewSegmentSnapshot>(cache.StoreSegment(request with { TargetSeconds = 1.2 },
             Enumerable.Range(24, 9).Select(index => PhaseFrame(index, phase, changePixels ? (byte)(index + 100) : null)).ToArray(),
@@ -600,8 +592,8 @@ public sealed class StreamingNavigationTests
         Assert.False(rejected.CanStitch);
         Assert.Null(cache.GetSegment(first.SegmentId));
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         // 破棄された区間の隣へ即時移動せず、要求単位で取り直す。
         Assert.NotEmpty(requests);
         Assert.False(vm.IsBusy);
@@ -636,12 +628,12 @@ public sealed class StreamingNavigationTests
         vm.EncoderPath = FakeEncoderPath();
         vm.InputPath = request.InputFile;
         vm.CurrentSeconds = 10;
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.Empty(requests);
         vm.CurrentSeconds = 13;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.Single(requests);
         // 重なりは12秒の1枚だけで、2枚以上の画素照合が揃うまでは新物理区間だけを使う。
         var pending = cache.GetNavigationFrames(request with { TargetSeconds = 13 });
@@ -655,13 +647,13 @@ public sealed class StreamingNavigationTests
         for (int i = 0; i < 30; ++i)
         {
             vm.StepFrameCommand.Execute(-1);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForIdleAsync();
         }
         Assert.Equal(12, vm.CurrentSeconds, 6);
         Assert.Single(requests);
         vm.StepFrameCommand.Execute(-1);
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.True(requests.Count > 1);
         Assert.Equal(12 - 1.0 / 30, vm.CurrentSeconds, 6);
         Assert.False(vm.IsBusy);
@@ -702,13 +694,13 @@ public sealed class StreamingNavigationTests
                 + (explicitLocation == "input" ? " --timestamp-passthrough" : "") };
         if (explicitLocation == "vpp") vm.FilterLines.Add(new FilterLineViewModel { Text = "--timestamp-passthrough" });
         vm.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(vm.PreviewImage)) ++applied; };
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await firstStarted.Task.WaitWithDiagnosticsAsync(Safety);
+        await firstStarted.Task;
         backend.ContinueAfterFirstConversion.TrySetResult();
-        await backend.ReplaySelected.Task.WaitWithDiagnosticsAsync(Safety);
+        await backend.ReplaySelected.Task;
         releaseFirst.TrySetResult();
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync();
         Assert.Equal(1, applied);
         var winning = Assert.IsType<Y4mFrame>(backend.ReplayTargetFrame);
         var bitmap = Assert.IsType<Avalonia.Media.Imaging.WriteableBitmap>(vm.PreviewImage);
@@ -734,12 +726,12 @@ public sealed class StreamingNavigationTests
         Assert.DoesNotContain("--timestamp-passthrough", replayRequest.VppArgs);
         int replayRequests = foregroundRequests.Length;
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync();
         Assert.Equal(10 + 1.0 / 30, vm.CurrentSeconds, 6);
         Assert.Equal(replayRequests, backend.Requests.Count(request => request.CorrelationId > 0));
         vm.CurrentSeconds = 20;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         var laterForegroundRequests = backend.Requests.Where(request => request.CorrelationId > 0).Skip(replayRequests).ToArray();
         Assert.NotEmpty(laterForegroundRequests);
         Assert.All(laterForegroundRequests, request => Assert.False(request.Capabilities.TimestampPassthrough));
@@ -773,16 +765,16 @@ public sealed class StreamingNavigationTests
             }, readTextOverride: SyntheticInputProbe.ReadTextAsync)
         { EncoderPath = FakeEncoderPath(), InputPath = "replay-failed.ts", CurrentSeconds = 10,
             InputArgsText = "--avhw --fake-clock-backstep-at 125" };
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await firstStarted.Task.WaitWithDiagnosticsAsync(Safety);
+        await firstStarted.Task;
         Task failureNotified = ObserveErrorNotification(vm);
         backend.ContinueAfterFirstConversion.TrySetResult();
-        await backend.ReplayFailed.Task.WaitWithDiagnosticsAsync(Safety);
-        await failureNotified.WaitWithDiagnosticsAsync(Safety);
+        await backend.ReplayFailed.Task;
+        await failureNotified;
         string? failure = vm.ErrorText;
         releaseFirst.TrySetResult();
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync();
         Assert.Null(vm.PreviewImage);
         Assert.Equal(failure, vm.ErrorText);
         Assert.Contains("23", vm.ErrorText!);
@@ -805,8 +797,8 @@ public sealed class StreamingNavigationTests
         vm.InputPath = "near-wrap.ts";
         vm.CurrentSeconds = 10;
         vm.InputArgsText = "--avhw --fake-origin-seconds 95443.5";
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.NotNull(vm.PreviewImage);
         Assert.Null(vm.ErrorText);
         Assert.False(vm.IsBusy);
@@ -818,12 +810,12 @@ public sealed class StreamingNavigationTests
             Assert.Equal(95443.5, request.TimestampOriginSeconds);
         });
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync();
         Assert.Equal(10 + 1.0 / 30, vm.CurrentSeconds, 6);
         Assert.Null(vm.ErrorText);
         vm.CurrentSeconds = 1;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.Equal(3, requests.Last().PreMarginSeconds);
         Assert.False(requests.Last().Capabilities.TimestampPassthrough);
         Assert.Null(vm.ErrorText);
@@ -853,12 +845,12 @@ public sealed class StreamingNavigationTests
             if (args.PropertyName == nameof(vm.PreviewImage) && vm.PreviewImage != null)
                 afterImage.TrySetResult(vm.PreviewImage);
         };
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        var original = await afterImage.Task.WaitWithDiagnosticsAsync(Safety);
-        await background.Started.Task.WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        var original = await afterImage.Task;
+        await background.Started.Task;
         vm.LogText = "after-log-marker";
         background.Allow.TrySetResult();
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync();
         if (protocolFailure) Assert.Null(vm.BeforeImage);
         else Assert.NotNull(vm.BeforeImage);
         Assert.Same(original, vm.PreviewImage);
@@ -1083,12 +1075,12 @@ public sealed class StreamingNavigationTests
         public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 
-    private sealed class VmShutdownClock : TimeProvider
+    private sealed class VmShutdownClock(TimeSpan? vmDeadline = null) : TimeProvider
     {
         private readonly FakeTimeProvider _clock = new();
         public TaskCompletionSource GraceArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource RemainingArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource FullDeadlineArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource VmDeadlineArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public override long TimestampFrequency => _clock.TimestampFrequency;
         public override long GetTimestamp() => _clock.GetTimestamp();
         public override DateTimeOffset GetUtcNow() => _clock.GetUtcNow();
@@ -1098,7 +1090,7 @@ public sealed class StreamingNavigationTests
             var timer = _clock.CreateTimer(callback, state, dueTime, period);
             if (dueTime == TimeSpan.FromSeconds(2)) GraceArmed.TrySetResult();
             if (dueTime == TimeSpan.FromSeconds(3)) RemainingArmed.TrySetResult();
-            if (dueTime == TimeSpan.FromSeconds(5)) FullDeadlineArmed.TrySetResult();
+            if (dueTime == vmDeadline) VmDeadlineArmed.TrySetResult();
             return timer;
         }
     }

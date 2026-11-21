@@ -19,12 +19,12 @@ public sealed class EncoderPreparationViewModelTests
         };
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await backend.Started.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await metadataReady.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await backend.Started.Task;
+            await metadataReady.Task;
         }
         finally { backend.Release.TrySetResult(); }
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await vm.WaitForIdleAsync();
         Assert.NotNull(vm.HelpSchema);
         Assert.Null(vm.ErrorText);
     }

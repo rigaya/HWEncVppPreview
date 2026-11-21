@@ -32,15 +32,15 @@ public sealed class EofRecoveryViewModelTests
     public async Task 遅着した入力長は実終端を上書きしない()
     {
         string name = "late-duration-" + Guid.NewGuid().ToString("N");
-        using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await using var session = OwnedProcessSession.Create(
             inputArgs: "--avhw --fake-duration 00:00:20.00 --fake-duration-at-exit --fake-input-end 10",
             target: 0, beforeEnabled: false, durationPipe: name);
+        using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await session.InitializeAsync();
-        await PipeWaitDiagnostics.ConnectAsync(pipe, name, OwnedProcessSession.Safety, () => PipeWaitDiagnostics.State(session.Vm));
+        await PipeWaitDiagnostics.ConnectAsync(pipe, name, () => PipeWaitDiagnostics.State(session.Vm));
         using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
         using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-        Assert.Equal("ready", await PipeWaitDiagnostics.ReadLineAsync(reader, name, OwnedProcessSession.Safety,
+        Assert.Equal("ready", await PipeWaitDiagnostics.ReadLineAsync(reader, name,
             () => PipeWaitDiagnostics.State(session.Vm)));
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void Changed(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
@@ -51,13 +51,10 @@ public sealed class EofRecoveryViewModelTests
         try
         {
             session.Vm.CurrentSeconds = 20;
-            await reached.Task.WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
+            await reached.Task;
         }
-        finally
-        {
-            session.Vm.PropertyChanged -= Changed;
-            await writer.WriteLineAsync("release");
-        }
+        finally { session.Vm.PropertyChanged -= Changed; }
+        await writer.WriteLineAsync("release");
         await session.WaitIdleAsync();
         Assert.Equal(10, session.Vm.DurationSeconds, 5);
         Assert.Equal(10 - 1.0 / 30, session.Vm.CurrentSeconds, 5);

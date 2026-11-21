@@ -25,8 +25,8 @@ public sealed class OwnedInjectionViewModelTests
         vm.InputArgsText = "--avhw";
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             var bitmap = Assert.IsType<WriteableBitmap>(vm.PreviewImage);
             using var pixels = bitmap.Lock();
@@ -34,7 +34,7 @@ public sealed class OwnedInjectionViewModelTests
         }
         finally
         {
-            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.DisposeAsync().AsTask();
         }
         Assert.True(scope.Capture().IsEmpty);
     }
@@ -67,11 +67,11 @@ public sealed class OwnedInjectionViewModelTests
         vm.InputArgsText = "--avhw";
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await started.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await started.Task;
             vm.RefreshCommand.Execute(null);
             release.TrySetResult();
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             var bitmap = Assert.IsType<WriteableBitmap>(vm.PreviewImage);
             using var pixels = bitmap.Lock();
@@ -80,7 +80,7 @@ public sealed class OwnedInjectionViewModelTests
         finally
         {
             release.TrySetResult();
-            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.DisposeAsync().AsTask();
         }
         Assert.True(scope.Capture().IsEmpty);
     }
@@ -115,14 +115,14 @@ public sealed class OwnedInjectionViewModelTests
         };
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await backend.Started.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await backend.Started.Task;
             backend.Release.TrySetResult();
-            await firstShown.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await firstShown.Task;
             // 表示後の連続操作を、各入力の合間に完了を待たず投入する。
             foreach (double target in new[] { 10.5, 9.8, 10.2, 9.9, 10.4 }) vm.CurrentSeconds = target;
-            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForPreparationAsync();
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             Assert.Equal(10.4, vm.CurrentSeconds, 6);
             Assert.True(vm.PreviewImage != null, $"状態:{vm.StatusText} エラー:{vm.ErrorText} busy:{vm.IsBusy}");
@@ -134,7 +134,7 @@ public sealed class OwnedInjectionViewModelTests
         finally
         {
             backend.Release.TrySetResult();
-            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.DisposeAsync().AsTask();
         }
         Assert.True(scope.Capture().IsEmpty);
     }

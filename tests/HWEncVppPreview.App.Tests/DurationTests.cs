@@ -12,8 +12,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class DurationTests
 {
-    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
-
     [AvaloniaFact]
     public async Task ExitDurationDoesNotDelayImageOrReplaceImageStateAndSurvivesEditingAndSeeking()
     {
@@ -33,15 +31,15 @@ public sealed class DurationTests
         await files.WaitReadyAsync(vm);
         await WaitForPropertyAsync(vm, () => vm.PreviewImage != null && !vm.IsBusy);
         await files.ReleaseAsync();
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         line.Text = "--vpp-nlmeans sigma=0.2";
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync();
 
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         vm.CurrentSeconds = 2;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync();
 
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.Equal(1, starts);
         Assert.True(vm.HasDuration);
         Assert.Equal(10, vm.DurationSeconds);
@@ -66,16 +64,16 @@ public sealed class DurationTests
         await PrepareAsync(vm);
         await files.WaitReadyAsync(vm);
         vm.FilterLines.Add(new() { Text = "--vpp-nlmeans sigma=0.1" });
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync();
 
         await WaitForPropertyAsync(vm, () => vm.PreviewImage != null && !vm.IsBusy);
         var previous = vm.PreviewImage;
         vm.CurrentSeconds = 2;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync();
 
         await WaitForPropertyAsync(vm, () => vm.PreviewImage != null && !ReferenceEquals(vm.PreviewImage, previous) && !vm.IsBusy);
         await files.ReleaseAsync();
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.Equal(10, vm.DurationSeconds);
         Assert.Equal(2, vm.CurrentSeconds);
         Assert.Equal(1, starts);
@@ -91,7 +89,7 @@ public sealed class DurationTests
         });
         await using var vm = Create(files, probe);
         await PrepareAsync(vm);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.True(vm.HasDuration);
         Assert.Equal(10, vm.DurationSeconds);
         Assert.NotNull(vm.PreviewImage);
@@ -118,9 +116,9 @@ public sealed class DurationTests
         await files.WaitReadyAsync(vm);
         int pid = await files.PidAsync();
         vm.InputPath = "new.ts";
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync();
 
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         AssertStopped(pid);
         Assert.True(vm.HasDuration);
         Assert.Equal(20, vm.DurationSeconds);
@@ -141,7 +139,7 @@ public sealed class DurationTests
             await PrepareAsync(vm);
             await files.WaitReadyAsync(vm);
             int pid = await files.PidAsync();
-            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+            await vm.DisposeAsync().AsTask();
             AssertStopped(pid);
             Assert.False(vm.HasDuration);
             Assert.Null(vm.PreviewImage);
@@ -153,11 +151,11 @@ public sealed class DurationTests
         }
         finally
         {
-            // 偽時計が進まない失敗時も、同じDisposeの再待機を実時間で打ち切る。
             try
             {
-                try { await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout); }
-                finally { await probe.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout); }
+                files.CloseControlPipes();
+                try { await vm.DisposeAsync(); }
+                finally { await probe.DisposeAsync(); }
             }
             catch (Exception cleanupFailure) when (failure != null)
             {
@@ -176,7 +174,7 @@ public sealed class DurationTests
         await using var vm = Create(files, probe);
         vm.InputArgsText = "--avhw --fake-duration 00:00:10.00";
         await PrepareAsync(vm);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.True(vm.HasDuration);
         Assert.Equal(10, vm.DurationSeconds);
         Assert.Equal(1, starts);
@@ -206,11 +204,11 @@ public sealed class DurationTests
         vm.InputArgsText = "--avhw --fake-duration 00:00:10.00 --fake-duration-at-exit";
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
+            await vm.InitializeAsync(false);
             await files.WaitReadyAsync(vm);
         }
         finally { await files.ReleaseAsync(); }
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.True(vm.HasDuration);
         Assert.NotNull(vm.PreviewImage);
         Assert.Null(vm.BeforeImage);
@@ -233,11 +231,11 @@ public sealed class DurationTests
         vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
+            await vm.InitializeAsync(false);
             await files.WaitReadyAsync(vm);
         }
         finally { await files.ReleaseAsync(); }
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.True(vm.HasDuration);
         Assert.NotNull(vm.PreviewImage);
         Assert.Null(vm.BeforeImage);
@@ -269,10 +267,10 @@ public sealed class DurationTests
         Task beforeUpdated = ObservePropertyChanged(vm, nameof(vm.BeforeImage));
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
-            await beforeUpdated.WaitWithDiagnosticsAsync(SafetyTimeout);
+            await vm.InitializeAsync(false);
+            await beforeUpdated;
             vm.CurrentSeconds = 0.2;
-            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            await vm.WaitForPreparationAsync();
             after.Release.TrySetResult();
             await files.WaitReadyAsync(vm);
         }
@@ -283,7 +281,7 @@ public sealed class DurationTests
             await files.ReleaseAsync();
             Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", old);
         }
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.True(vm.HasDuration);
         Assert.NotNull(vm.PreviewImage);
         Assert.NotNull(vm.BeforeImage);
@@ -359,7 +357,7 @@ public sealed class DurationTests
     }
     private static async Task PrepareAsync(MainWindowViewModel vm)
     {
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.InitializeAsync(false);
 
     }
     private static Task ObservePropertyChanged(MainWindowViewModel vm, string property)
@@ -384,7 +382,7 @@ public sealed class DurationTests
         try
         {
             if (condition()) completion.TrySetResult();
-            await completion.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+            await completion.Task;
         }
         finally { vm.PropertyChanged -= changed; }
     }
@@ -422,18 +420,18 @@ public sealed class DurationTests
         }
         private async Task<int> ReadPidAsync(NamedPipeServerStream pipe)
         {
-            await PipeWaitDiagnostics.ConnectAsync(pipe, PidPipeName, SafetyTimeout, () => PipeWaitDiagnostics.State(_vm));
+            await PipeWaitDiagnostics.ConnectAsync(pipe, PidPipeName, () => PipeWaitDiagnostics.State(_vm));
             using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-            return int.Parse((await PipeWaitDiagnostics.ReadLineAsync(reader, PidPipeName, SafetyTimeout, () => PipeWaitDiagnostics.State(_vm)))!);
+            return int.Parse((await PipeWaitDiagnostics.ReadLineAsync(reader, PidPipeName, () => PipeWaitDiagnostics.State(_vm)))!);
         }
         public Task<int> PidAsync() => _pid ?? throw new InvalidOperationException("子プロセスを開始していません。");
         public async Task WaitReadyAsync(MainWindowViewModel vm)
         {
             _vm = vm;
             var pipe = _pipe ?? throw new InvalidOperationException("子プロセスを開始していません。");
-            await PipeWaitDiagnostics.ConnectAsync(pipe, PipeName, SafetyTimeout, () => PipeWaitDiagnostics.State(vm));
+            await PipeWaitDiagnostics.ConnectAsync(pipe, PipeName, () => PipeWaitDiagnostics.State(vm));
             using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-            string? line = await PipeWaitDiagnostics.ReadLineAsync(reader, PipeName, SafetyTimeout, () => PipeWaitDiagnostics.State(vm));
+            string? line = await PipeWaitDiagnostics.ReadLineAsync(reader, PipeName, () => PipeWaitDiagnostics.State(vm));
             if (line != "ready") throw new InvalidDataException("待機開始の通知が不正です。");
         }
         public async Task ReleaseAsync()
@@ -446,10 +444,15 @@ public sealed class DurationTests
         public Task<string?> ChooseSaveFiltersAsync() => Task.FromResult<string?>(null);
         public Task<string?> ChooseLoadFiltersAsync() => Task.FromResult<string?>(null);
         public Task CopyTextAsync(string text) => Task.CompletedTask;
-        public void Dispose()
+        public void CloseControlPipes()
         {
             _pipe?.Dispose();
             _pidPipe?.Dispose();
+        }
+
+        public void Dispose()
+        {
+            CloseControlPipes();
             foreach (string file in Directory.EnumerateFiles(_directory)) File.Delete(file);
             Directory.Delete(_directory);
         }

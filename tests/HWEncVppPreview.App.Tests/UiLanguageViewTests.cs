@@ -33,8 +33,8 @@ VPP Options:
         try
         {
             vm.Language = "ja";
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await vm.WaitForIdleAsync();
             var line = new FilterLineViewModel { Text = "--vpp-alpha sigma=0.25" };
             vm.FilterLines.Add(line);
             vm.SelectedFilterLine = line;
@@ -113,7 +113,7 @@ VPP Options:
             Assert.Equal("en", AppSettings.Load(services.SettingsPath).Language);
             UiLanguage.Set("ja");
             await using var restored = new MainWindowViewModel(services);
-            await restored.InitializeAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await restored.InitializeAsync();
             Assert.Equal("en", restored.Language);
             Assert.Equal("en", UiLanguage.Current);
             Assert.Equal("+ Add filter", Localizer.Instance.Text.AddFilter);
@@ -137,7 +137,7 @@ VPP Options:
             Localizer.Instance.PropertyChanged += Changed;
             await Task.Run(() => UiLanguage.Set("en"));
 
-            Assert.True(await notified.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang));
+            Assert.True(await notified.Task);
             Assert.Equal("+ Add filter", Localizer.Instance.Text.AddFilter);
         }
         finally

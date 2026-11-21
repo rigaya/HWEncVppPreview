@@ -9,14 +9,12 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class NavigationTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [AvaloniaFact]
     public async Task HeldFrameNavigationEndsOnTheLatestFrame()
     {
         await using var fixture = await Fixture.StartAsync();
         for (int index = 0; index < 12; index++) fixture.Vm.StepFrameCommand.Execute(1);
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         AssertDisplayed(fixture.Vm, filtered: false);
         Assert.True(fixture.Vm.CurrentSeconds > 0);
     }
@@ -27,10 +25,10 @@ public sealed class NavigationTests
         await using var fixture = await Fixture.StartAsync();
         var pending = fixture.Backend.HoldNext();
         fixture.Vm.CurrentSeconds = 2;
-        await pending.Started.Task.WaitWithDiagnosticsAsync(Safety);
+        await pending.Started.Task;
         for (int index = 0; index < 5; index++) fixture.Vm.StepFrameCommand.Execute(1);
         pending.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         Assert.True(fixture.Vm.CurrentSeconds >= 2);
         AssertDisplayed(fixture.Vm, filtered: false);
     }
@@ -41,11 +39,11 @@ public sealed class NavigationTests
         await using var fixture = await Fixture.StartAsync();
         fixture.Vm.BeginSeekDrag();
         fixture.Vm.CurrentSeconds = 1;
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         Assert.Equal(1, fixture.Vm.CurrentSeconds, 7);
         AssertDisplayed(fixture.Vm, filtered: false);
         fixture.Vm.EndSeekDrag(1);
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         AssertDisplayed(fixture.Vm, filtered: false);
     }
 
@@ -55,10 +53,10 @@ public sealed class NavigationTests
         await using var fixture = await Fixture.StartAsync();
         var pending = fixture.Converter.HoldNext();
         fixture.Vm.StepFrameCommand.Execute(1);
-        await pending.Started.Task.WaitWithDiagnosticsAsync(Safety);
+        await pending.Started.Task;
         for (int index = 0; index < 5; index++) fixture.Vm.StepFrameCommand.Execute(1);
         pending.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         AssertDisplayed(fixture.Vm, filtered: false);
         Assert.True(fixture.Vm.CurrentSeconds > 0);
     }
@@ -71,11 +69,11 @@ public sealed class NavigationTests
         fixture.Vm.FilterLines.Add(line);
         var pending = fixture.Converter.HoldNext();
         fixture.Vm.StepFrameCommand.Execute(1);
-        await pending.Started.Task.WaitWithDiagnosticsAsync(Safety);
+        await pending.Started.Task;
         line.Text = "--vpp-unsharp";
-        await fixture.Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForPreparationAsync();
         pending.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         AssertDisplayed(fixture.Vm, filtered: true);
     }
 
@@ -85,7 +83,7 @@ public sealed class NavigationTests
         await using var fixture = await Fixture.StartAsync(beforeEnabled: true);
         int beforeStarts = fixture.Backend.Requests.Count(request => request.CorrelationId < 0);
         fixture.Vm.StepFrameCommand.Execute(1);
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         AssertDisplayed(fixture.Vm, filtered: false);
         Assert.NotNull(fixture.Vm.BeforeImage);
         Assert.Equal(Pixel(fixture.Vm.PreviewImage!), Pixel(fixture.Vm.BeforeImage!));
@@ -100,11 +98,11 @@ public sealed class NavigationTests
         fixture.Backend.FailNext = true;
         Task failureNotified = ObserveErrorNotification(fixture.Vm);
         fixture.Vm.CurrentSeconds = 1;
-        await pending.Started.Task.WaitWithDiagnosticsAsync(Safety);
+        await pending.Started.Task;
         fixture.Backend.ContinueAfterFrames.TrySetResult();
-        await failureNotified.WaitWithDiagnosticsAsync(Safety);
+        await failureNotified;
         pending.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         Assert.NotNull(fixture.Vm.ErrorText);
         Assert.Equal("エラー", fixture.Vm.StatusText);
         Assert.False(fixture.Vm.IsBusy);
@@ -114,8 +112,6 @@ public sealed class NavigationTests
     public async Task NavigationDuringInitialProbeReceivesTheProbeFailureAndClearsBusy()
     {
         string pipeName = "navigation-probe-" + Guid.NewGuid().ToString("N");
-        using var pipe = new System.IO.Pipes.NamedPipeServerStream(pipeName, System.IO.Pipes.PipeDirection.InOut,
-            1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
         await using var backend = new ControlledBackend();
         await using var probe = TestProcesses.CreateInputProbe();
         await using var vm = TestViewModels.Create(new Services(), backend,
@@ -123,16 +119,18 @@ public sealed class NavigationTests
         vm.EncoderPath = FakeEncoderPath();
         vm.InputPath = "navigation probe input.ts";
         vm.InputArgsText = "--frames 0 --fake-rc 23 --fake-frame-pipe " + pipeName;
+        using var pipe = new System.IO.Pipes.NamedPipeServerStream(pipeName, System.IO.Pipes.PipeDirection.InOut,
+            1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
         Task initialize = vm.InitializeAsync(false);
-        await PipeWaitDiagnostics.ConnectAsync(pipe, pipeName, Safety, () => PipeWaitDiagnostics.State(vm), initialize);
+        await PipeWaitDiagnostics.ConnectAsync(pipe, pipeName, () => PipeWaitDiagnostics.State(vm), initialize);
         using var reader = new StreamReader(pipe, System.Text.Encoding.UTF8, leaveOpen: true);
         using var writer = new StreamWriter(pipe, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-        string? ready = await PipeWaitDiagnostics.ReadLineAsync(reader, pipeName, Safety, () => PipeWaitDiagnostics.State(vm), initialize);
+        string? ready = await PipeWaitDiagnostics.ReadLineAsync(reader, pipeName, () => PipeWaitDiagnostics.State(vm), initialize);
         if (ready != "ready") throw new InvalidDataException("待機開始の通知が不正です。");
         vm.StepFrameCommand.Execute(1);
         await writer.WriteLineAsync("release");
-        await initialize.WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await initialize;
+        await vm.WaitForIdleAsync();
         Assert.False(vm.IsBusy);
         Assert.Equal("エラー", vm.StatusText);
         Assert.NotNull(vm.ErrorText);
@@ -144,8 +142,6 @@ public sealed class NavigationTests
     public async Task 初期検査がpipe接続前に失敗したら診断付きで待機を終える()
     {
         string pipeName = "navigation-failed-probe-" + Guid.NewGuid().ToString("N");
-        using var pipe = new System.IO.Pipes.NamedPipeServerStream(pipeName, System.IO.Pipes.PipeDirection.InOut,
-            1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
         await using var backend = new ControlledBackend();
         await using var probe = TestProcesses.CreateInputProbe();
         await using var vm = TestViewModels.Create(new Services(), backend,
@@ -153,9 +149,11 @@ public sealed class NavigationTests
         vm.EncoderPath = FakeEncoderPath();
         vm.InputPath = "navigation failed probe.ts";
         vm.InputArgsText = "--frames 0 --fake-rc 23";
+        using var pipe = new System.IO.Pipes.NamedPipeServerStream(pipeName, System.IO.Pipes.PipeDirection.InOut,
+            1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
         Task initialize = vm.InitializeAsync(false);
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            PipeWaitDiagnostics.ConnectAsync(pipe, pipeName, Safety, () => PipeWaitDiagnostics.State(vm), initialize));
+            PipeWaitDiagnostics.ConnectAsync(pipe, pipeName, () => PipeWaitDiagnostics.State(vm), initialize));
         Assert.Contains(pipeName, exception.Message);
         Assert.Contains("接続", exception.Message);
         Assert.Contains("23", exception.Message);
@@ -209,8 +207,8 @@ public sealed class NavigationTests
             var fixture = new Fixture(beforeEnabled);
             try
             {
-                await fixture.Vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-                await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+                await fixture.Vm.InitializeAsync(false);
+                await fixture.Vm.WaitForIdleAsync();
                 return fixture;
             }
             catch { await fixture.DisposeAsync(); throw; }
@@ -220,7 +218,7 @@ public sealed class NavigationTests
         {
             Converter.ReleaseHeld();
             Backend.ReleaseHeld();
-            await Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+            await Vm.DisposeAsync().AsTask();
             await _input.DisposeAsync();
         }
     }

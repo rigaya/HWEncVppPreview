@@ -6,14 +6,12 @@ using Avalonia.Threading;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.ViewModels;
 using HWEncVppPreview.Core;
-using HWEncVppPreview.Testing;
 
 namespace HWEncVppPreview.App.Tests;
 
 // 実プロセスの試験では、時計を進めず公開された完了境界と所有の回収を待つ。
 internal sealed class OwnedProcessSession : IAsyncDisposable
 {
-    internal static readonly TimeSpan Safety = TestTimeouts.Hang;
     private readonly Dictionary<string, string?> _environment = new();
     private bool _disposed;
     private readonly object _postLock = new();
@@ -90,7 +88,7 @@ internal sealed class OwnedProcessSession : IAsyncDisposable
 
     internal Task WaitForPostAsync()
     {
-        lock (_postLock) return _postArrived!.Task.WaitWithDiagnosticsAsync(Safety);
+        lock (_postLock) return _postArrived!.Task;
     }
 
     internal void ReleasePosts()
@@ -113,14 +111,14 @@ internal sealed class OwnedProcessSession : IAsyncDisposable
 
     internal async Task InitializeAsync()
     {
-        await Vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
+        await Vm.InitializeAsync(false);
+        await Vm.WaitForPreparationAsync();
     }
 
     internal async Task WaitIdleAsync()
     {
-        await Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await Vm.WaitForPreparationAsync();
+        await Vm.WaitForIdleAsync();
     }
 
     internal byte[] ImageBytes(bool before = false)
@@ -166,7 +164,7 @@ internal sealed class OwnedProcessSession : IAsyncDisposable
         try
         {
             ReleasePosts();
-            await Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+            await Vm.DisposeAsync().AsTask();
             Assert.True(Scope.Capture().IsEmpty);
             if (FakeLogFiles.Exists(PidPath))
                 foreach (string line in FakeLogFiles.ReadAllLines(PidPath))

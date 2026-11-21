@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Using Include="Xunit" />
+    <Using Include="HWEncVppPreview.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit.v3" Version="3.2.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
@@ -24,9 +25,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\Data\help\**" Link="Data\help\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Include="..\TestTimeouts.cs" Link="Testing\TestTimeouts.cs" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\TestProcesses.cs" Link="Testing\TestProcesses.cs" />

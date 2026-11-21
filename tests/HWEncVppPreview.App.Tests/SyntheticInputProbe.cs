@@ -29,7 +29,7 @@ internal sealed class SyntheticInputProbe : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await Probe.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await Probe.DisposeAsync().AsTask();
         Assert.False(_processAttempted, "偽時計の試験で実プロセスの起動を試みました。");
     }
 

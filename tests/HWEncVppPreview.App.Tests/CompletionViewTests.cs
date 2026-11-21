@@ -15,8 +15,6 @@ namespace HWEncVppPreview.App.Tests;
 /// <summary>フィルタ行の補完と数値の上下ドラッグ (設計書 21.7)。help は H1 の書式の実 help を偽エンコーダから出す。</summary>
 public sealed class CompletionViewTests
 {
-    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
-
     [AvaloniaFact]
     public async Task TypingAnOptionThenAParameterAndAValueCompletesTheLine()
     {
@@ -147,7 +145,7 @@ public sealed class CompletionViewTests
         try
         {
             if (condition()) done.TrySetResult();
-            await done.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+            await done.Task;
         }
         finally { root.LayoutUpdated -= Changed; }
     }
@@ -183,8 +181,8 @@ public sealed class CompletionViewTests
             var vm = TestViewModels.Create(services);
             vm.EncoderPath = FakeEncoderPath();
             vm.InputPath = "";
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            await vm.InitializeAsync(false);
+            await vm.WaitForIdleAsync();
             Assert.NotNull(vm.HelpSchema);
             // 補完はテキストの一覧の行で確かめる (V8 のフォームの上の行のテキスト欄も同じ処理を使う)
             vm.IsTextListMode = textListMode;
@@ -206,7 +204,7 @@ public sealed class CompletionViewTests
             await WaitForLayoutAsync(Window, () => Window.GetVisualDescendants().OfType<TextBox>().Any(t => t.Classes.Contains("filterLine") && ReferenceEquals(t.DataContext, line) && t.IsFocused));
             var box = Window.GetVisualDescendants().OfType<TextBox>().First(t => t.Classes.Contains("filterLine") && ReferenceEquals(t.DataContext, line));
             Assert.True(box.IsFocused);
-            try { await opened.Task.WaitWithDiagnosticsAsync(SafetyTimeout); }
+            try { await opened.Task; }
             finally { Popup.Opened -= OnOpened; }
             return box;
         }

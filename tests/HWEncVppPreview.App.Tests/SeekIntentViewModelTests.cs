@@ -10,8 +10,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class SeekIntentViewModelTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [AvaloniaTheory]
     [InlineData("slider")]
     [InlineData("time")]
@@ -35,8 +33,8 @@ public sealed class SeekIntentViewModelTests
             case "page": vm.StepSecondsCommand.Execute(-80.0); break;
             case "seconds": vm.CurrentSeconds = 20; break;
         }
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         double target = operation == "home" ? 0 : operation == "end" ? 180 : 20;
         var request = fixture.Backend.Requests.Last(value => value.CorrelationId >= 0);
         Assert.Equal(target, request.TargetSeconds);
@@ -55,8 +53,8 @@ public sealed class SeekIntentViewModelTests
         await using var vm = fixture.Create();
         await fixture.Start(vm);
         vm.StepSecondsCommand.Execute(-0.1);
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.Single(fixture.Backend.Requests);
         Assert.Equal(99.9, vm.CurrentSeconds, 6);
         Assert.Null(vm.ErrorText);
@@ -69,17 +67,17 @@ public sealed class SeekIntentViewModelTests
         await using var vm = fixture.Create();
         await fixture.Start(vm);
         vm.BeginSeekDrag(); vm.CurrentSeconds = 20; vm.EndSeekDrag(20);
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.Equal(2, fixture.Backend.Requests.Count);
         Assert.All(fixture.Backend.Requests, request => Assert.True(request.Continuous));
         for (int i = 0; i < 6; i++)
         {
             vm.StepFrameCommand.Execute(-1);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForIdleAsync();
         }
-        await fixture.Backend.PrefetchStarted.Task.WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Backend.PrefetchStarted.Task;
+        await vm.WaitForIdleAsync();
         var prefetch = Assert.Single(fixture.Backend.Requests, request => request.CorrelationId < 0);
         Assert.False(prefetch.Continuous);
         Assert.Equal(5, prefetch.PreMarginSeconds);
@@ -108,9 +106,9 @@ public sealed class SeekIntentViewModelTests
         };
         public async Task Start(MainWindowViewModel vm)
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+            await vm.InitializeAsync(false);
             Clock.Advance(TimeSpan.FromMilliseconds(150));
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForIdleAsync();
             Assert.Single(Backend.Requests);
             Assert.Null(vm.ErrorText);
         }

@@ -9,8 +9,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class ForwardPrefetchViewModelTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [AvaloniaFact]
     public async Task cache順移動の先読み開始で現在画像を境界へ飛ばさず微小逆移動も保持する()
     {
@@ -23,20 +21,20 @@ public sealed class ForwardPrefetchViewModelTests
         vm.InputPath = "c2-prefetch.ts";
         vm.CurrentSeconds = 10;
         vm.InputArgsText = "--avhw";
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         for (int i = 0; i < 6; i++)
         {
             vm.StepFrameCommand.Execute(1);
         }
-        await backend.SecondStarted.Task.WaitWithDiagnosticsAsync(Safety);
-        vm.StepFrameCommand.Execute(-1); await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await backend.SecondStarted.Task;
+        vm.StepFrameCommand.Execute(-1); await vm.WaitForIdleAsync();
         Assert.Equal(10.5, vm.CurrentSeconds, 7);
         Assert.Null(vm.ErrorText);
         using (var pixels = Assert.IsType<Avalonia.Media.Imaging.WriteableBitmap>(vm.PreviewImage).Lock())
             Assert.Equal((byte)105, System.Runtime.InteropServices.Marshal.ReadByte(pixels.Address));
         // 先読みの取消と回収を待ってから物理要求数を確認する。
-        await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        await vm.DisposeAsync().AsTask();
         Assert.Equal(2, backend.Requests.Count);
     }
 

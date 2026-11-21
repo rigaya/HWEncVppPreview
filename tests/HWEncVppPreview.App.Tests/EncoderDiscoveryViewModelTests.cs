@@ -9,8 +9,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class EncoderDiscoveryViewModelTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [AvaloniaFact]
     public async Task 自動取得は画面に示し設定へ保存せず次回の起動で探し直す()
     {
@@ -22,21 +20,21 @@ public sealed class EncoderDiscoveryViewModelTests
             {
                 window = new MainWindow { DataContext = vm };
                 window.Show();
-                await vm.InitializeAsync().WaitWithDiagnosticsAsync(Safety);
-                await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+                await vm.InitializeAsync();
+                await vm.WaitForIdleAsync();
                 Assert.True(vm.IsEncoderPathAutomatic);
                 Assert.Equal(services.Found, vm.EncoderPath);
                 Assert.Contains(AppMessages.AutomaticallySelected, vm.EncoderDescription);
                 Assert.EndsWith(ApplicationVersion.Value, window.Title);
-                await vm.SaveSettingsAsync().WaitWithDiagnosticsAsync(Safety);
+                await vm.SaveSettingsAsync();
                 Assert.Equal("", AppSettings.Load(services.SettingsPath).EncoderPath);
             }
             finally { window?.Close(); }
         }
         services.Found = Missing("automatic-b");
         await using var next = new MainWindowViewModel(services);
-        await next.InitializeAsync().WaitWithDiagnosticsAsync(Safety);
-        await next.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await next.InitializeAsync();
+        await next.WaitForIdleAsync();
         Assert.Equal(services.Found, next.EncoderPath);
         Assert.True(next.IsEncoderPathAutomatic);
         Assert.Equal(2, services.Searches);
@@ -48,17 +46,17 @@ public sealed class EncoderDiscoveryViewModelTests
         using var services = new Services { Found = Missing("automatic") };
         await using (var vm = new MainWindowViewModel(services))
         {
-            await vm.InitializeAsync().WaitWithDiagnosticsAsync(Safety);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.InitializeAsync();
+            await vm.WaitForIdleAsync();
             vm.OpenEncoder(vm.EncoderPath);
             Assert.False(vm.IsEncoderPathAutomatic);
             Assert.DoesNotContain(AppMessages.AutomaticallySelected, vm.EncoderDescription);
-            await vm.SaveSettingsAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.SaveSettingsAsync();
             Assert.Equal(services.Found, AppSettings.Load(services.SettingsPath).EncoderPath);
         }
         await using var next = new MainWindowViewModel(services);
-        await next.InitializeAsync().WaitWithDiagnosticsAsync(Safety);
-        await next.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await next.InitializeAsync();
+        await next.WaitForIdleAsync();
         Assert.False(next.IsEncoderPathAutomatic);
         Assert.Equal(1, services.Searches);
     }
@@ -70,8 +68,8 @@ public sealed class EncoderDiscoveryViewModelTests
         string explicitPath = Missing("explicit");
         new AppSettings { EncoderPath = explicitPath, InputPath = "missing-input.ts" }.Save(services.SettingsPath);
         await using var vm = new MainWindowViewModel(services);
-        await vm.InitializeAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync();
+        await vm.WaitForIdleAsync();
         Assert.Equal(explicitPath, vm.EncoderPath);
         Assert.False(vm.IsEncoderPathAutomatic);
         Assert.Equal(0, services.Searches);
@@ -83,8 +81,8 @@ public sealed class EncoderDiscoveryViewModelTests
     {
         using var services = new Services();
         await using var vm = new MainWindowViewModel(services);
-        await vm.InitializeAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync();
+        await vm.WaitForIdleAsync();
         Assert.Equal("", vm.EncoderPath);
         Assert.False(vm.IsEncoderPathAutomatic);
         Assert.Equal(AppMessages.SelectEncoderAndInput, vm.StatusText);
@@ -101,8 +99,8 @@ public sealed class EncoderDiscoveryViewModelTests
         await using var vm = new MainWindowViewModel(services, TimeProvider.System, null, null, null, null,
             readTextOverride: (_, argument, _) => Task.FromResult(argument == "--help" ? "" : output))
         { EncoderPath = "encoder" };
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.Equal(expected, vm.EncoderDescription);
     }
 

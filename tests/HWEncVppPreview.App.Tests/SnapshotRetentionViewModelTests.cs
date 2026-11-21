@@ -24,10 +24,10 @@ public sealed class SnapshotRetentionViewModelTests
         vm.InputArgsText = "--avhw";
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await vm.WaitForIdleAsync();
             cache.Clear();
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             var bitmap = Assert.IsType<WriteableBitmap>(vm.PreviewImage);
             using var pixels = bitmap.Lock();
@@ -36,7 +36,7 @@ public sealed class SnapshotRetentionViewModelTests
         }
         finally
         {
-            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.DisposeAsync().AsTask();
         }
         Assert.True(scope.Capture().IsEmpty);
     }

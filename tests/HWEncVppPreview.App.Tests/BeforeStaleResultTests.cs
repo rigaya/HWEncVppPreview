@@ -50,18 +50,18 @@ public sealed class BeforeStaleResultTests
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await before.Started.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await before.Started.Task;
             lock (postSync) holding = true;
             before.Begin.TrySetResult();
-            await before.Emitted.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await queued.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await before.Emitted.Task;
+            await queued.Task;
             if (cancel) vm.OpenInput("");
             else vm.CurrentSeconds = 1;
             ReleasePosts();
             before.Finish.TrySetResult();
-            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForPreparationAsync();
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             Assert.False(vm.IsBeforeBusy);
             if (cancel) Assert.Null(vm.BeforeImage);
@@ -77,7 +77,7 @@ public sealed class BeforeStaleResultTests
             before.Begin.TrySetResult();
             before.Finish.TrySetResult();
             ReleasePosts();
-            try { await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang); }
+            try { await vm.DisposeAsync().AsTask(); }
             finally { Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", previous); }
         }
         Assert.True(scope.Capture().IsEmpty);

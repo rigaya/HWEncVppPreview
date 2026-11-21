@@ -21,8 +21,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class ComparisonTests
 {
-    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
-
     [AvaloniaTheory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -86,13 +84,13 @@ public sealed class ComparisonTests
         Assert.False(after.IsBefore);
         Assert.True(before.IsBefore);
 
-        await afterApplied.WaitWithDiagnosticsAsync(SafetyTimeout);
+        await afterApplied;
         string afterImage = ImageHash(vm.PreviewImage!);
         string status = vm.StatusText, log = vm.LogText, elapsed = vm.ElapsedText;
         Assert.Contains("AFTER", log);
         clock.Advance(TimeSpan.FromSeconds(1));
         before.Release.TrySetResult();
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.NotNull(vm.BeforeImage);
         Assert.NotEqual(afterImage, ImageHash(vm.BeforeImage!));
         Assert.Equal(afterImage, ImageHash(vm.PreviewImage!));
@@ -123,7 +121,7 @@ public sealed class ComparisonTests
         Assert.Equal(before, ImageHash(vm.BeforeImage!));
         Assert.NotEqual(after, ImageHash(vm.PreviewImage!));
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.Equal(10 / 30.0, vm.CurrentSeconds, 7);
         Assert.Equal(3, backend.Runs.Count);
         Assert.Contains("キャッシュ", vm.StatusText);
@@ -210,12 +208,12 @@ public sealed class ComparisonTests
         Assert.True(oldBefore.IsBefore);
         vm.CurrentSeconds = 1.2;
         vm.InputPath = "new input.ts";
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync();
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await oldBefore.Cancelled.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+        await oldBefore.Cancelled.Task;
         oldBefore.Release.TrySetResult();
         clock.Advance(TimeSpan.FromMilliseconds(300));
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         var latestAfter = backend.Runs.Last(run => !run.IsBefore);
         var latestBefore = backend.Runs.Last(run => run.IsBefore);
         Assert.Equal("new input.ts", latestAfter.Request.InputFile);
@@ -240,8 +238,8 @@ public sealed class ComparisonTests
             await PrepareAsync(vm, clock);
             await backend.NextAsync();
             var before = await backend.NextAsync();
-            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
-            await before.Completed.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+            await vm.DisposeAsync().AsTask();
+            await before.Completed.Task;
             Assert.Null(vm.PreviewImage);
             Assert.Null(vm.BeforeImage);
         }
@@ -275,7 +273,7 @@ public sealed class ComparisonTests
         clock.Advance(TimeSpan.FromMilliseconds(300));
         var before = await backend.NextAsync();
         Assert.True(before.IsBefore);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.Equal(FrameHash(SelectIndependent(before, vm.CurrentSeconds)), ImageHash(vm.BeforeImage!));
         Assert.False(vm.IsBeforeBusy);
     }
@@ -291,7 +289,7 @@ public sealed class ComparisonTests
         await InitializeAndDrainAsync(vm, clock, backend);
         backend.HoldNextAfter = true;
         vm.CurrentSeconds = 1.2;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync();
         var held = await backend.NextAsync();
         Assert.False(held.IsBefore);
         vm.StepFrameCommand.Execute(1);
@@ -300,11 +298,11 @@ public sealed class ComparisonTests
         Assert.Equal(1.2, vm.CurrentSeconds, 7);
         Task afterApplied = ObserveAfterApplied(vm);
         held.Release.TrySetResult();
-        await afterApplied.WaitWithDiagnosticsAsync(SafetyTimeout);
+        await afterApplied;
         vm.IsShowingBefore = true;
         var before = await backend.NextAsync();
         Assert.True(before.IsBefore);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.Equal(FrameHash(SelectIndependent(before, vm.CurrentSeconds)), ImageHash(vm.BeforeImage!));
     }
 
@@ -321,7 +319,7 @@ public sealed class ComparisonTests
         await MoveAndWaitForAfterAsync(vm, backend, 1.3);
         vm.IsShowingBefore = true;
         var before = await backend.NextAsync();
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.Equal(1.3, vm.CurrentSeconds, 7);
         Assert.Equal(FrameHash(SelectIndependent(before, vm.CurrentSeconds)), ImageHash(vm.BeforeImage!));
         Assert.Null(vm.ErrorText);
@@ -342,7 +340,7 @@ public sealed class ComparisonTests
         Assert.True(before.IsBefore);
         vm.IsShowingBefore = false;
         vm.IsShowingBefore = true;
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
 
         Assert.NotNull(vm.BeforeImage);
     }
@@ -362,13 +360,13 @@ public sealed class ComparisonTests
         Assert.True(before.IsBefore);
         // Beforeの開始はAfterの完了後だが、Afterの区間がVMへ入るのはUIでの反映後。
         // 反映前に1枚送りすると取り直しになり、CurrentSecondsが同期的に進まない(2コアで再現)。
-        await afterApplied.WaitWithDiagnosticsAsync(SafetyTimeout);
+        await afterApplied;
         vm.StepFrameCommand.Execute(1);
         Assert.Equal(10 / 30.0, vm.CurrentSeconds, 7);
 
 
         before.Release.TrySetResult();
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
 
 
         Assert.Equal(FrameHash(SelectIndependent(before, vm.CurrentSeconds)), ImageHash(vm.BeforeImage!));
@@ -388,15 +386,15 @@ public sealed class ComparisonTests
         var old = await backend.NextAsync();
         Task afterApplied = ObserveAfterApplied(vm);
         vm.CurrentSeconds = 1.2;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        await old.Cancelled.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync();
+        await old.Cancelled.Task;
         var after = await backend.NextAsync();
         Assert.False(after.IsBefore);
-        await afterApplied.WaitWithDiagnosticsAsync(SafetyTimeout);
+        await afterApplied;
         clock.Advance(TimeSpan.FromMilliseconds(300));
         var before = await backend.NextAsync();
         Assert.True(before.IsBefore);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.Equal(FrameHash(SelectIndependent(before, vm.CurrentSeconds)), ImageHash(vm.BeforeImage!));
     }
 
@@ -413,10 +411,10 @@ public sealed class ComparisonTests
         await backend.NextAsync();
         var old = await backend.NextAsync();
         line.Text = "--vpp-nlmeans sigma=0.2";
-        await old.Cancelled.Task.WaitWithDiagnosticsAsync(SafetyTimeout);
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await old.Cancelled.Task;
+        await vm.WaitForPreparationAsync();
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.Equal(2, backend.Runs.Count(run => run.IsBefore));
         Assert.NotNull(vm.BeforeImage);
     }
@@ -433,7 +431,7 @@ public sealed class ComparisonTests
             vm.FilterLines.Add(new() { Text = "--vpp-nlmeans" });
             await InitializeAndDrainAsync(vm, clock, backend);
             await MoveAndWaitForAfterAsync(vm, backend, 1.2);
-                await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+                await vm.DisposeAsync().AsTask();
 
             Assert.Null(vm.BeforeImage);
         }
@@ -489,27 +487,27 @@ public sealed class ComparisonTests
     {
         Task afterApplied = ObserveAfterApplied(vm);
         vm.CurrentSeconds = seconds;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync();
         Assert.False((await backend.NextAsync()).IsBefore);
-        await afterApplied.WaitWithDiagnosticsAsync(SafetyTimeout);
+        await afterApplied;
     }
     private static async Task PrepareAsync(MainWindowViewModel vm, FakeTimeProvider clock)
     {
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.InitializeAsync(false);
         clock.Advance(TimeSpan.FromMilliseconds(150));
     }
     private static async Task InitializeAsync(MainWindowViewModel vm, FakeTimeProvider clock)
     {
         await PrepareAsync(vm, clock);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
         Assert.True(vm.HasDuration);
         Assert.Equal(10, vm.DurationSeconds, 6);
     }
     private static async Task RunPreparedAsync(MainWindowViewModel vm, FakeTimeProvider clock)
     {
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync();
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForIdleAsync();
     }
     private static Task ObserveAfterApplied(MainWindowViewModel vm)
     {
@@ -567,7 +565,7 @@ public sealed class ComparisonTests
         public bool FailBefore { get; init; }
         public bool HoldNextAfter { get; set; }
         public IReadOnlyList<Invocation> Runs { get { lock (_runs) return _runs.ToArray(); } }
-        public Task<Invocation> NextAsync() => _started.Reader.ReadAsync().AsTask().WaitWithDiagnosticsAsync(SafetyTimeout);
+        public Task<Invocation> NextAsync() => _started.Reader.ReadAsync().AsTask();
         public async Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
         {
             var invocation = new Invocation(request);

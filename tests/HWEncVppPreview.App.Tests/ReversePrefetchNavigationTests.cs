@@ -10,8 +10,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class ReversePrefetchNavigationTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [AvaloniaFact]
     public async Task PrefetchFinishesBeforeTheBoundaryWithoutReplacingForegroundImageOrStatus()
     {
@@ -22,7 +20,7 @@ public sealed class ReversePrefetchNavigationTests
         string status = fixture.Vm.StatusText;
         string log = fixture.Vm.LogText;
         fixture.Backend.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         Assert.Equal(seconds, fixture.Vm.CurrentSeconds);
         Assert.Same(image, fixture.Vm.PreviewImage);
         Assert.Equal(status, fixture.Vm.StatusText);
@@ -42,7 +40,7 @@ public sealed class ReversePrefetchNavigationTests
 
         for (int i = 0; i < 20; ++i) fixture.Vm.StepFrameCommand.Execute(-1);
         fixture.Backend.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         Assert.Equal(9 - 1.0 / 30, fixture.Vm.CurrentSeconds, 6);
         Assert.Equal(2, fixture.Backend.Requests.Count);
         Assert.False(fixture.Vm.IsBusy);
@@ -60,7 +58,7 @@ public sealed class ReversePrefetchNavigationTests
         await fixture.StepAsync(1);
         double forward = fixture.Vm.CurrentSeconds;
         fixture.Backend.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         Assert.Equal(9 + 1.0 / 30, forward, 6);
         Assert.Equal(forward, fixture.Vm.CurrentSeconds);
         Assert.DoesNotContain(fixture.Backend.Cancelled, IsPrefetch);
@@ -77,11 +75,11 @@ public sealed class ReversePrefetchNavigationTests
         await fixture.StartPrefetchAsync();
         if (edit) fixture.Vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-nlmeans" });
         else fixture.Vm.CurrentSeconds = 30;
-        await fixture.Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForPreparationAsync();
         if (edit) fixture.Clock.Advance(TimeSpan.FromMilliseconds(150));
         try
         {
-            await fixture.Backend.PrefetchCancelled.Task.WaitWithDiagnosticsAsync(Safety);
+            await fixture.Backend.PrefetchCancelled.Task;
         }
         catch (Exception exception)
         {
@@ -95,7 +93,7 @@ public sealed class ReversePrefetchNavigationTests
                 + $"started={fixture.Backend.Started.Task.Status}, release={fixture.Backend.Release.Task.Status}, "
                 + $"requests=[{requests}], cancelled=[{cancelled}]", exception);
         }
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         Assert.Null(fixture.Vm.ErrorText);
         if (!edit) Assert.Equal(30, fixture.Vm.CurrentSeconds, 6);
         Assert.Single(fixture.Backend.Requests, IsPrefetch);
@@ -108,10 +106,10 @@ public sealed class ReversePrefetchNavigationTests
         await fixture.StartPrefetchAsync();
         double previous = fixture.Vm.CurrentSeconds;
         fixture.Backend.Release.TrySetResult();
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         fixture.Vm.StepFrameCommand.Execute(-1);
-        await fixture.Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForPreparationAsync();
+        await fixture.Vm.WaitForIdleAsync();
         Assert.Equal(previous - 1.0 / 30, fixture.Vm.CurrentSeconds, 6);
         Assert.Equal(3, fixture.Backend.Requests.Count);
         Assert.False(fixture.Backend.Requests.Last().Continuous);
@@ -125,7 +123,7 @@ public sealed class ReversePrefetchNavigationTests
         await using var fixture = await Fixture.StartAsync(seconds: 0.2);
         for (int i = 0; i < 6; ++i) await fixture.StepAsync(-1);
         for (int i = 0; i < 5; ++i) fixture.Vm.StepFrameCommand.Execute(-1);
-        await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await fixture.Vm.WaitForIdleAsync();
         Assert.Equal(0, fixture.Vm.CurrentSeconds, 6);
         Assert.False(fixture.Vm.IsBusy);
         Assert.DoesNotContain(fixture.Backend.Requests, IsPrefetch);
@@ -141,7 +139,7 @@ public sealed class ReversePrefetchNavigationTests
         try
         {
             if (condition()) ready.TrySetResult();
-            await ready.Task.WaitWithDiagnosticsAsync(Safety);
+            await ready.Task;
         }
         finally { vm.PropertyChanged -= changed; }
     }
@@ -172,10 +170,10 @@ public sealed class ReversePrefetchNavigationTests
             var fixture = new Fixture(mismatch, seconds);
             try
             {
-                await fixture.Vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+                await fixture.Vm.InitializeAsync(false);
                 fixture.Clock.Advance(TimeSpan.FromMilliseconds(150));
-                await fixture.Backend.Paused.Task.WaitWithDiagnosticsAsync(Safety);
-                await fixture.Vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+                await fixture.Backend.Paused.Task;
+                await fixture.Vm.WaitForIdleAsync();
                 return fixture;
             }
             catch { await fixture.DisposeAsync(); throw; }
@@ -184,18 +182,18 @@ public sealed class ReversePrefetchNavigationTests
         {
             var previous = Vm.PreviewImage;
             Vm.StepFrameCommand.Execute(direction);
-            await Vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
+            await Vm.WaitForPreparationAsync();
             await WaitForPropertyAsync(Vm, () => Vm.PreviewImage != null && !ReferenceEquals(Vm.PreviewImage, previous) && !Vm.IsBusy);
         }
         public async Task StartPrefetchAsync()
         {
             for (int i = 0; i < 5; ++i) await StepAsync(-1);
-            await Backend.Started.Task.WaitWithDiagnosticsAsync(Safety);
+            await Backend.Started.Task;
         }
         public async ValueTask DisposeAsync()
         {
             Backend.Release.TrySetResult();
-            await Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+            await Vm.DisposeAsync().AsTask();
             Assert.False(_processAttempted);
             _services.Dispose();
         }

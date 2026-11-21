@@ -10,7 +10,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class StreamNeighborReuseViewModelTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     [AvaloniaTheory]
     [InlineData(false)]
     [InlineData(true)]
@@ -24,9 +23,9 @@ public sealed class StreamNeighborReuseViewModelTests
         await using var vm = Create(services, clock, input, backend);
         await Start(vm, clock, backend);
         vm.StepFrameCommand.Execute(1);
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
         backend.Next.TrySetResult();
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync();
         // 入力30fpsの推測値ではなく、実VFRの隣へ進んだ最終時刻を見る。
         Assert.Equal(10.37, vm.CurrentSeconds, 8);
         Assert.Single(backend.Requests);
@@ -44,10 +43,10 @@ public sealed class StreamNeighborReuseViewModelTests
         await using var vm = Create(services, clock, input, backend);
         await Start(vm, clock, backend);
         vm.RefreshCommand.Execute(null);
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await backend.SecondStarted.Task.WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await backend.SecondStarted.Task;
+        await vm.WaitForIdleAsync();
         Assert.Equal(2, backend.Requests.Count);
         Assert.True(backend.FirstCancelled.Task.IsCompleted);
         Assert.Null(vm.ErrorText);
@@ -63,8 +62,8 @@ public sealed class StreamNeighborReuseViewModelTests
         await using var vm = Create(services, clock, input, backend);
         await Start(vm, clock, backend);
         vm.StepFrameCommand.Execute(-1);
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
         Assert.Equal(9.5, vm.CurrentSeconds, 8);
         Assert.Equal(2, backend.Requests.Count);
         Assert.False(backend.Requests.Last().Continuous);
@@ -87,10 +86,10 @@ public sealed class StreamNeighborReuseViewModelTests
         vm.PropertyChanged += changed;
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
+            await vm.InitializeAsync(false);
             clock.Advance(TimeSpan.FromMilliseconds(150));
-            await backend.Center.Task.WaitWithDiagnosticsAsync(Safety);
-            await displayed.Task.WaitWithDiagnosticsAsync(Safety);
+            await backend.Center.Task;
+            await displayed.Task;
             Assert.Single(backend.Requests);
             Assert.Equal(10, vm.CurrentSeconds);
         }

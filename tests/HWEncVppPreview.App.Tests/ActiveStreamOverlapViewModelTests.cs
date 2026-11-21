@@ -30,19 +30,19 @@ public sealed class ActiveStreamOverlapViewModelTests
         string? resultError = null;
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await foreground.Started.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await foreground.Started.Task;
             // 最初の出力前にドラッグを確定して同じ入力のBefore取得を登録する。
             vm.BeginSeekDrag();
             vm.EndSeekDrag(10);
             foreground.Release.TrySetResult();
-            await foreground.Paused.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await foreground.Paused.Task;
             background.Release.TrySetResult();
-            await background.Done.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await background.Done.Task;
+            await vm.WaitForIdleAsync();
 
             vm.CurrentSeconds = 12.2;
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForIdleAsync();
             resultError = vm.ErrorText;
             resultSeconds = vm.CurrentSeconds;
             using var pixels = Assert.IsType<WriteableBitmap>(vm.PreviewImage).Lock();
@@ -52,7 +52,7 @@ public sealed class ActiveStreamOverlapViewModelTests
         {
             foreground.Release.TrySetResult();
             background.Release.TrySetResult();
-            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.DisposeAsync().AsTask();
             Assert.True(scope.Capture().IsEmpty);
         }
         Assert.Null(resultError);

@@ -49,7 +49,7 @@ public sealed class RawBufferPoolViewModelTests
         await session.WaitIdleAsync();
         var header = new Y4mHeader { Width = 2, Height = 2 };
         long run = session.Scope.NewRunId();
-        await session.Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(OwnedProcessSession.Safety);
+        await session.Vm.DisposeAsync().AsTask();
         using (session.Scope.RentReader(header, 1, 1.0 / 30, run)) { }
         Assert.Equal(0, session.Scope.CapturePool().LoanedBytes);
         Assert.Equal(0, session.Scope.CapturePool().FreeBytes);

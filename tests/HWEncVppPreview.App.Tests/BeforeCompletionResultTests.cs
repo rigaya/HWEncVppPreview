@@ -30,13 +30,13 @@ public sealed class BeforeCompletionResultTests
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await before.Started.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await before.Started.Task;
             vm.CurrentSeconds = 1;
             cache.Clear();
             before.Release.TrySetResult();
-            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForPreparationAsync();
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             Assert.False(vm.IsBeforeBusy);
             Assert.Equal(1, vm.CurrentSeconds);
@@ -48,7 +48,7 @@ public sealed class BeforeCompletionResultTests
         finally
         {
             before.Release.TrySetResult();
-            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.DisposeAsync().AsTask();
         }
         Assert.True(scope.Capture().IsEmpty);
     }

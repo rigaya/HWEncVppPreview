@@ -9,7 +9,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class StitchRejectedStreamingViewModelTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private const byte OldPixels = 40, RejectedPixels = 90, StreamPixels = 140, ReversePixels = 190;
     private static readonly Y4mHeader Header = Y4mHeader.Parse("YUV4MPEG2 W64 H36 F30:1 Ip A1:1 C420");
 
@@ -46,20 +45,20 @@ public sealed class StitchRejectedStreamingViewModelTests
         vm.InputPath = request.InputFile;
         vm.CurrentSeconds = 10;
         vm.InputArgsText = "--avhw";
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         // 二つの区間に異なる画素を与え、接続できない状態で操作を続ける。
         cache.StoreSegment(request, Frames(RejectedPixels), new(1000, 0, true), 9, 12);
 
         vm.CurrentSeconds = 13;
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-        await backend.ForwardPaused.Task.WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForPreparationAsync();
+        await backend.ForwardPaused.Task;
+        await vm.WaitForIdleAsync();
         for (int step = 0; step < 40; ++step)
         {
             vm.StepFrameCommand.Execute(-1);
-            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForPreparationAsync();
+            await vm.WaitForIdleAsync();
         }
         // 取得経路で時刻表現がミリ秒丸めの分だけ異なるため、フレームの同一性で比べる。
         Assert.True(Math.Abs(vm.CurrentSeconds - 11.6663333333) < 1.0 / 60.0);
@@ -70,7 +69,7 @@ public sealed class StitchRejectedStreamingViewModelTests
             Assert.Equal(StreamPixels, Marshal.ReadByte(pixels.Address));
             Assert.Equal((byte)94, Marshal.ReadByte(pixels.Address, 1));
         }
-        await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+        await vm.DisposeAsync().AsTask();
         Assert.True(scope.Capture().IsEmpty);
     }
 

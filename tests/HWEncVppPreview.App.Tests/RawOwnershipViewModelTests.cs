@@ -26,12 +26,12 @@ public sealed class RawOwnershipViewModelTests
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await vm.WaitForIdleAsync();
             byte[] initial = Pixels(Assert.IsAssignableFrom<Bitmap>(vm.PreviewImage));
             cache.Clear();
             vm.HdrReferenceWhiteNits = 400;
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForIdleAsync();
             byte[] after = Pixels(Assert.IsAssignableFrom<Bitmap>(vm.PreviewImage));
             byte[] before = Pixels(Assert.IsAssignableFrom<Bitmap>(vm.BeforeImage));
             Assert.NotEqual(initial, after);
@@ -40,7 +40,7 @@ public sealed class RawOwnershipViewModelTests
         }
         finally
         {
-            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.DisposeAsync().AsTask();
         }
         Assert.True(scope.Capture().IsEmpty);
     }

@@ -7,7 +7,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class BgraLeaseViewModelTests
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
     private static Y4mFrame Frame() => new(new Y4mHeader { Width = 2, Height = 2 }, 1, 1, new byte[6]);
     private static MainWindowViewModel Create(BgraBufferPool pool)
     {
@@ -29,11 +28,11 @@ public sealed class BgraLeaseViewModelTests
         byte[] output;
         try
         {
-            output = await entered.Task.WaitWithDiagnosticsAsync(Safety);
+            output = await entered.Task;
             vm.InputPath = "different-input.ts";
         }
         finally { copied.TrySetResult(); }
-        await work.WaitWithDiagnosticsAsync(Safety);
+        await work;
         Assert.Equal(16, output.Length);
         Assert.Equal(0, pool.Capture().Leased);
         Assert.Equal(0, pool.Capture().Buffers);
@@ -57,8 +56,8 @@ public sealed class BgraLeaseViewModelTests
             "ui_cancel" => Task.FromCanceled(new CancellationToken(true)),
             _ => Task.CompletedTask,
         });
-        if (reason == "stale_noop") await work.WaitWithDiagnosticsAsync(Safety);
-        else await Assert.ThrowsAnyAsync<Exception>(() => work).WaitWithDiagnosticsAsync(Safety);
+        if (reason == "stale_noop") await work;
+        else await Assert.ThrowsAnyAsync<Exception>(() => work);
         Assert.Equal(0, pool.Capture().Leased);
         Assert.InRange(pool.Capture().Buffers, 0, 1);
     }
@@ -96,17 +95,17 @@ public sealed class BgraLeaseViewModelTests
         vm.InputArgsText = "--avhw";
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.InitializeAsync(false);
+            await vm.WaitForIdleAsync();
             vm.OpenInput("b.ts");
-            await backend.SecondStarted.Task.WaitWithDiagnosticsAsync(Safety);
+            await backend.SecondStarted.Task;
             lock (gate) hold = true;
             backend.ReleaseSecond.TrySetResult();
-            await queued.Task.WaitWithDiagnosticsAsync(Safety);
+            await queued.Task;
             if (supersede) vm.OpenInput("c.ts");
             ReleasePosts();
-            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(Safety);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForPreparationAsync();
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             var bitmap = Assert.IsType<Avalonia.Media.Imaging.WriteableBitmap>(vm.PreviewImage);
             using var pixels = bitmap.Lock();
@@ -116,7 +115,7 @@ public sealed class BgraLeaseViewModelTests
         {
             backend.ReleaseSecond.TrySetResult();
             ReleasePosts();
-            await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(Safety);
+            await vm.DisposeAsync().AsTask();
         }
         Assert.Equal(0, pool.Capture().Leased);
         Assert.True(scope.Capture().IsEmpty);

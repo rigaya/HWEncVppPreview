@@ -23,9 +23,9 @@ internal static class FailureViewModelFixture
         {
             if (args.PropertyName == nameof(vm.ErrorText)) failed.TrySetResult();
         };
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        await failed.Task.WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await vm.InitializeAsync(false);
+        await failed.Task;
+        await vm.WaitForIdleAsync();
     }
 
     private sealed class FailureBackend(string diagnostics, int exitCode, Exception? exception) : IPreviewBackend

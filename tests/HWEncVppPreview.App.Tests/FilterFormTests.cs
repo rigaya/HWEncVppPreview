@@ -8,7 +8,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class FilterFormTests
 {
-    private static readonly TimeSpan SafetyTimeout = TestTimeouts.Hang;
     private const string Help = """
 VPP Options:
   [denoise] Noise
@@ -286,8 +285,8 @@ VPP Options:
             await using var vm = TestViewModels.Create(services, TestProcesses.CreateServerBackend(), null, null, null, debounceOverride: TimeSpan.Zero);
             vm.EncoderPath = FakeEncoderPath();
             vm.InputPath = "fake input.ts";
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(SafetyTimeout);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+            await vm.InitializeAsync(false);
+            await vm.WaitForIdleAsync();
             Assert.Equal(new[] { "--vpp-alpha", "--vpp-empty", "--vpp-scalar", "--vpp-legacy" }, vm.FilterCatalog.Select(item => item.OptionName));
             Assert.All(vm.FilterCatalog, item => Assert.False(item.IsInUse));
             vm.AddFilterCommand.Execute("--vpp-alpha");
@@ -328,15 +327,15 @@ VPP Options:
             await vm.SaveSettingsAsync();
         }
         await using var restored = TestViewModels.Create(services);
-        await restored.InitializeAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await restored.InitializeAsync();
         Assert.True(restored.IsTextListMode);
         Assert.True(AppSettings.Load(services.SettingsPath).IsTextListMode);
     }
 
     private static async Task RunPreparedAsync(MainWindowViewModel vm)
     {
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(SafetyTimeout);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
     }
 
     private static string FakeEncoderPath()

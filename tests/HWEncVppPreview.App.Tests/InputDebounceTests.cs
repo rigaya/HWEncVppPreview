@@ -26,15 +26,15 @@ public sealed class InputDebounceTests
         {
             EncoderPath = "fake", InputPath = "initial.ts", InputArgsText = "", CurrentSeconds = 0,
         };
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         vm.InputPath = "first.ts";
         vm.InputPath = "latest.ts";
         // 入力変更で待機が登録されてから、一度だけ待機時間を進める。
         clock.Advance(TimeSpan.FromMilliseconds(150));
-        await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        InputInfo info = await probe.ProbeAsync("fake", "latest.ts").WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await vm.WaitForPreparationAsync();
+        await vm.WaitForIdleAsync();
+        InputInfo info = await probe.ProbeAsync("fake", "latest.ts");
         Assert.Equal(TimeSpan.FromSeconds(10), info.Duration);
         Assert.Equal(10, vm.DurationSeconds);
         Assert.False(processAttempted);

@@ -30,7 +30,7 @@ public sealed class OwnedEvictionOrderingTests
         // 偽入力の時刻10秒の画素を、色変換式から別途算出した値と照合する。
         Assert.Equal(new byte[] { 0, 134, 0, 255 }, session.ImageBytes()[..4]);
         Assert.Equal(new byte[] { 0, 135, 0, 255 }, session.ImageBytes(before: true)[..4]);
-        await session.Vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await session.Vm.DisposeAsync().AsTask();
         var runs = session.CompletedRuns();
         Assert.Equal(2, runs.Count(args => args.Contains("--vpp-tweak")));
         Assert.Equal(2, runs.Count(args => !args.Contains("--vpp-tweak")));

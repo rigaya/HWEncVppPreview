@@ -30,8 +30,8 @@ public sealed class BeforeUnsafeLandingResultTests
         vm.FilterLines.Add(new FilterLineViewModel { Text = "--vpp-tweak brightness=0.01" });
         try
         {
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await vm.WaitForIdleAsync();
             Assert.Equal(afterLate, vm.ErrorText != null);
             Assert.False(vm.IsBeforeBusy);
             Assert.Equal(.1, vm.CurrentSeconds);
@@ -40,7 +40,7 @@ public sealed class BeforeUnsafeLandingResultTests
         }
         finally
         {
-            try { await vm.DisposeAsync().AsTask().WaitWithDiagnosticsAsync(TestTimeouts.Hang); }
+            try { await vm.DisposeAsync().AsTask(); }
             finally { Environment.SetEnvironmentVariable("FAKE_ENCODER_PREVIEW_CAPABILITIES", previous); }
         }
         Assert.True(scope.Capture().IsEmpty);

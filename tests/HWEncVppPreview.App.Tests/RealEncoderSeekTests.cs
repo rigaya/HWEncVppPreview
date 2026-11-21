@@ -2,7 +2,6 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Controls;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.App.ViewModels;
-using HWEncVppPreview.Testing;
 using HWEncVppPreview.App.Views;
 using HWEncVppPreview.Core;
 
@@ -25,8 +24,8 @@ public sealed class RealEncoderSeekTests
                 EncoderPath = encoder!, InputPath = input!, InputArgsText = "-d 1", CurrentSeconds = 1541.09,
             }.Save(settingsPath);
             await using var vm = TestViewModels.Create(new SeekServices(settingsPath));
-            await vm.InitializeAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync();
+            await vm.WaitForIdleAsync();
             Assert.Equal(0, vm.CurrentSeconds);
             Assert.InRange(vm.DurationSeconds, 1419.97, 1419.99);
             Assert.Null(vm.ErrorText);
@@ -51,25 +50,25 @@ public sealed class RealEncoderSeekTests
         try
         {
             window.Show();
-            await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.InitializeAsync(false);
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             double previousDuration = vm.DurationSeconds;
             Assert.InRange(previousDuration, 1800, 1820);
             foreach (double target in new[] { 600, 1541.09, 800 })
             {
                 vm.CurrentSeconds = target;
-                await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+                await vm.WaitForIdleAsync();
                 Assert.Null(vm.ErrorText);
             }
             vm.OpenInput(input!);
-            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForPreparationAsync();
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             Assert.InRange(vm.DurationSeconds, 1419.97, 1419.99);
             Assert.Equal(vm.DurationSeconds, window.FindControl<Slider>("SeekBar")!.Maximum);
             vm.CurrentSeconds = 1541.09;
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             Assert.InRange(vm.CurrentSeconds, 0, vm.DurationSeconds);
         }
@@ -90,8 +89,8 @@ public sealed class RealEncoderSeekTests
         vm.InputPath = input!;
         vm.InputArgsText = Environment.GetEnvironmentVariable("HWENC_VIEWER_SEEK_ARGS") ?? "-d 1";
         if (filtered) vm.FilterLines.Add(new() { Text = "--vpp-tweak brightness=0.01" });
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.Null(vm.ErrorText);
         Assert.True(vm.HasDuration);
         Assert.NotNull(vm.PreviewImage);
@@ -101,8 +100,8 @@ public sealed class RealEncoderSeekTests
         foreach (double seconds in new[] { duration * 0.04, duration * 0.56, Math.Max(0, duration - 10), duration + 120, duration * 0.07, 0 })
         {
             vm.CurrentSeconds = seconds;
-            await vm.WaitForPreparationAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForPreparationAsync();
+            await vm.WaitForIdleAsync();
             Assert.True(vm.ErrorText == null, $"seek={seconds}, duration={vm.DurationSeconds}, current={vm.CurrentSeconds}: {vm.ErrorText}");
             Assert.NotNull(vm.PreviewImage);
             if (filtered) Assert.NotNull(vm.BeforeImage);

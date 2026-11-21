@@ -11,8 +11,6 @@ namespace HWEncVppPreview.App.Tests;
 
 public sealed class FrameRateNavigationTests(ITestOutputHelper output)
 {
-    private static readonly TimeSpan Safety = TestTimeouts.Hang;
-
     [AvaloniaFact]
     public async Task DoubleRateRightStepsShowEveryOutputFrameWithoutSkipping()
     {
@@ -25,7 +23,7 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
         for (int expected = 7; expected <= 13; ++expected)
         {
             vm.StepFrameCommand.Execute(1);
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+            await vm.WaitForIdleAsync();
             output.WriteLine($"右: 期待frame={expected}, 目標={vm.CurrentSeconds:R}, 追加起動={starts - initialStarts}");
             Assert.Equal(expected / 60.0, vm.CurrentSeconds, 9);
             Assert.Equal(ExpectedHash(expected), ImageHash(vm));
@@ -43,7 +41,7 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
         await InitializeAsync(vm);
         int initialStarts = starts;
         vm.StepFrameCommand.Execute(-1);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.WaitForIdleAsync();
         output.WriteLine($"左: 期待frame=12, 目標={vm.CurrentSeconds:R}, 追加起動={starts - initialStarts}");
         Assert.Equal(initialStarts, starts);
         Assert.Equal(12.0 / 60, vm.CurrentSeconds, 9);
@@ -80,8 +78,8 @@ public sealed class FrameRateNavigationTests(ITestOutputHelper output)
 
     private static async Task InitializeAsync(MainWindowViewModel vm)
     {
-        await vm.InitializeAsync(false).WaitWithDiagnosticsAsync(Safety);
-        await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(Safety);
+        await vm.InitializeAsync(false);
+        await vm.WaitForIdleAsync();
         Assert.Null(vm.ErrorText);
         Assert.NotNull(vm.PreviewImage);
     }
