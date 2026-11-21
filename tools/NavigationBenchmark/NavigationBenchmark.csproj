@@ -17,6 +17,5 @@
     <PackageReference Include="Avalonia.Headless.XUnit" Version="12.1.4" />
     <PackageReference Include="Avalonia.Skia" Version="12.1.4" />
     <ProjectReference Include="../../src/HWEncVppPreview.App/HWEncVppPreview.App.csproj" />
-    <Compile Include="../../tests/TestTimeouts.cs" Link="TestTimeouts.cs" />
   </ItemGroup>
 </Project>

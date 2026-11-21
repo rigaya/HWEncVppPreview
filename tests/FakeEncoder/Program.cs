@@ -199,17 +199,40 @@ internal static class Program
         using var child = Process.Start(start) ?? throw new InvalidOperationException("パイプ保持用の子を起動できませんでした");
         try
         {
-            using var timeout = new CancellationTokenSource(TestTimeouts.Hang);
-            await childReady.WaitForConnectionAsync(timeout.Token);
-            var ready = new byte[1];
-            if (await childReady.ReadAsync(ready, timeout.Token) != 1 || ready[0] != 1)
-                throw new EndOfStreamException("パイプ保持用の子が準備を通知せずに終了しました");
+            using var observation = new CancellationTokenSource();
+            Task ready = WaitForReadyAsync(observation.Token);
+            Task exited = child.WaitForExitAsync(observation.Token);
+            try
+            {
+                if (await Task.WhenAny(ready, exited) == exited && !ready.IsCompleted)
+                {
+                    await exited;
+                    throw new EndOfStreamException($"パイプ保持用の子が準備通知前に終了しました: {child.ExitCode}");
+                }
+                await ready;
+            }
+            finally
+            {
+                // 準備完了後は、パイプを保持している子の終了を待たず親を終了させる。
+                await observation.CancelAsync();
+                await Task.WhenAll(ready, exited).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            }
         }
         catch
         {
-            if (!child.HasExited) child.Kill(entireProcessTree: true);
-            await child.WaitForExitAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            childReady.Dispose();
+            try { if (!child.HasExited) child.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) when (child.HasExited) { }
+            await child.WaitForExitAsync().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             throw;
+        }
+
+        async Task WaitForReadyAsync(CancellationToken token)
+        {
+            await childReady.WaitForConnectionAsync(token);
+            var ready = new byte[1];
+            if (await childReady.ReadAsync(ready, token) != 1 || ready[0] != 1)
+                throw new EndOfStreamException("パイプ保持用の子が準備を通知せずに終了しました");
         }
     }
 

@@ -14,7 +14,7 @@
 
 - 止まった試験の検出は、`dotnet test --blame-hang-timeout`だけが担当する(CIでは5分)。止まった試験の名前とダンプは、そこから取る。
 - 試験の中では次のものを使わない。
-  - 実時間の期限が付いた待ち: `WaitAsync(TimeSpan)`、`CancellationTokenSource(TimeSpan)`、`CancelAfter`、`WaitWithDiagnosticsAsync`、`TestTimeouts.Hang`
+  - 実時間の期限付き待機に該当するのは、`WaitAsync(TimeSpan)`、引数付きの`CancellationTokenSource`、`CancelAfter`、時間付きの`WaitForExit`。廃止した`WaitWithDiagnosticsAsync`や`TestTimeouts`も使わない。
   - 時間で待つもの: `Task.Delay`、`Thread.Sleep`、`SpinWait`、時間付きの`WaitOne`
   - ポーリング: 条件が成り立つまで繰り返し確かめる処理(`WaitUntilAsync`、ファイルの出現待ちなど)
 - 「一定時間、何も起きないこと」を確かめる試験は書かない。起きないことを確かめたいなら、起こり得た時点より後にある、決まった出来事(次の応答、終了、EOF)まで進めてから、記録に現れていないことを確かめる。
@@ -54,11 +54,11 @@
 ## 7. 検査と確認
 
 - `scripts/lint-test-synchronization.py`が、上の禁止事項のうち機械的に見つけられるものを検出する(CIの「試験同期の検査」)。新しい種類の誤りを見つけたら、まずlintに検査を足し、`--self-test`の例も足す。
-- 試験を足したり直したりしたら、LinuxとWindowsの両方で全件試験を回す(`dotnet test HWEncVppPreview.sln -c Debug`)。
+- 試験を足したり直したりしたら、LinuxとWindowsの両方で全件試験を回す(`dotnet test HWEncVppPreview.sln -c Debug --blame-hang-timeout 5m`)。
 - 本物のプロセスや同期に関わる試験を変えたら、pushの前に、Windowsでその試験を繰り返し回す。CPUに負荷をかけた状態でも回す。回数と失敗の件数を記録する。1回でも落ちたら原因を直す。
 - push前のWindows負荷確認は、NTFS上で `powershell -File scripts/test-windows-stress.ps1` を実行する。論理CPU4個・負荷スレッド2本を使い、Debugを一度ビルドして全件試験を3回続ける。各回のTRXと停止時のダンプは表示された結果ディレクトリに残し、失敗した回で停止する。
 - 落ちた試験を直すときは、その1件だけで終わらせない。同じ形の箇所をほかの試験からも探し、まとめて直すか、lintで検出できるようにする。
 
 ## 8. 現状
 
-2026-11-20の時点では、既存の試験にこの方針に反する箇所が多く残っている。試験側の実時間の待ちが約1100か所、既定の期限のまま作る`ServerBackend`/`OneShotBackend`が57か所ある。段階的に直している。新しく書く試験と、手を入れる試験は、この方針に従う。
+2026-11-21に、実プロセスの試験に期限なしの設定を渡す作成補助を整え、製品の期限自体を検証する試験を偽の時計と疑似応答へ移した。試験側の実時間上限と`TestTimeouts.cs`は撤去済み。終了、EOF、明示的な取消などの合図を待ち、試験自体の停止はランナーの`--blame-hang-timeout 5m`で検出する。lintが期限付き待機と既存の補助への参照を検査する。

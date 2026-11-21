@@ -8,7 +8,7 @@ root = Path(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] != '--self-test' e
 checks = (
     ('時間待ち', r'\b(?:Task\s*\.\s*(?:Delay|Yield)|Thread\s*\.\s*(?:Sleep|Yield)|SpinWait\s*\.\s*[A-Za-z_]\w*)\s*\('),
     ('ポーリング補助', r'\bWaitUntilAsync\s*\('),
-    ('時間付き待機', r'\.\s*WaitOne\s*\(\s*(?:\d|TimeSpan\s*\.)'),
+    ('時間付き待機', r'\.\s*WaitOne\s*\(\s*[^)\s]'),
     ('画面処理の反復', r'\b(?:for|while)\s*\([^\n]*\)[^\n]*(?:RunJobs\s*\(|InvokeAsync\s*\()'),
     ('非公開反射', r'\bBindingFlags\s*\.\s*NonPublic\b|\.\s*(?:GetField|GetNestedType|GetMethod|GetConstructor|GetConstructors)\s*\('),
     ('非公開型の反射', r'\.\s*GetType\s*\(\s*\)\s*\.\s*GetProperty\s*\(|Activator\s*\.\s*CreateInstance\s*\('),
@@ -36,6 +36,7 @@ fixture = Path('tests/TestProcesses.cs')
 validation = core_tests / 'PreviewTimeoutsTests.cs'
 server_deadlines = core_tests / 'ServerDeadlineTests.cs'
 cli_capture = core_tests / 'CliHelpCheckTests.cs'
+vm_shutdown = Path('tests/HWEncVppPreview.App.Tests/StreamingNavigationTests.cs')
 fake_clock = re.compile(r'\bnew\s+(?:[\w.]+\.)?FakeTimeProvider\s*\(')
 real_process = re.compile(
     r'\b(?:TestProcesses\s*\.\s*CreateServerBackend|Process(?:Support)?\s*\.\s*Start|'
@@ -76,6 +77,11 @@ def allowed_product_deadline(path, code, match):
         if path == core_tests / 'InputProbeTests.cs':
             return bool(re.search(r'TestProcesses\.CreateDurationProbe\s*\(\s*$', prefix)
                         and re.match(r'\s*\{[^{}]*\}\s*,\s*clock\s*,', tail))
+        if path == vm_shutdown:
+            return bool(re.search(r'var\s+clock\s*=\s*new\s+VmShutdownClock\s*\(\s*(?:vmDeadline\s*)?\)'
+                                  r'[^{}]*(?:\{[^{}]*\}[^{}]*)*timeouts\s*:\s*$', prefix)
+                        and re.match(r'\s*\{\s*(?:(?:DisposeGrace|ControllerDispose)\s*=\s*TimeSpan\s*\.\s*FromSeconds\s*\(\s*\d+\s*\)\s*,\s*)*'
+                                     r'ViewModelDispose\s*=\s*vmDeadline\s*,?\s*\}', tail))
         if path == fixture:
             return bool(re.match(r'\s*\{[^{}]*\}\s*,\s*clock\s*,\s*backend\s*:\s*backend\s*,'
                                  r'\s*startDurationProcess\s*:\s*\(_,\s*_\)\s*=>\s*throw\b', tail))
@@ -92,6 +98,78 @@ def allowed_product_deadline(path, code, match):
                              r'|start\s*,\s*TimeProvider\.System\s*,\s*PreviewTimeouts\.Infinite\.CliHelp'
                              r'\s*,\s*PreviewTimeouts\.Infinite\.HelpCleanup)', tail))
     return False
+
+
+cancel_source = r'(?:(?:global|\w+)\s*::\s*)?(?:\w+\s*\.\s*)*CancellationTokenSource'
+timed_calls = (
+    ('廃止した時間付き待機', re.compile(r'\b(?:WaitWithDiagnosticsAsync|TestTimeouts)\b')),
+    ('時間付き取消', re.compile(
+        r'\bCancelAfter\s*\('
+        r'|\bnew\s+' + cancel_source + r'\s*\(\s*(?=[^)\s])'
+        r'|\bCancellationTokenSource\??\s+\w+\s*(?:=|=>|\{[^{}]*\}\s*=|\([^()]*\)\s*=>)'
+        r'\s*new\s*\(\s*(?=[^)\s])'
+    )),
+    ('時間付きのプロセス終了待ち', re.compile(r'\.\s*WaitForExit\s*\(\s*(?=[^)\s])')),
+)
+wait_async = re.compile(r'\.\s*WaitAsync\s*\(')
+argument_delimiter = re.compile(r'[()\[\]{},]')
+
+
+def call_arguments(code, opening):
+    start = opening
+    depth = 0
+    arguments = []
+    for delimiter in argument_delimiter.finditer(code, opening):
+        char = delimiter.group()
+        if char in '([{':
+            depth += 1
+        elif char in ')]}':
+            if depth == 0:
+                if code[start:delimiter.start()].strip():
+                    arguments.append(code[start:delimiter.start()].strip())
+                return arguments
+            depth -= 1
+        elif depth == 0:
+            arguments.append(code[start:delimiter.start()].strip())
+            start = delimiter.end()
+    return arguments
+
+
+def is_cancellation_token(code, argument):
+    argument = re.sub(r'^cancellationToken\s*:\s*', '', argument)
+    if re.fullmatch(r'CancellationToken\s*\.\s*None|default\s*\(\s*CancellationToken\s*\)', argument):
+        return True
+    if re.fullmatch(r'[\w.]+\s*\.\s*Token', argument):
+        return True
+    if re.fullmatch(r'\w+', argument):
+        return bool(re.search(r'\bCancellationToken\s+' + re.escape(argument) + r'\b', code))
+    # 条件式の各分岐がそれぞれトークンなら期限は使わない。
+    conditional = re.fullmatch(r'[^?]+\?\s*([^:]+?)\s*:\s*(.+)', argument, re.S)
+    return bool(conditional and all(is_cancellation_token(code, part) for part in conditional.groups()))
+
+
+def is_fake_clock(code, argument):
+    argument = re.sub(r'^timeProvider\s*:\s*', '', argument)
+    if re.fullmatch(r'new\s+FakeTimeProvider\s*\(\s*\)', argument):
+        return True
+    if not re.fullmatch(r'\w+', argument):
+        return False
+    name = re.escape(argument)
+    return bool(re.search(r'\b(?:FakeTimeProvider\s+' + name + r'\b|(?:var|TimeProvider)\s+' + name
+                          + r'\s*=\s*new\s+FakeTimeProvider\s*\()', code))
+
+
+def time_wait_findings(code):
+    for label, pattern in timed_calls:
+        for match in pattern.finditer(code):
+            yield label, match
+    for match in wait_async.finditer(code):
+        arguments = call_arguments(code, match.end())
+        if not arguments or (len(arguments) == 1 and is_cancellation_token(code, arguments[0])):
+            continue
+        if len(arguments) in (2, 3) and is_fake_clock(code, arguments[1]):
+            continue
+        yield '時間付きの非同期待機', match
 
 
 if len(sys.argv) > 1 and sys.argv[1] == '--self-test':
@@ -146,6 +224,8 @@ if len(sys.argv) > 1 and sys.argv[1] == '--self-test':
         (cli_capture, 'HelpProcessCapture.CaptureAsync(() => child, clock, timeout, cleanup);', True),
         (server_deadlines, 'new Sessions(clock, PreviewTimeouts.Infinite with { Ready = timeout });', True),
         (server_deadlines, 'Run(PreviewTimeouts.Infinite with { Ready = timeout });', False),
+        (vm_shutdown, 'var clock = new VmShutdownClock(vmDeadline); Create(clock, timeouts: PreviewTimeouts.Infinite with { ViewModelDispose = vmDeadline });', True),
+        (vm_shutdown, 'var clock = TimeProvider.System; Create(clock, timeouts: PreviewTimeouts.Infinite with { ViewModelDispose = vmDeadline });', False),
         (core_tests / 'InputProbeTests.cs', 'TestProcesses.CreateDurationProbe(PreviewTimeouts.Infinite with { Input = timeout }, clock, backend, create);', True),
         (fixture, 'new(PreviewTimeouts.Infinite with { Input = timeout }, TimeProvider.System);', False),
         (fixture, 'new(PreviewTimeouts.Infinite with { Input = timeout }, clock, backend: backend, startDurationProcess: (_, _) => throw Bad());', True),
@@ -160,6 +240,46 @@ if len(sys.argv) > 1 and sys.argv[1] == '--self-test':
                    'TestProcesses.CreateServerBackend()', 'CaptureUntilExitAsync(info)'):
         if not real_process.search(sample):
             raise SystemExit('実プロセスの起動を検出できません: ' + sample)
+    timed_examples = [
+        'await task.WaitWithDiagnosticsAsync(delay);',
+        'await current.WaitAsync(TimeSpan.FromSeconds(1));',
+        'await task.WaitAsync(timeout);',
+        'await task.WaitAsync(timeout: delay);',
+        'await gate.WaitAsync(500, token);',
+        'await task.WaitAsync(delay, TimeProvider.System, token);',
+        'await task\n .WaitAsync(\n GetDelay(1, 2), cancellationToken);',
+        'var guard = new global::System.Threading.CancellationTokenSource(delay, TimeProvider.System);',
+        'CancellationTokenSource guard = new(500);',
+        'CancellationTokenSource Guard { get; } = new(delay);',
+        'source.CancelAfter(delay);',
+        'process.WaitForExit(ms);',
+        'process\n .WaitForExit(\n (int)delay.TotalMilliseconds);',
+        'var limit = TestTimeouts.Hang;',
+    ]
+    for example in timed_examples:
+        if not list(time_wait_findings(code_only(example))):
+            raise SystemExit('試験の期限を検出できません: ' + example)
+    unlimited_examples = [
+        'await task;',
+        'await gate.WaitAsync();',
+        'await task.WaitAsync(CancellationToken.None);',
+        'void Run(CancellationToken token) { task.WaitAsync(cancellationToken: token); }',
+        'await task.WaitAsync(cancel.Token);',
+        'void Run(CancellationToken token) { task.WaitAsync(allow ? token : CancellationToken.None); }',
+        'var clock = new FakeTimeProvider(); await task.WaitAsync(delay, clock);',
+        'var clock = new FakeTimeProvider(); await task.WaitAsync(timeout: delay, timeProvider: clock);',
+        'FakeTimeProvider clock = new(); await task.WaitAsync(delay, clock, cancel.Token);',
+        'var elapsed = TimeSpan.FromSeconds(5);',
+        'var guard = new CancellationTokenSource();',
+        'CancellationTokenSource guard = new();',
+        'await process.WaitForExitAsync(cancel.Token);',
+        'process.WaitForExit();',
+        'const string source = "task.WaitWithDiagnosticsAsync(delay)";',
+        '// process.WaitForExit(500);',
+    ]
+    for example in unlimited_examples:
+        if list(time_wait_findings(code_only(example))):
+            raise SystemExit('期限のない待機を誤検出しました: ' + example)
     print('試験検査の自己確認に成功しました')
     sys.exit(0)
 issues = []
@@ -175,6 +295,9 @@ for path in sorted((root / 'tests').rglob('*.cs')):
     source = path.read_text(encoding='utf-8-sig')
     relative = path.relative_to(root)
     code = code_only(source)
+    for name, match in time_wait_findings(code):
+        number = source.count('\n', 0, match.start()) + 1
+        issues.append((relative, number, name, source.splitlines()[number - 1].strip()))
     for match in direct_process.finditer(code):
         if not allowed_process_construction(relative, code[match.start():]):
             number = source.count('\n', 0, match.start()) + 1

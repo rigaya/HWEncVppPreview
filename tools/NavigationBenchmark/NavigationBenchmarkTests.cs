@@ -37,8 +37,8 @@ public sealed class NavigationBenchmarkTests
         {
             PerfTrace.Write("bench.prepare", new { scenario, filter, encoder, input,
                 before = true, postMargin = "0.5" });
-            await vm.InitializeAsync(false).WaitAsync(TimeSpan.FromSeconds(90));
-            await vm.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(90));
+            await vm.InitializeAsync(false);
+            await vm.WaitForIdleAsync();
             Assert.Null(vm.ErrorText);
             Assert.NotNull(vm.PreviewImage);
             // 通常のキー反復と同様、処理完了を待たず一定周期で次の入力を送る。
@@ -60,7 +60,7 @@ public sealed class NavigationBenchmarkTests
             PerfTrace.Write("bench.scenario.end", new { vm.CurrentSeconds, vm.StatusText, vm.ErrorText,
                 pauseMs = (GC.GetTotalPauseDuration() - scenarioPauseStart).TotalMilliseconds,
                 collectionDelta = new[] { GC.CollectionCount(0) - scenarioCollections[0], GC.CollectionCount(1) - scenarioCollections[1], GC.CollectionCount(2) - scenarioCollections[2] } });
-            await vm.WaitForIdleAsync().WaitWithDiagnosticsAsync(TestTimeouts.Hang);
+            await vm.WaitForIdleAsync();
             PerfTrace.Write("bench.settled", new { vm.CurrentSeconds, vm.StatusText, vm.ErrorText });
             Assert.Null(vm.ErrorText);
             // 実測時だけ、需要が満たされた後の常駐プロセスを観測できる期間を設ける。
