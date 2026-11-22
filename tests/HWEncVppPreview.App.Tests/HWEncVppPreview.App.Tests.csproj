@@ -19,6 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\HWEncVppPreview.App\HWEncVppPreview.App.csproj" />
+    <ProjectReference Include="..\..\src\HWEncVppPreview.Cli\HWEncVppPreview.Cli.csproj" />
     <ProjectReference Include="..\FakeEncoder\FakeEncoder.csproj" ReferenceOutputAssembly="false" />
     <Compile Include="..\HWEncVppPreview.Tests\FakeTimeProvider.cs" Link="Testing\FakeTimeProvider.cs" />
     <Compile Include="..\HWEncVppPreview.Tests\FakeLogFiles.cs" Link="Testing\FakeLogFiles.cs" />

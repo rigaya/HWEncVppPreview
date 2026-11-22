@@ -553,9 +553,11 @@ public sealed partial class PreviewController
         public void OnOutput() => watchdog.Touch();
         public void OnReadStateChanged(bool reading)
         {
-            if (reading) watchdog.Resume(); else watchdog.Suspend();
             lock (owner._sync)
             {
+                // 需要変更で既に開いたgateの停止通知は、再開済みのstreamを停止扱いに戻さない。
+                if (!reading && session.ReadAllowed.Task.IsCompleted) return;
+                if (reading) watchdog.Resume(); else watchdog.Suspend();
                 // IsPausedは需要更新側でも先に変わるため、計測上の読取状態は別に保持する。
                 if (PerfTrace.Enabled && _lastTraceReading != reading)
                 {

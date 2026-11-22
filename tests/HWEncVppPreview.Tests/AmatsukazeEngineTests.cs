@@ -2,26 +2,80 @@ using System.Text;
 using System.Threading.Channels;
 using HWEncVppPreview.Cli;
 using HWEncVppPreview.Core;
-using HWEncVppPreview.Testing;
 
 namespace HWEncVppPreview.Tests;
 
-public sealed class AmatsukazeEngineTests
+public sealed partial class AmatsukazeEngineTests
 {
     private sealed class ChannelStream : Stream
     {
         private readonly Channel<byte> _bytes = Channel.CreateUnbounded<byte>();
+        private readonly object _sync = new();
+        private long _written, _read;
+        private (long Position, TaskCompletionSource Completion)? _consumed;
+
+        private (byte[] Prefix, TaskCompletionSource Resume)? _writeGate;
+
+        public Task SendAndObserveConsumptionAsync(string value)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(value + "\n");
+            lock (_sync)
+            {
+                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _consumed = (_written + bytes.Length, completion);
+                Write(bytes, 0, bytes.Length);
+                return completion.Task;
+            }
+        }
+
+        public TaskCompletionSource BlockAfterWritingLine(string prefix)
+        {
+            lock (_sync)
+            {
+                var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _writeGate = (Encoding.UTF8.GetBytes(prefix), resume);
+                return resume;
+            }
+        }
+
         public override bool CanRead => true; public override bool CanSeek => false; public override bool CanWrite => true;
         public override long Length => throw new NotSupportedException(); public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
         public override void Flush() { } public override long Seek(long x, SeekOrigin y) => throw new NotSupportedException(); public override void SetLength(long x) => throw new NotSupportedException();
         public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
-        public override void Write(byte[] buffer, int offset, int count) { foreach (byte b in buffer.AsSpan(offset, count)) _bytes.Writer.TryWrite(b); }
-        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken token = default) { Write(buffer.ToArray(), 0, buffer.Length); return ValueTask.CompletedTask; }
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            lock (_sync)
+            {
+                _written += count;
+                foreach (byte b in buffer.AsSpan(offset, count)) _bytes.Writer.TryWrite(b);
+            }
+        }
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken token = default)
+        {
+            lock (_sync)
+            {
+                Write(buffer.ToArray(), 0, buffer.Length);
+                if (_writeGate is not { } gate || !buffer.Span.StartsWith(gate.Prefix)) return ValueTask.CompletedTask;
+                _writeGate = null;
+                return new ValueTask(gate.Resume.Task.WaitAsync(token));
+            }
+        }
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
         {
             if (buffer.IsEmpty) return 0;
+            lock (_sync)
+            {
+                if (_consumed is { } observed && _read >= observed.Position)
+                {
+                    _consumed = null;
+                    observed.Completion.TrySetResult();
+                }
+            }
             if (!await _bytes.Reader.WaitToReadAsync(token)) return 0;
-            int n = 0; while (n < buffer.Length && _bytes.Reader.TryRead(out byte b)) buffer.Span[n++] = b; return n;
+            int n = 0;
+            while (n < buffer.Length && _bytes.Reader.TryRead(out byte b)) buffer.Span[n++] = b;
+            lock (_sync) _read += n;
+            return n;
         }
         public async Task<string> LineAsync(CancellationToken token = default)
         {
@@ -47,93 +101,6 @@ public sealed class AmatsukazeEngineTests
             return new(Info.Header, position / 30d, null, Enumerable.Repeat((byte)position, Info.Header.FrameBytes).ToArray());
         }
         public void Dispose() { }
-    }
-    private sealed class Backend : IPreviewBackend
-    {
-        public PreviewRequest? Request { get; private set; }
-        public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken token = default)
-        {
-            Request = request;
-            var h = new Y4mHeader { Width = 4, Height = 4, FpsNum = 30, FpsDen = 1 };
-            sink.OnHeader(h); sink.OnFrame(new Y4mFrame(h, request.TargetSeconds, null, new byte[h.FrameBytes]));
-            return Task.FromResult(new PreviewRunResult(0, ""));
-        }
-        public ValueTask AbortAsync() => ValueTask.CompletedTask;
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-    [Fact]
-    public async Task エンコーダ設定で常駐サーバへavsとフィルタを渡す()
-    {
-        var input = new ChannelStream(); var output = new ChannelStream(); var backend = new Backend();
-        var engine = new AmatsukazeEngine(input, output, TextWriter.Null, "/tmp", "/tmp", new() { ["QSVEnc"] = "fake" }, (_, _) => new Source(), () => backend);
-        Task run = RunEngineAsync(engine, output);
-        try
-        {
-            _ = await output.LineAsync();
-            input.Send("{\"cmd\":\"config\",\"gen\":2,\"kind\":\"encoder\",\"encoder\":\"QSVEnc\",\"interlace\":\"tff\",\"vpp\":[\"--vpp-knn\"]}");
-            var response1 = await output.LineAsync();
-            input.Send("{\"cmd\":\"frame\",\"id\":5,\"gen\":2,\"pos\":9,\"format\":\"yuv\"}");
-            string header = await output.LineAsync();
-            var response2 = await output.BytesAsync(24);
-            input.Send("{\"cmd\":\"quit\"}");
-            await run;
-            Assert.StartsWith("AMTPREVIEW INFO gen=2", response1);
-            Assert.Contains("id=5 gen=2 pos=9", header);
-            Assert.Equal(24, (response2).Length);
-            Assert.NotNull(backend.Request);
-            Assert.Contains("--avs", backend.Request.InputArgs);
-            Assert.Contains("--interlace", backend.Request.InputArgs);
-            Assert.Contains("tff", backend.Request.InputArgs);
-            Assert.False(backend.Request.Capabilities.TimestampPassthrough);
-            Assert.Contains("--vpp-knn", backend.Request.VppArgs);
-            Assert.Equal(0.3, backend.Request.TargetSeconds, 6);
-        }
-        finally
-        {
-            await CompleteEngineAsync(input, run);
-        }
-    }
-    [Fact]
-    public async Task 偽常駐サーバではavsのoutputStartを送らない()
-    {
-        using var cancellation = new CancellationTokenSource();
-        string log = Path.Combine(Path.GetTempPath(), "amt-preview-" + Guid.NewGuid().ToString("N") + ".jsonl");
-        try
-        {
-            var input = new ChannelStream(); var output = new ChannelStream();
-            var engine = new AmatsukazeEngine(input, output, TextWriter.Null, "/tmp", "/tmp",
-                new() { ["QSVEnc"] = BackendTests.FakeEncoderPath() }, (_, _) => new Source(),
-                () => TestProcesses.CreateServerBackend(configureStartInfo: p => { p.Environment["FAKE_ENCODER_COMMAND_LOG_FILE"] = log; p.Environment["FAKE_ENCODER_WINDOW_SEEK"] = "1"; p.Environment["FAKE_ENCODER_OUTPUT_START"] = "1"; }));
-            Task run = RunEngineAsync(engine, output, cancellation.Token);
-            try
-            {
-                _ = await output.LineAsync(cancellation.Token);
-                input.Send("{\"cmd\":\"config\",\"gen\":1,\"kind\":\"encoder\",\"encoder\":\"QSVEnc\"}");
-                _ = await output.LineAsync(cancellation.Token);
-                input.Send("{\"cmd\":\"frame\",\"id\":3,\"gen\":1,\"pos\":15}");
-                string header = await output.LineAsync(cancellation.Token);
-                int length = int.Parse(header.Split(' ').Single(x => x.StartsWith("bytes=", StringComparison.Ordinal))[6..]);
-                var response3 = await output.BytesAsync(length, cancellation.Token);
-                input.Send("{\"cmd\":\"quit\"}");
-                await run;
-                Assert.Contains("FRAME id=3", header);
-                Assert.Equal(64 * 36 * 3 / 2, response3.Length);
-            }
-            finally
-            {
-                cancellation.Cancel();
-                await run.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
-            }
-            var entries = FakeLogFiles.ReadAllLines(log).Select(line => System.Text.Json.JsonDocument.Parse(line)).ToArray();
-            try
-            {
-                var request = entries.Select(x => x.RootElement).Single(x => x.GetProperty("cmd").GetString() == "run");
-                Assert.False(request.TryGetProperty("output_start_us", out _));
-                Assert.Contains(request.GetProperty("args").EnumerateArray(), x => x.GetString() == "--avs");
-            }
-            finally { foreach (var entry in entries) entry.Dispose(); }
-        }
-        finally { FakeLogFiles.Delete(log); }
     }
     private sealed class BlockingSource : IFrameNumberSource
     {
@@ -229,7 +196,7 @@ public sealed class AmatsukazeEngineTests
             var response11 = await output.BytesAsync(24);
             input.Send("{\"cmd\":\"quit\"}");
             await run;
-            Assert.Equal("AMTPREVIEW READY version=1", response8);
+            Assert.Equal("AMTPREVIEW READY version=2", response8);
             Assert.StartsWith("AMTPREVIEW INFO gen=1 frames=20", info);
             Assert.Contains("sarnum=4 sarden=3", info);
             Assert.Contains("id=4 gen=1 pos=6 type=30p dur=2 kept=1 format=yuv420p8", header);
@@ -256,7 +223,7 @@ public sealed class AmatsukazeEngineTests
         input.Send("{\"cmd\":\"quit\"}");
         await RunEngineAsync(engine, output);
 
-        Assert.Equal("AMTPREVIEW READY version=1", await output.LineAsync());
+        Assert.Equal("AMTPREVIEW READY version=2", await output.LineAsync());
         Assert.Equal(0, await output.ReadAsync(new byte[1]));
     }
 

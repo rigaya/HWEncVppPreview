@@ -12,7 +12,7 @@ public enum EncoderPreviewSeekPhase { Drag, Commit }
 /// <summary>操作の世代、表示の更新と処理状態。画像を保持しない。</summary>
 public sealed record EncoderPreviewState(long Generation, long ViewRevision, double CurrentSeconds,
     double? DurationSeconds, InputInfo? Input, EncoderPreviewDisplayMode DisplayMode, PreviewProgress Progress,
-    bool IsBusy, bool IsBeforeBusy, string? Error, string Diagnostics);
+    bool IsBusy, bool IsBeforeBusy, string? Error, string Diagnostics, bool BeforeUnavailable);
 
 /// <summary>表示スナップショットに属する、選択済みの画像と時刻。</summary>
 public sealed record EncoderPreviewFrame(Y4mFrame Frame, EncoderPreviewFrameTiming Timing, long Generation, bool IsProvisional = false);
@@ -48,9 +48,9 @@ public sealed partial class EncoderPreviewSession
 
     internal EncoderPreviewSession(TimeProvider clock, PreviewTimeouts timeouts, IPreviewBackend? backend,
         InputProbe? probe, TimeSpan? debounce, Func<string, string, CancellationToken, Task<string>>? readTextOverride,
-        IPreviewBackend? backgroundBackend = null)
+        IPreviewBackend? backgroundBackend = null, RawOwnershipScope? ownershipScope = null)
         : this(new HeadlessHost(), clock, timeouts, backend, backgroundBackend, probe, debounce, readTextOverride,
-            backend == null && backgroundBackend == null ? new RawOwnershipScope(new RawBufferPool()) : null)
+            ownershipScope ?? (backend == null && backgroundBackend == null ? new RawOwnershipScope(new RawBufferPool()) : null))
     {
     }
 
@@ -147,6 +147,7 @@ public sealed partial class EncoderPreviewSession
             if (host.DisplayMode != mode)
             {
                 host.DisplayMode = mode;
+                ++_viewRevision;
                 UpdateBeforeVisibility(mode != EncoderPreviewDisplayMode.After, mode == EncoderPreviewDisplayMode.Before);
                 if (mode == EncoderPreviewDisplayMode.Before && !_hasBeforeImage) PrioritizeBefore();
             }
@@ -168,22 +169,26 @@ public sealed partial class EncoderPreviewSession
     /// <summary>選択済み画像を取得する。指定した表示更新が失効していればnullを返す。</summary>
     /// <remarks>取得した画像はセッションの終了前に破棄する。</remarks>
     public Task<EncoderPreviewView?> AcquireViewAsync(long? revision = null, CancellationToken cancellationToken = default)
-        => DispatchOperationAsync<EncoderPreviewView?>(host =>
-        {
-            if (revision.HasValue && revision.Value != _viewRevision) return null;
-            var after = _hasAfterImage && _displayedFrame is { } currentAfter
-                ? new EncoderPreviewFrame(currentAfter, _afterPresentation, _afterPresentedGeneration) : null;
-            var before = _hasBeforeImage && _beforeDisplayedFrame is { } currentBefore
-                ? new EncoderPreviewFrame(currentBefore, _beforePresentation, _beforePresentedGeneration, _beforeProvisional) : null;
-            var frames = new[] { after?.Frame, before?.Frame }.OfType<Y4mFrame>().Distinct().ToArray();
-            var lease = RetainRawFrames(frames, "EncoderPreviewView");
-            return new(CaptureOperationState(host), after, before, lease);
-        }, cancellationToken);
+        => DispatchOperationAsync(host => revision.HasValue && revision.Value != _viewRevision
+            ? null : CaptureView(CaptureOperationState(host)), cancellationToken);
+
+    /// <summary>表示状態と同じ時点の画素を通知する。受け取り側が画像を破棄し、通知中は待機しない。</summary>
+    public event Action<EncoderPreviewView>? ViewChanged;
+
+    private EncoderPreviewView CaptureView(EncoderPreviewState state)
+    {
+        var after = _hasAfterImage && _displayedFrame is { } currentAfter
+            ? new EncoderPreviewFrame(currentAfter, _afterPresentation, _afterPresentedGeneration) : null;
+        var before = _hasBeforeImage && _beforeDisplayedFrame is { } currentBefore
+            ? new EncoderPreviewFrame(currentBefore, _beforePresentation, _beforePresentedGeneration, _beforeProvisional) : null;
+        var frames = new[] { after?.Frame, before?.Frame }.OfType<Y4mFrame>().Distinct().ToArray();
+        return new(state, after, before, RetainRawFrames(frames, "EncoderPreviewView"));
+    }
 
     private EncoderPreviewState CaptureOperationState(HeadlessHost host)
         => new(Volatile.Read(ref _generation), _viewRevision, CurrentSeconds,
             HasDuration ? DurationSeconds : null, _inputInfo, host.DisplayMode, host.Progress,
-            host.IsBusy, host.IsBeforeBusy, host.ErrorText, host.LogText);
+            host.IsBusy, host.IsBeforeBusy, host.ErrorText, host.LogText, _beforeUnavailableGeneration == _generation);
 
     private Task<T> DispatchOperationAsync<T>(Func<HeadlessHost, T> operation, CancellationToken cancellationToken)
     {
@@ -279,6 +284,17 @@ public sealed partial class EncoderPreviewSession
                 previous = state;
                 try { _owner.StateChanged?.Invoke(state); }
                 catch (Exception exception) { Trace.TraceError("プレビューの状態通知に失敗しました: {0}", exception); }
+                if (_owner.ViewChanged is not { } observers) continue;
+                foreach (Action<EncoderPreviewView> observer in observers.GetInvocationList())
+                {
+                    var view = _owner.CaptureView(state);
+                    try { observer(view); }
+                    catch (Exception exception)
+                    {
+                        view.Dispose();
+                        Trace.TraceError("プレビューの画像通知に失敗しました: {0}", exception);
+                    }
+                }
             }
         }
 

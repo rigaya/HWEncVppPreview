@@ -257,6 +257,38 @@ public sealed class StreamingControllerTests
     }
 
     [Fact]
+    public async Task 再読取の許可後に届いた古い停止通知は新しい需要を停止扱いにしない()
+    {
+        var reachedOldGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseOldNotification = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var backend = new StreamingBackend
+        {
+            BeforePauseNotificationAsync = async () =>
+            {
+                if (reachedOldGate.TrySetResult()) await releaseOldNotification.Task;
+            },
+        };
+        await using var controller = TestProcesses.CreateController(backend, debounce: TimeSpan.Zero);
+        var updates = new System.Collections.Concurrent.ConcurrentQueue<PreviewSegmentUpdate>();
+        controller.SegmentUpdated += updates.Enqueue;
+        controller.Submit(Request());
+        try
+        {
+            await reachedOldGate.Task;
+            controller.Submit(Request(11), navigation: true);
+        }
+        finally { releaseOldNotification.TrySetResult(); }
+
+        var oldPause = await backend.Pauses.Reader.ReadAsync();
+        Assert.True(oldPause.Gate.IsCompleted);
+        var newPause = await backend.Pauses.Reader.ReadAsync();
+        Assert.False(newPause.Gate.IsCompleted);
+        await controller.WaitForIdleAsync();
+        var update = Assert.Single(updates, value => value.Request.TargetSeconds == 11 && value.IsReadPaused);
+        Assert.Equal(1013, update.Segment.Frames[^1].Xts);
+    }
+
+    [Fact]
     public async Task KnownDurationReleasesFiniteTailGuardAtNaturalEnd()
     {
         var backend = new StreamingBackend { InputEndSeconds = 10.2, StepSeconds = 0.1 };
@@ -542,6 +574,7 @@ public sealed class StreamingControllerTests
         public Func<int, double>? FrameDurationForIndex { get; init; }
         public Func<int, Task>? BeforeFrameAsync { get; init; }
         public Func<Task>? BeforeFinishAsync { get; init; }
+        public Func<Task>? BeforePauseNotificationAsync { get; init; }
         public double? InputEndSeconds { get; init; }
         public bool IgnorePassthrough { get; init; }
         public List<PreviewRequest> Requests { get; } = new();
@@ -570,6 +603,8 @@ public sealed class StreamingControllerTests
                     var permission = sink.BeforeReadAsync(cancellationToken);
                     if (!permission.IsCompleted)
                     {
+                        if (BeforePauseNotificationAsync != null)
+                            await BeforePauseNotificationAsync().WaitAsync(cancellationToken);
                         sink.OnReadStateChanged(false);
                         Pauses.Writer.TryWrite(new(last, permission.AsTask()));
                     }

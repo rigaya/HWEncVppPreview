@@ -9,6 +9,9 @@ internal static class TestProcesses
         Action<ProcessStartInfo>? configureStartInfo = null)
         => new(PreviewTimeouts.Infinite, TimeProvider.System, restartPolicy, configureStartInfo);
 
+    internal static ServerBackend CreateServerBackendWithPeer(Func<string, IServerProcess> startProcess,
+        TimeProvider clock) => new(PreviewTimeouts.Infinite, clock, startProcess: startProcess);
+
     internal static InputProbe CreateInputProbe(Action<ProcessStartInfo>? configureStartInfo = null)
         => new(PreviewTimeouts.Infinite, TimeProvider.System, configureStartInfo);
 

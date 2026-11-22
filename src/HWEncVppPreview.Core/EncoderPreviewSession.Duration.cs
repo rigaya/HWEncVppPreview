@@ -57,6 +57,7 @@ public sealed partial class EncoderPreviewSession
         return true;
     }
 
+    private long _beforeUnavailableGeneration = -1;
     private bool _durationAfterSeen, _durationBeforeSeen, _durationBeforeUnavailable;
 
     private void QueueDurationAfterComparison(bool before, long generation)
@@ -69,6 +70,7 @@ public sealed partial class EncoderPreviewSession
     private void BeforeUnavailableForDuration()
     {
         _durationBeforeUnavailable = true;
+        _beforeUnavailableGeneration = _generation;
         TryQueueDuration();
     }
 

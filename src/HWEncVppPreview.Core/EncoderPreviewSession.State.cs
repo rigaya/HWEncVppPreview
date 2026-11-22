@@ -139,8 +139,15 @@ public sealed partial class EncoderPreviewSession
             lock (_taskLock) tasks = _tasks.ToArray();
             await Task.WhenAll(tasks).ConfigureAwait(false);
             await WaitForBackendIdleAsync().ConfigureAwait(false);
-            await PostAsync(() => { }).ConfigureAwait(false);
-            lock (_taskLock) { if (_tasks.Count == 0) return; }
+            bool idle = false;
+            await PostAsync(() =>
+            {
+                // 区間通知が集約中に次の通知を予約すると、1回の配送境界を越えてBeforeを始める。
+                lock (_taskLock)
+                    idle = _tasks.Count == 0 && (IsDisposed ||
+                        Volatile.Read(ref _pendingSegmentUpdate) == null && Volatile.Read(ref _segmentPostQueued) == 0);
+            }).ConfigureAwait(false);
+            if (idle) return;
         }
     }
 

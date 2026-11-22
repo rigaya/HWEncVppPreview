@@ -51,3 +51,20 @@ HWEncVppPreview.Cli --check-help --help-file <保存済みhelp> [--watchdog-seco
 stdoutは成功・失敗ともJSON1行で、欠落名や縮退したoption・param名を省略せずに返す。
 終了コードは全件合格0、スキーマの検査失敗1、用法エラー2、読取・起動・子の異常終了・期限超過3。
 `encoderExitCode`、`timedOut`、`stderrTail`、`cleanupError`で実行失敗と検査失敗を区別できる。
+
+## Amatsukazeエンジンモード
+
+`--amatsukaze-engine --tmp <作業ディレクトリ> --amatsukaze-dir <exe_files> --qsvenc <実行ファイル>`で起動すると、標準入力からUTF-8のJSONを1行ずつ受け取り、標準出力で`AMTPREVIEW READY version=2`を返します。NVEncとVCEEncはそれぞれ`--nvenc`と`--vceenc`で指定します。AviSynthフィルタの`kind:"avs"`、`frame`、`INFO`、`FRAME`の形式は従来のままです。
+
+エンコーダフィルタでは`config`で`kind:"encoder"`と`encoder`、`vpp`などの設定を送り、`INFO`で入力形式と既知の場合は`durationSeconds`を受け取ります。入力は作業ディレクトリの`filter_preview/src.avs`です。
+
+| `cmd:"view"`の`op` | 引数 |
+| --- | --- |
+| `seek` | 入力先頭基準の`seconds`。ドラッグ中は`phase:"drag"`、確定時は`phase:"commit"`（既定）。 |
+| `step` | `direction:"previous"`または`"next"`。 |
+| `display` | `mode:"after"`、`"before"`、`"split"`、`"sideBySide"`。 |
+| `snapshot` | 表示済み画像の再転送。現在の表示を使う場合は`revision`を省略。 |
+
+各`view`には`id`と設定の`gen`を指定します。画像は`format`（`yuv`、`png`、`jpeg`）、`scale`、`crop`を指定できます。応答には`VIEW id=... gen=... revision=... metaBytes=... bytes=...`に続き、指定長のUTF-8 JSONと、メタデータの`frames`の順の画像バイト列が含まれます。フレーム個別のバイト数は`frames[].bytes`です。`currentSeconds`は操作カーソル、`frames[].inputSeconds`は選択画像の入力相対時刻、`xts`と`xdur`は出力の生値です。比較画像は先に揃った側から複数の`VIEW`で返ることがあり、`provisional`は暫定画像を示します。
+
+終端は`DONE`（`ok`、`start`、`end`、`ignored`、`superseded`、`partial`、`targetNotReached`のいずれか）または`ERROR`です。`cancel`で指定IDの送出を取り消せます。すでに始まったバイナリレコードは最後まで読み取ってください。エラーやエンコーダの診断は標準エラーに出力します。
