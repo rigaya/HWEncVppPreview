@@ -349,7 +349,6 @@ public sealed class StreamingNavigationTests
             await clock.GraceArmed.Task;
             clock.Advance(TimeSpan.FromSeconds(2));
             await backend.Aborted.Task;
-            await clock.RemainingArmed.Task;
             clock.Advance(TimeSpan.FromSeconds(3));
             // Coreが期限で放棄したRunをVMのIdle待ちから再び無期限に待たない。
             await dispose;
@@ -1079,7 +1078,6 @@ public sealed class StreamingNavigationTests
     {
         private readonly FakeTimeProvider _clock = new();
         public TaskCompletionSource GraceArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource RemainingArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource VmDeadlineArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public override long TimestampFrequency => _clock.TimestampFrequency;
         public override long GetTimestamp() => _clock.GetTimestamp();
@@ -1089,7 +1087,6 @@ public sealed class StreamingNavigationTests
         {
             var timer = _clock.CreateTimer(callback, state, dueTime, period);
             if (dueTime == TimeSpan.FromSeconds(2)) GraceArmed.TrySetResult();
-            if (dueTime == TimeSpan.FromSeconds(3)) RemainingArmed.TrySetResult();
             if (dueTime == vmDeadline) VmDeadlineArmed.TrySetResult();
             return timer;
         }

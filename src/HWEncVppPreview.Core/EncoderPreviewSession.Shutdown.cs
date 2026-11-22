@@ -36,7 +36,7 @@ public sealed partial class EncoderPreviewSession
         DropRawPosts(_ => true);
         IsInitialized = false;
         Interlocked.Increment(ref _generation);
-        var deadline = new CleanupDeadline(_clock, _timeouts.ViewModelDispose);
+        using var deadline = new ShutdownDeadline(_clock, _timeouts.ViewModelDispose);
         Task cancellations = Task.Run(() =>
         {
             if (CancelEncoderInitialization() is { } initialization) Track(initialization);
@@ -123,19 +123,9 @@ public sealed partial class EncoderPreviewSession
         AssertOwnedRawReleased();
         TraceDisposeStage(Volatile.Read(ref _shutdownIncomplete) == 0 ? "complete" : "incomplete");
     }
-    private async Task WaitForVmShutdownAsync(Task task, CleanupDeadline deadline, string stage)
+    private async Task WaitForVmShutdownAsync(Task task, ShutdownDeadline deadline, string stage)
     {
-        try
-        {
-            if (task.IsCompleted)
-            {
-                await task.ConfigureAwait(false);
-                return;
-            }
-            TimeSpan remaining = deadline.Remaining;
-            if (remaining == TimeSpan.Zero) throw new TimeoutException();
-            await task.WaitAsync(remaining, _clock).ConfigureAwait(false);
-        }
+        try { await deadline.WaitAsync(task).ConfigureAwait(false); }
         catch (Exception exception)
         {
             Interlocked.Exchange(ref _shutdownIncomplete, 1);

@@ -119,6 +119,29 @@ internal sealed class CleanupDeadline(TimeProvider clock, TimeSpan timeout)
     }
 }
 
+/// <summary>終了の全段階で開始時に登録した総期限を共有する。</summary>
+internal sealed class ShutdownDeadline : IDisposable
+{
+    private readonly CancellationTokenSource _timer = new();
+    internal Task Expiration { get; }
+
+    internal ShutdownDeadline(TimeProvider clock, TimeSpan timeout)
+        => Expiration = Task.Delay(timeout, clock, _timer.Token);
+
+    internal async Task WaitAsync(Task task)
+    {
+        if (!task.IsCompleted && await Task.WhenAny(task, Expiration).ConfigureAwait(false) != task && !task.IsCompleted)
+            throw new TimeoutException();
+        await task.ConfigureAwait(false);
+    }
+
+    public void Dispose()
+    {
+        _timer.Cancel();
+        _timer.Dispose();
+    }
+}
+
 /// <summary>パーサの読み取りより下で、実際のパイプ受信を監視する。</summary>
 internal sealed class ProgressReadStream(Stream inner, Action onOutput) : Stream
 {

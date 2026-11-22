@@ -640,13 +640,13 @@ public sealed partial class PreviewController : IAsyncDisposable
             _disposed = true;
             ++_version;
             TraceDispose("enter", new { tasks = _tasks.Count });
-            long started = _clock.GetTimestamp();
+            var deadline = new ShutdownDeadline(_clock, _disposeTimeout);
             // 同期cancel callbackがUIやdriverの待ちに入っても、終了期限の監視を止めない。
             Task[] cancellations = new[] { _auxiliaryLifetime, _scheduled, _backgroundScheduled, _active, _backgroundActive, _stream?.Cancellation, _reversePrefetch?.Cancellation }
                 .Where(source => source != null).Distinct().Select(source => source!.CancelAsync()).ToArray();
             _streamStateChanged.TrySetResult();
             TraceDispose("cancelled");
-            _disposeTask = DisposeCoreAsync(_tasks.ToArray(), cancellations, started);
+            _disposeTask = DisposeCoreAsync(_tasks.ToArray(), cancellations, deadline);
             return new(_disposeTask);
         }
     }
@@ -693,20 +693,20 @@ public sealed partial class PreviewController : IAsyncDisposable
         PerfTrace.Flush();
     }
 
-    private async Task DisposeCoreAsync(Task[] tasks, Task[] cancellations, long started)
+    private async Task DisposeCoreAsync(Task[] tasks, Task[] cancellations, ShutdownDeadline deadline)
     {
+        using var shutdownDeadline = deadline;
         // 呼出元UIのpumpが止まっても、終了期限の監視とbackend回収を開始する。
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         Task finished = Task.WhenAll(tasks);
         Task cooperative = Task.WhenAll(cancellations.Append(finished));
-        TimeSpan grace = CleanupDeadline.Shorter(_disposeGrace, Remaining(started));
-        TraceDispose("grace_begin", new { tasks = tasks.Length, milliseconds = grace.TotalMilliseconds });
-        if (grace == Timeout.InfiniteTimeSpan)
-            await Task.WhenAny(cooperative).ConfigureAwait(false);
-        else if (!cooperative.IsCompleted && grace > TimeSpan.Zero)
+        TraceDispose("grace_begin", new { tasks = tasks.Length, milliseconds = _disposeGrace.TotalMilliseconds });
+        if (_disposeGrace == Timeout.InfiniteTimeSpan)
+            await Task.WhenAny(cooperative, deadline.Expiration).ConfigureAwait(false);
+        else if (!cooperative.IsCompleted && !deadline.Expiration.IsCompleted && _disposeGrace > TimeSpan.Zero)
         {
             using var timer = new CancellationTokenSource();
-            await Task.WhenAny(cooperative, Task.Delay(grace, _clock, timer.Token)).ConfigureAwait(false);
+            await Task.WhenAny(cooperative, deadline.Expiration, Task.Delay(_disposeGrace, _clock, timer.Token)).ConfigureAwait(false);
             await timer.CancelAsync().ConfigureAwait(false);
         }
         TraceDispose("grace_end", new { completed = cooperative.IsCompleted });
@@ -722,36 +722,25 @@ public sealed partial class PreviewController : IAsyncDisposable
             {
                 TraceDispose("backend_abort_begin", new { index, backend = backend.GetType().Name });
                 await WaitForShutdownAsync(Task.Run(async () => await backend.AbortAsync().ConfigureAwait(false)),
-                    started, $"backend_abort_{index}").ConfigureAwait(false);
+                    deadline, $"backend_abort_{index}").ConfigureAwait(false);
                 TraceDispose("backend_abort_end", new { index });
             }
             TraceDispose("backend_dispose_begin", new { index, backend = backend.GetType().Name });
             await WaitForShutdownAsync(Task.Run(async () => await backend.DisposeAsync().ConfigureAwait(false)),
-                started, $"backend_dispose_{index}").ConfigureAwait(false);
+                deadline, $"backend_dispose_{index}").ConfigureAwait(false);
             TraceDispose("backend_dispose_end", new { index });
         })).ToArray();
         await Task.WhenAll(cleanup).ConfigureAwait(false);
-        await WaitForShutdownAsync(cooperative, started, "tasks").ConfigureAwait(false);
+        await WaitForShutdownAsync(cooperative, deadline, "tasks").ConfigureAwait(false);
         // 期限後に実行が戻ってもfinallyのReleaseを壊さない。実行完了まではsemaphoreを残す。
         if (finished.IsCompleted) ReleaseExecutionResources();
         else _ = ReleaseExecutionResourcesLaterAsync(finished);
         TraceDispose("complete", new { incomplete = ShutdownIncomplete });
     }
 
-    private TimeSpan Remaining(long started) => CleanupDeadline.RemainingSince(_clock, started, _disposeTimeout);
-
-    private async Task WaitForShutdownAsync(Task task, long started, string stage)
+    private async Task WaitForShutdownAsync(Task task, ShutdownDeadline deadline, string stage)
     {
-        try
-        {
-            if (!task.IsCompleted)
-            {
-                TimeSpan remaining = Remaining(started);
-                if (remaining == TimeSpan.Zero) throw new TimeoutException();
-                await task.WaitAsync(remaining, _clock).ConfigureAwait(false);
-            }
-            else await task.ConfigureAwait(false);
-        }
+        try { await deadline.WaitAsync(task).ConfigureAwait(false); }
         catch (Exception exception)
         {
             Interlocked.Exchange(ref _shutdownIncomplete, 1);

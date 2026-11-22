@@ -6,6 +6,7 @@ namespace HWEncVppPreview.Tests;
 public sealed class DisposeCooperationTests
 {
     private static readonly TimeSpan Grace = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(1);
     private static PreviewRequest Request(bool continuous = false) => new()
     {
         EncoderPath = "dispose-stub", InputFile = "input", Fps = 2,
@@ -16,8 +17,8 @@ public sealed class DisposeCooperationTests
     public async Task CooperativeCancellationDoesNotNeedForcedAbort()
     {
         var backend = new ControlledBackend();
-        var clock = new DisposalClock();
-        var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero, disposeGrace: Grace);
+        var clock = new FakeTimeProvider();
+        var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero, disposeGrace: Grace, disposeTimeout: Deadline);
         try
         {
             controller.Submit(Request());
@@ -34,14 +35,16 @@ public sealed class DisposeCooperationTests
     public async Task IgnoredCancellationAbortsOnlyAfterFakeClockGrace()
     {
         var backend = new ControlledBackend(ignoreCancellation: true);
-        var clock = new DisposalClock();
-        var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero, disposeGrace: Grace);
+        var clock = new FakeTimeProvider();
+        var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero, disposeGrace: Grace, disposeTimeout: Deadline);
         try
         {
             controller.Submit(Request());
             await backend.Started.Task;
+            var timers = clock.ObserveTimers();
             Task dispose = controller.DisposeAsync().AsTask();
-            await clock.GraceArmed.Task;
+            Assert.Equal(Deadline, await timers.ReadAsync());
+            Assert.Equal(Grace, await timers.ReadAsync());
             await backend.CancellationStarted.Task;
             Assert.True(backend.Cancelled);
             clock.Advance(Grace);
@@ -57,17 +60,19 @@ public sealed class DisposeCooperationTests
     {
         var foreground = new ControlledBackend();
         var background = new ControlledBackend(ignoreCancellation: true);
-        var clock = new DisposalClock();
+        var clock = new FakeTimeProvider();
         var controller = new PreviewController(foreground, backgroundBackend: background, timeProvider: clock,
-            debounce: TimeSpan.Zero, disposeGrace: Grace);
+            debounce: TimeSpan.Zero, disposeGrace: Grace, disposeTimeout: Deadline);
         try
         {
             controller.Submit(Request(continuous: true));
             await foreground.Paused.Task;
             controller.Submit(Request() with { VppArgs = new[] { "before" } }, background: true);
             await background.Started.Task;
+            var timers = clock.ObserveTimers();
             Task dispose = controller.DisposeAsync().AsTask();
-            await clock.GraceArmed.Task;
+            Assert.Equal(Deadline, await timers.ReadAsync());
+            Assert.Equal(Grace, await timers.ReadAsync());
             await foreground.Running!;
             clock.Advance(Grace);
             await dispose;
@@ -84,17 +89,19 @@ public sealed class DisposeCooperationTests
     {
         var foreground = new ControlledBackend();
         var background = new ControlledBackend(ignoreCancellation: true, blockAbort: true);
-        var clock = new DisposalClock();
+        var clock = new FakeTimeProvider();
         var controller = new PreviewController(foreground, backgroundBackend: background, timeProvider: clock,
-            debounce: TimeSpan.Zero, disposeGrace: Grace);
+            debounce: TimeSpan.Zero, disposeGrace: Grace, disposeTimeout: Deadline);
         try
         {
             controller.Submit(Request(continuous: true));
             await foreground.Paused.Task;
             controller.Submit(Request() with { VppArgs = new[] { "before" } }, background: true);
             await background.Started.Task;
+            var timers = clock.ObserveTimers();
             Task dispose = controller.DisposeAsync().AsTask();
-            await clock.GraceArmed.Task;
+            Assert.Equal(Deadline, await timers.ReadAsync());
+            Assert.Equal(Grace, await timers.ReadAsync());
             await foreground.Running!;
             clock.Advance(Grace);
             await background.AbortStarted.Task;
@@ -112,16 +119,18 @@ public sealed class DisposeCooperationTests
     public async Task MultipleDisposeCallsShareOneShutdown()
     {
         var backend = new ControlledBackend(ignoreCancellation: true);
-        var clock = new DisposalClock();
-        var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero, disposeGrace: Grace);
+        var clock = new FakeTimeProvider();
+        var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero, disposeGrace: Grace, disposeTimeout: Deadline);
         try
         {
             controller.Submit(Request());
             await backend.Started.Task;
+            var timers = clock.ObserveTimers();
             Task first = controller.DisposeAsync().AsTask();
             Task second = controller.DisposeAsync().AsTask();
             Assert.Same(first, second);
-            await clock.GraceArmed.Task;
+            Assert.Equal(Deadline, await timers.ReadAsync());
+            Assert.Equal(Grace, await timers.ReadAsync());
             clock.Advance(Grace);
             await Task.WhenAll(first, second);
             Assert.Equal(1, backend.Aborts);
@@ -134,17 +143,19 @@ public sealed class DisposeCooperationTests
     public async Task UnresponsiveAbortAndRunReturnAtOverallDeadlineAndAllowLateRelease()
     {
         var backend = new ControlledBackend(ignoreCancellation: true, blockAbort: true);
-        var clock = new DisposalClock();
+        var clock = new FakeTimeProvider();
         var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero,
-            disposeGrace: Grace, disposeTimeout: TimeSpan.FromSeconds(1));
+            disposeGrace: Grace, disposeTimeout: Deadline);
         controller.Submit(Request());
         await backend.Started.Task;
+        var timers = clock.ObserveTimers();
         Task dispose = controller.DisposeAsync().AsTask();
-        await clock.GraceArmed.Task;
+        Assert.Equal(Deadline, await timers.ReadAsync());
+        Assert.Equal(Grace, await timers.ReadAsync());
         clock.Advance(Grace);
         await backend.AbortStarted.Task;
-        await clock.DeadlineArmed.Task;
-        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.False(dispose.IsCompleted);
+        clock.Advance(Deadline - Grace);
         await dispose;
         Assert.True(controller.ShutdownIncomplete);
         // Disposeが期限で戻った後でも、実行finallyのsemaphore.Releaseは成功する。
@@ -158,15 +169,17 @@ public sealed class DisposeCooperationTests
     public async Task UnresponsiveBackendDisposeReturnsAtOverallDeadline()
     {
         var backend = new ControlledBackend(blockDispose: true);
-        var clock = new DisposalClock();
+        var clock = new FakeTimeProvider();
         var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero,
-            disposeGrace: Grace, disposeTimeout: TimeSpan.FromSeconds(1));
+            disposeGrace: Grace, disposeTimeout: Deadline);
         controller.Submit(Request());
         await backend.Started.Task;
+        var timers = clock.ObserveTimers();
         Task dispose = controller.DisposeAsync().AsTask();
+        Assert.Equal(Deadline, await timers.ReadAsync());
         await backend.Disposed.Task;
-        await clock.DeadlineArmed.Task;
-        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.False(dispose.IsCompleted);
+        clock.Advance(Deadline);
         await dispose;
         Assert.True(controller.ShutdownIncomplete);
         Assert.Equal(0, backend.Aborts);
@@ -177,19 +190,24 @@ public sealed class DisposeCooperationTests
     public async Task BlockingCancellationCallbackCannotBlockDisposeDeadline()
     {
         var backend = new ControlledBackend(blockCancellation: true);
-        var clock = new DisposalClock();
+        var clock = new FakeTimeProvider();
         var controller = new PreviewController(backend, timeProvider: clock, debounce: TimeSpan.Zero,
-            disposeGrace: Grace, disposeTimeout: TimeSpan.FromSeconds(1));
+            disposeGrace: Grace, disposeTimeout: Deadline);
         controller.Submit(Request());
         await backend.Started.Task;
+        var timers = clock.ObserveTimers();
         Task dispose = controller.DisposeAsync().AsTask();
         try
         {
+            // 総期限は終了を呼び出した時点で登録され、後続の段階で登録し直さない。
+            Assert.True(timers.TryRead(out TimeSpan armedDeadline));
+            Assert.Equal(Deadline, armedDeadline);
             await backend.CancellationStarted.Task;
-            await clock.GraceArmed.Task;
+            Assert.Equal(Grace, await timers.ReadAsync());
             clock.Advance(Grace);
-            await clock.DeadlineArmed.Task;
-            clock.Advance(TimeSpan.FromSeconds(1));
+            await backend.Disposed.Task;
+            Assert.False(dispose.IsCompleted);
+            clock.Advance(Deadline - Grace);
             await dispose;
             Assert.True(controller.ShutdownIncomplete);
         }
@@ -231,24 +249,6 @@ public sealed class DisposeCooperationTests
         { _queue.Enqueue((callback, state)); Posted.TrySetResult(); }
         public void Drain()
         { while (_queue.TryDequeue(out var item)) item.Callback(item.State); }
-    }
-
-    private sealed class DisposalClock : TimeProvider
-    {
-        private readonly FakeTimeProvider _clock = new();
-        public TaskCompletionSource DeadlineArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource GraceArmed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public override long TimestampFrequency => _clock.TimestampFrequency;
-        public override long GetTimestamp() => _clock.GetTimestamp();
-        public override DateTimeOffset GetUtcNow() => _clock.GetUtcNow();
-        public void Advance(TimeSpan delta) => _clock.Advance(delta);
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            ITimer timer = _clock.CreateTimer(callback, state, dueTime, period);
-            if (dueTime == Grace) GraceArmed.TrySetResult();
-            if (dueTime > Grace && dueTime <= TimeSpan.FromSeconds(1) && period == Timeout.InfiniteTimeSpan) DeadlineArmed.TrySetResult();
-            return timer;
-        }
     }
 
     private sealed class ControlledBackend(bool ignoreCancellation = false, bool blockAbort = false, bool blockDispose = false, bool blockCancellation = false) : IPreviewBackend
