@@ -22,7 +22,7 @@ public sealed partial class EncoderPreviewSession
         RefreshBeforeSegmentProtection();
     }
 
-    private void RefreshBeforeSegmentProtection()
+    internal void RefreshBeforeSegmentProtection()
     {
         bool visible = _beforeEnabled && _beforeVisible;
         // 同じ取得区間を共有する元画像では、後処理画像の保護だけを使って従来の回収順を保つ。

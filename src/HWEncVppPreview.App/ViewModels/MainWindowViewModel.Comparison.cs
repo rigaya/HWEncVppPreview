@@ -27,9 +27,12 @@ public sealed partial class MainWindowViewModel
         set
         {
             var normalized = value is PreviewCompareMode.Split or PreviewCompareMode.SideBySide ? value : PreviewCompareMode.Single;
-            if (!SetProperty(ref _compareMode, normalized)) return;
+            if (_compareMode == normalized) return;
+            _compareMode = normalized;
+            _session.SetBeforeVisibility(_compareMode != PreviewCompareMode.Single || _isShowingBefore, _isShowingBefore);
+            OnPropertyChanged();
             if (normalized != PreviewCompareMode.Single) IsShowingBefore = false;
-            _session.UpdateBeforeVisibility(CompareMode != PreviewCompareMode.Single || IsShowingBefore, IsShowingBefore);
+            _session.RefreshBeforeSegmentProtection();
         }
     }
     public bool IsShowingBefore
@@ -37,9 +40,14 @@ public sealed partial class MainWindowViewModel
         get => _isShowingBefore;
         set
         {
-            if (!SetProperty(ref _isShowingBefore, value && CompareMode == PreviewCompareMode.Single)) return;
+            bool showing = value && CompareMode == PreviewCompareMode.Single;
+            if (_isShowingBefore == showing) return;
+            _isShowingBefore = showing;
+            // 変更通知から別の操作が呼ばれても、セッションは新しい表示状態を使う。
+            _session.SetBeforeVisibility(_compareMode != PreviewCompareMode.Single || _isShowingBefore, _isShowingBefore);
+            OnPropertyChanged();
             RefreshColorInfo();
-            _session.UpdateBeforeVisibility(CompareMode != PreviewCompareMode.Single || IsShowingBefore, IsShowingBefore);
+            _session.RefreshBeforeSegmentProtection();
             if (_isShowingBefore && BeforeImage == null) _session.PrioritizeBefore();
         }
     }
@@ -49,10 +57,11 @@ public sealed partial class MainWindowViewModel
         get => _beforeImage;
         set
         {
-            if (value == null) _session.ClearBeforePresentation();
+            if (value == null) _session.InvalidateBeforePresentation();
             var previous = _beforeImage;
             if (!SetProperty(ref _beforeImage, value)) return;
             previous?.Dispose();
+            if (value == null) _session.ReleaseBeforePresentationPixels();
             RefreshColorInfo();
         }
     }

@@ -57,11 +57,21 @@ public sealed partial class EncoderPreviewSession
         if (_usesOwnedRaw) SetRawFrame(ref _displayedFrame, ref _displayedRaw, null, "VmDisplayed");
     }
 
-    internal void ClearBeforePresentation()
+    private void ClearBeforePresentation()
+    {
+        InvalidateBeforePresentation();
+        ReleaseBeforePresentationPixels();
+    }
+
+    internal void InvalidateBeforePresentation()
     {
         SelectBeforePresentationSegment(null);
         if (_hasBeforeImage) ++_viewRevision;
         _hasBeforeImage = false;
+    }
+
+    internal void ReleaseBeforePresentationPixels()
+    {
         if (_usesOwnedRaw) ClearBeforeDisplayedRaw();
     }
 

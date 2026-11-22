@@ -1,4 +1,5 @@
 using HWEncVppPreview.Core;
+using HWEncVppPreview.Testing;
 
 namespace HWEncVppPreview.Tests;
 
@@ -8,7 +9,8 @@ public sealed class EncoderPreviewSessionTests
     public async Task 画面なしで実出力の隣へ進み選択時刻と画像を取り出せる()
     {
         var backend = new VariableRateBackend();
-        var probe = new InputProbe(PreviewTimeouts.Infinite, TimeProvider.System, backend: new VariableRateBackend());
+        var probe = TestProcesses.CreateDurationProbe(PreviewTimeouts.Infinite, TimeProvider.System, new VariableRateBackend(),
+            (_, _) => throw new InvalidOperationException("入力検査が長さを返すため、別プロセスは起動しません。"));
         await using var session = new EncoderPreviewSession(TimeProvider.System, PreviewTimeouts.Infinite,
             backend, probe, TimeSpan.Zero, (_, _, _) => Task.FromResult("QSVEnc 8.38"));
 

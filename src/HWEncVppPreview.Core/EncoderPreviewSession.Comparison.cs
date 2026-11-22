@@ -18,11 +18,16 @@ public sealed partial class EncoderPreviewSession
     private static readonly TimeSpan BeforeQuietPeriod = TimeSpan.FromMilliseconds(300);
 
 
-    internal void UpdateBeforeVisibility(bool visible, bool showingBefore)
+    private void UpdateBeforeVisibility(bool visible, bool showingBefore)
+    {
+        SetBeforeVisibility(visible, showingBefore);
+        RefreshBeforeSegmentProtection();
+    }
+
+    internal void SetBeforeVisibility(bool visible, bool showingBefore)
     {
         _beforeVisible = visible;
         _isShowingBefore = showingBefore;
-        RefreshBeforeSegmentProtection();
     }
 
     internal void PrioritizeBefore()
