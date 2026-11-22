@@ -2,14 +2,14 @@ using System.Diagnostics;
 
 namespace HWEncVppPreview.Core;
 
-internal sealed record EncoderPreviewConfiguration(string Encoder, string Input,
+public sealed record EncoderPreviewConfiguration(string Encoder, string Input,
     IReadOnlyList<string> InputArgs, IReadOnlyList<string> VppArgs);
 
 internal sealed record EncoderPreviewMetadata(string Version, string Help, HelpIndex HelpIndex,
     PreviewCapabilities Capabilities);
 
 /// <summary>エンコーダプレビューの入力検査と論理要求を管理する。</summary>
-public sealed partial class EncoderPreviewSession
+public sealed partial class EncoderPreviewSession : IAsyncDisposable
 {
     private readonly TimeProvider _clock;
     private readonly PreviewTimeouts _timeouts;
@@ -17,7 +17,7 @@ public sealed partial class EncoderPreviewSession
     private readonly bool _borrowInputProbe;
     private readonly Func<string, string, CancellationToken, Task<string>>? _readTextOverride;
 
-    internal PreviewController Controller { get; }
+    private PreviewController Controller { get; }
 
     internal EncoderPreviewSession(TimeProvider clock, PreviewTimeouts timeouts, IPreviewBackend? backend,
         IPreviewBackend? backgroundBackend, FrameCache cache, RawOwnershipScope? ownershipScope,
@@ -29,6 +29,7 @@ public sealed partial class EncoderPreviewSession
         _beforeEnabled = beforeEnabled;
         _post = post;
         _cache = cache;
+        _rawOwnershipScope = ownershipScope;
         _usesOwnedRaw = ownershipScope != null;
         _clock = clock;
         _timeouts = timeouts;
@@ -40,9 +41,64 @@ public sealed partial class EncoderPreviewSession
             backend == null ? new ObservedBackend(new ServerBackend(timeouts, clock), this) : observed;
         Controller = new PreviewController(timeouts, clock, observed, cache, debounce: debounce,
             backgroundBackend: before, ownershipScope: ownershipScope);
+        Controller.ReplayStarted += OnReplayStarted;
+        if (_usesOwnedRaw)
+        {
+            Controller.OwnedSegmentUpdated += OnOwnedSegmentUpdated;
+            Controller.OwnedFrameReady += OnOwnedFrameReady;
+            Controller.OwnedCompleted += OnOwnedCompleted;
+        }
+        else
+        {
+            Controller.SegmentUpdated += OnSegmentUpdated;
+            Controller.FrameReady += OnFrameReady;
+            Controller.Completed += OnCompleted;
+        }
+        Controller.Failed += OnFailed;
     }
 
-    internal async Task<EncoderPreviewMetadata> ReadMetadataAsync(string encoder, CancellationToken token)
+    private async Task LoadMetadataAsync(string encoder, CancellationToken token)
+    {
+        try
+        {
+            var metadata = await ReadMetadataAsync(encoder, token).ConfigureAwait(false);
+            await PostAsync(() =>
+            {
+                if (IsDisposed || _host.EncoderPath != encoder) return;
+                _host.ApplyMetadata(encoder, metadata);
+                _capabilities = metadata.Capabilities;
+                CancelEncoderInitializationTracked();
+                Track(StartEncoderInitialization(encoder, _lifetime.Token));
+                _host.MetadataReady();
+            }).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            await PostAsync(() =>
+            {
+                if (IsDisposed || _host.EncoderPath != encoder) return;
+                _metadataEncoder = "";
+                _capabilities = new();
+                _host.MetadataUnavailable(exception.Message);
+            }).ConfigureAwait(false);
+        }
+    }
+
+    internal void ClearMetadata()
+    {
+        _metadataEncoder = "";
+        _capabilities = new();
+    }
+
+    internal void CancelEncoderInitializationTracked()
+    {
+        if (CancelEncoderInitialization() is { } cancellation) Track(cancellation);
+    }
+
+    internal Task WaitForBackendIdleAsync() => Controller.WaitForIdleAsync();
+
+    private async Task<EncoderPreviewMetadata> ReadMetadataAsync(string encoder, CancellationToken token)
     {
         string version = await ReadTextAsync(encoder, "--version", token).ConfigureAwait(false);
         string help = await ReadTextAsync(encoder, "--help", token).ConfigureAwait(false);

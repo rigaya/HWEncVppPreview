@@ -21,9 +21,9 @@ public sealed partial class EncoderPreviewSession
             // END先着と目標変更をUIで再確認し、古い候補を最新の画像へ戻さない。
             if (!IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)
                 || Volatile.Read(ref context.BeforeCompletionReceived) != 0
-                || Math.Abs(_host.CurrentSeconds - value.Request.TargetSeconds) > EarlyBeforeTargetToleranceSeconds) return;
+                || Math.Abs(CurrentSeconds - value.Request.TargetSeconds) > EarlyBeforeTargetToleranceSeconds) return;
             context.BeforeEarlyFrame = value.Frame;
-            context.BeforeEarlyTarget = _host.CurrentSeconds;
+            context.BeforeEarlyTarget = CurrentSeconds;
             DisplayBeforeFrame(value.Frame, Volatile.Read(ref _generation), revisionContext: context,
                 sourceSegment: segment, earlyDisplay: true);
         });
@@ -35,14 +35,14 @@ public sealed partial class EncoderPreviewSession
     {
         var early = context.BeforeEarlyFrame;
         if (early == null) return false;
-        bool applied = _host.HasBeforeImage && ReferenceEquals(_host.BeforeDisplayedFrame, early);
+        bool applied = _hasBeforeImage && ReferenceEquals(_beforeDisplayedFrame, early);
         bool same = applied && ReferenceEquals(frame, early);
-        bool targetChanged = Math.Abs(context.BeforeEarlyTarget - _host.CurrentSeconds) > EarlyBeforeTargetToleranceSeconds;
+        bool targetChanged = Math.Abs(context.BeforeEarlyTarget - CurrentSeconds) > EarlyBeforeTargetToleranceSeconds;
         string reason = context.BeforeEarlyFallbackReason ?? (targetChanged ? "目標時刻が変わった"
             : same ? "早期画像と最終選択が一致した" : applied ? "完了時の最終選択が異なった" : "早期画像は未適用");
         if (PerfTrace.Enabled)
         {
-            var data = new { context.Generation, context.Request.CorrelationId, target = _host.CurrentSeconds,
+            var data = new { context.Generation, context.Request.CorrelationId, target = CurrentSeconds,
                 earlyTarget = context.BeforeEarlyTarget, oldFrameId = early.FrameId, oldXts = early.Xts,
                 oldXdur = early.Xdur, newFrameId = frame.FrameId, newXts = frame.Xts, newXdur = frame.Xdur,
                 applied, same, reason };
@@ -52,6 +52,11 @@ public sealed partial class EncoderPreviewSession
         context.BeforeEarlyFrame = null;
         // 既表示の一枚なら変換だけ省き、ENDで保存した正区間への保護を必ず引き継ぐ。
         if (!same || targetChanged) return false;
+        if (_beforeProvisional)
+        {
+            _beforeProvisional = false;
+            ++_viewRevision;
+        }
         Interlocked.Increment(ref _beforeImageGeneration);
         SelectBeforePresentationSegment(_beforeIntervalSegment?.SegmentId, frame.FrameId);
         _host.IsBeforeBusy = false;

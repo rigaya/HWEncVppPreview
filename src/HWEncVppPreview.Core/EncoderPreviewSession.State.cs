@@ -13,12 +13,12 @@ public sealed partial class EncoderPreviewSession
         SetRawAnchor(ref _navigationAnchor, ref _anchorRaw, null);
     }
 
-    internal bool IsCurrent(long generation) => !_host.IsDisposed && generation == Volatile.Read(ref _generation);
+    internal bool IsCurrent(long generation) => !IsDisposed && generation == Volatile.Read(ref _generation);
     internal bool IsCurrent(RequestContext context) => context.Kind == RequestKind.Before
-        ? !_host.IsDisposed && context.EditEpoch == Volatile.Read(ref _editEpoch)
+        ? !IsDisposed && context.EditEpoch == Volatile.Read(ref _editEpoch)
             && ReferenceEquals(Volatile.Read(ref _beforeExecutionContext), context)
             && context.BeforeCancellation?.IsCancellationRequested != true
-        : !_host.IsDisposed && context.EditEpoch == Volatile.Read(ref _editEpoch) && context.Generation >= _lastDisplayedAfter;
+        : !IsDisposed && context.EditEpoch == Volatile.Read(ref _editEpoch) && context.Generation >= _lastDisplayedAfter;
     internal RequestContext? ContextFor(PreviewRequest request)
     {
         if (_afterRequests.TryGetValue(request.CorrelationId, out var after) && SameRequest(after.Request, request)) return after;
@@ -52,32 +52,96 @@ public sealed partial class EncoderPreviewSession
         _post(() => { try { action(); completion.TrySetResult(); } catch (Exception exception) { completion.TrySetException(exception); } });
         return completion.Task;
     }
-    internal long _generation;
-    internal RequestContext? _context;
-    internal InputInfo? _inputInfo;
-    internal string _metadataEncoder = "";
-    internal PreviewRequest? _intervalRequest, _intervalLogicalRequest;
-    internal IReadOnlyList<Y4mFrame> _intervalFrames = Array.Empty<Y4mFrame>();
-    internal CancellationTokenSource? _preparationCancellation;
-    internal Task _preparation = Task.CompletedTask;
-    internal readonly CancellationTokenSource _lifetime = new();
-    internal readonly object _taskLock = new();
-    internal readonly HashSet<Task> _tasks = new();
-    internal readonly ConcurrentDictionary<long, RequestContext> _afterRequests = new();
-    internal long _editEpoch, _lastQueuedAfter, _lastDisplayedAfter, _lastCompletedAfter, _lastFailedAfter;
-    internal long _lastQueuedRevision, _lastDisplayedRevision;
+    private long _generation;
+    private RequestContext? _context;
+    private InputInfo? _inputInfo;
+    private string _metadataEncoder = "";
+    private PreviewRequest? _intervalRequest, _intervalLogicalRequest;
+    private IReadOnlyList<Y4mFrame> _intervalFrames = Array.Empty<Y4mFrame>();
+    private CancellationTokenSource? _preparationCancellation;
+    private Task _preparation = Task.CompletedTask;
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly object _taskLock = new();
+    private readonly HashSet<Task> _tasks = new();
+    private readonly ConcurrentDictionary<long, RequestContext> _afterRequests = new();
+    private long _editEpoch, _lastQueuedAfter, _lastDisplayedAfter, _lastCompletedAfter, _lastFailedAfter;
+    private long _lastQueuedRevision, _lastDisplayedRevision;
     private bool _latestIntentNavigation;
     internal enum NavigationOperation { Seek, Page, Frame }
     private long _concurrentComparisonGeneration;
-    internal PreviewProgress _completedAfterStatus = PreviewProgress.Done;
+    private PreviewProgress _completedAfterStatus = PreviewProgress.Done;
     private NeighborIntent? _pendingNeighbor;
-    internal PreviewRequest? _beforeIntervalRequest;
-    internal IReadOnlyList<Y4mFrame> _beforeIntervalFrames = Array.Empty<Y4mFrame>();
-    internal RequestContext? _beforeExecutionContext;
+    private PreviewRequest? _beforeIntervalRequest;
+    private IReadOnlyList<Y4mFrame> _beforeIntervalFrames = Array.Empty<Y4mFrame>();
+    private RequestContext? _beforeExecutionContext;
 
     private bool _seekDragging;
     private readonly FrameCache _cache;
+    private readonly RawOwnershipScope? _rawOwnershipScope;
     private readonly bool _usesOwnedRaw;
     private readonly Action<Action> _post;
     private readonly IEncoderPreviewHost _host;
+
+    internal bool IsInitialized { get; set; }
+    internal bool IsDisposed { get; private set; }
+    internal bool IsSuspended { get; set; }
+    private double _currentSeconds, _durationSeconds;
+    private bool _hasDuration;
+    internal double CurrentSeconds => _currentSeconds;
+    internal bool HasDuration
+    {
+        get => _hasDuration;
+        set
+        {
+            if (_hasDuration == value) return;
+            _hasDuration = value;
+            _host.StateChanged(nameof(HasDuration));
+        }
+    }
+    internal double DurationSeconds
+    {
+        get => _durationSeconds;
+        set
+        {
+            if (_durationSeconds.Equals(value)) return;
+            _durationSeconds = value;
+            _host.StateChanged(nameof(DurationSeconds));
+        }
+    }
+
+    internal void RestoreTime(double seconds) => _currentSeconds = seconds;
+
+    private void SetTimeOnly(double seconds)
+    {
+        _currentSeconds = seconds;
+        _host.StateChanged(nameof(CurrentSeconds));
+        _host.ShowTime(seconds);
+    }
+
+    internal void ClearInputInfo()
+    {
+        CancelDuration();
+        _inputInfo = null;
+        HasDuration = false;
+        DurationSeconds = 0;
+        _host.ShowDuration(null);
+    }
+
+    internal Task Preparation => _preparation;
+    internal object TaskSync => _taskLock;
+    internal CancellationToken LifetimeToken => _lifetime.Token;
+
+    internal async Task WaitForIdleAsync()
+    {
+        while (true)
+        {
+            Task[] tasks;
+            lock (_taskLock) tasks = _tasks.ToArray();
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+            await WaitForBackendIdleAsync().ConfigureAwait(false);
+            await PostAsync(() => { }).ConfigureAwait(false);
+            lock (_taskLock) { if (_tasks.Count == 0) return; }
+        }
+    }
+
 }

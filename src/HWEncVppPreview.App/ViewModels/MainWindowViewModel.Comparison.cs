@@ -20,7 +20,6 @@ public sealed partial class MainWindowViewModel
     private double _beforeDisplayWidth = 1920, _beforeDisplayHeight = 1080;
     private double _splitPosition = 0.5;
     private bool _useSar = true;
-    private Y4mFrame? _beforeDisplayedFrame;
     /// <summary>Toggleは単一表示に正規化し、Spaceの押下状態はIsShowingBeforeで表す。</summary>
     public PreviewCompareMode CompareMode
     {
@@ -50,11 +49,10 @@ public sealed partial class MainWindowViewModel
         get => _beforeImage;
         set
         {
-            if (value == null) _session.SelectBeforePresentationSegment(null);
+            if (value == null) _session.ClearBeforePresentation();
             var previous = _beforeImage;
             if (!SetProperty(ref _beforeImage, value)) return;
             previous?.Dispose();
-            if (value == null && _usesOwnedRaw) SetRawFrame(ref _beforeDisplayedFrame, ref _session._beforeDisplayedRaw, null, "VmBeforeDisplayed");
             RefreshColorInfo();
         }
     }
@@ -76,12 +74,12 @@ public sealed partial class MainWindowViewModel
     private void RecalculateDisplaySizes()
     {
         RefreshColorInfo();
-        if (_displayedFrame is { } after)
+        if (_session.DisplayedAfter is { } after)
         {
             DisplayWidth = DisplayWidthFor(after.Header);
             DisplayHeight = after.Header.Height;
         }
-        if (_beforeDisplayedFrame is { } before)
+        if (_session.DisplayedBefore is { } before)
         {
             BeforeDisplayWidth = DisplayWidthFor(before.Header);
             BeforeDisplayHeight = before.Header.Height;

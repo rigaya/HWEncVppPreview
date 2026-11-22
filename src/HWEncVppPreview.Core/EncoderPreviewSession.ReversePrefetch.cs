@@ -6,17 +6,17 @@ public sealed partial class EncoderPreviewSession
 
     private void NotifyAcceptedFrameStep(PreviewRequest logical, int direction, double seconds)
     {
-        if (_host.IsDisposed || direction == 0) return;
+        if (IsDisposed || direction == 0) return;
         // 表示変換の完了や捨てたキー反復ではなく、実際に確定した移動をCoreへ一度だけ渡す。
         Controller.NotifyNavigation(logical with { TargetSeconds = seconds }, Math.Sign(direction));
     }
 
     private bool TryWaitForReversePrefetch(int direction)
     {
-        if (direction >= 0 || !_host.IsInitialized || _host.IsDisposed) return false;
+        if (direction >= 0 || !IsInitialized || IsDisposed) return false;
         var logical = _intervalLogicalRequest ?? Volatile.Read(ref _context)?.Request ?? _intervalRequest;
         if (logical == null) return false;
-        var pending = Controller.GetPendingReversePrefetch(logical with { TargetSeconds = _host.CurrentSeconds });
+        var pending = Controller.GetPendingReversePrefetch(logical with { TargetSeconds = CurrentSeconds });
         if (pending == null) return false;
         long generation = BeginIntent(navigation: true);
         var waiting = new ReversePrefetchWait(generation, direction, pending);
@@ -25,7 +25,7 @@ public sealed partial class EncoderPreviewSession
         _host.IsBusy = true;
         _host.ErrorText = null;
         _host.Progress = PreviewProgress.Processing;
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.reverse_prefetch.wait", new { generation, direction, target = _host.CurrentSeconds });
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.reverse_prefetch.wait", new { generation, direction, target = CurrentSeconds });
         Track(WaitForReversePrefetchAsync(waiting));
         return true;
     }
@@ -39,7 +39,7 @@ public sealed partial class EncoderPreviewSession
             // 先読み失敗は前景の画像や状態へ流さず、必要になった隣だけ通常取得へ戻す。
             if (PerfTrace.Enabled) PerfTrace.Write("vm.reverse_prefetch.wait_failed", new { exception.Message });
         }
-        if (_host.IsDisposed) return;
+        if (IsDisposed) return;
         await PostAsync(() =>
         {
             if (!ReferenceEquals(_reversePrefetchWait, waiting)) return;

@@ -4,8 +4,8 @@ public sealed partial class EncoderPreviewSession
 {
     private readonly object _rawPostSync = new();
     private readonly HashSet<OwnedUiPost> _rawPosts = new();
-    internal IDisposable? _displayedRaw, _beforeDisplayedRaw, _anchorRaw;
-    internal RawSegmentHold? _intervalRaw, _beforeIntervalRaw;
+    private IDisposable? _displayedRaw, _beforeDisplayedRaw, _anchorRaw;
+    private RawSegmentHold? _intervalRaw, _beforeIntervalRaw;
 
     // legacyの列は何も取得しない。ownedは同じviewのまま明示所有だけを追加する。
     internal static IDisposable? RetainRawFrames(IReadOnlyList<Y4mFrame>? frames, string kind)
@@ -52,7 +52,7 @@ public sealed partial class EncoderPreviewSession
             if (post.Completion is { } completion) Track(completion);
             lock (_rawPostSync)
             {
-                if (_host.IsDisposed) post.Dispose();
+                if (IsDisposed) post.Dispose();
                 else if (_usesOwnedRaw) _rawPosts.Add(post);
             }
             return post;
@@ -160,13 +160,13 @@ public sealed partial class EncoderPreviewSession
 
     internal void OnOwnedFrameReady(OwnedPreviewEnvelope value)
     {
-        if (value.FrameReady is { } frame) _host.OnFrameReady(frame);
+        if (value.FrameReady is { } frame) OnFrameReady(frame);
     }
     internal void OnOwnedCompleted(OwnedPreviewEnvelope value)
     {
         if (value.Completed is not { } completed) return;
         using var source = value.ShareFiniteWindow() is { } window ? OwnedUncachedWindow.AdoptShared(window) : null;
-        _host.OnCompletedWithWindow(completed, source);
+        OnCompletedWithWindow(completed, source);
     }
     internal void OnOwnedSegmentUpdated(OwnedPreviewEnvelope value)
     {

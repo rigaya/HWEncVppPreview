@@ -16,7 +16,7 @@ public sealed partial class MainWindowViewModel
     {
         void Refresh()
         {
-            if (_disposed) return;
+            if (_session.IsDisposed) return;
             OnPropertyChanged(nameof(Language));
             OnPropertyChanged(nameof(EncoderDescription));
             foreach (var line in FilterLines) line.RefreshLanguage();

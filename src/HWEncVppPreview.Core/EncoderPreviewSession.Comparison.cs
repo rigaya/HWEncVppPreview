@@ -3,13 +3,13 @@
 public sealed partial class EncoderPreviewSession
 {
     private readonly bool _beforeEnabled;
-    internal long _beforeImageGeneration;
+    private long _beforeImageGeneration;
     private bool _beforeVisible, _isShowingBefore;
     private CancellationTokenSource? _beforeCancellation;
     private PreviewRequest? _beforeSelectionRequest;
     private TaskCompletionSource? _beforeImmediate;
-    internal bool _beforeFinished;
-    internal BeforePhysicalWindow? _beforePhysicalWindow;
+    private bool _beforeFinished;
+    private BeforePhysicalWindow? _beforePhysicalWindow;
     private PreviewRequest? _beforeRecoverySelection;
     private PreviewRequest? _beforeRescueRetrySelection;
     internal sealed record BeforePhysicalWindow(RequestContext Context, PreviewRequest Request);
@@ -43,7 +43,7 @@ public sealed partial class EncoderPreviewSession
         {
             _beforeCancellation?.Cancel();
             _beforeCancellation = null;
-            _host.DropPendingBeforeImage();
+            DropImage(ref _pendingBeforeImage);
             _beforePhysicalWindow = null;
         }
         if (_beforeExecutionContext is { } previousContext)
@@ -57,9 +57,9 @@ public sealed partial class EncoderPreviewSession
         _beforeFinished = false;
         Interlocked.Increment(ref _beforeImageGeneration);
         if (!updatePresentation) return;
-        _host.ClearBeforeDisplayedRaw();
+        ClearBeforeDisplayedRaw();
         _host.IsBeforeBusy = false;
-        _host.ClearBeforeImage();
+        ClearBeforeImage();
     }
 
     internal void ClearBeforeInterval()
@@ -72,7 +72,7 @@ public sealed partial class EncoderPreviewSession
 
     internal void RecordNavigationIntent()
     {
-        if (_host.IsInitialized && !_host.IsSuspended && !_host.IsDisposed)
+        if (IsInitialized && !IsSuspended && !IsDisposed)
         {
             long timestamp = _clock.GetTimestamp();
             lock (_taskLock) _lastNavigationIntent = timestamp;
@@ -121,7 +121,7 @@ public sealed partial class EncoderPreviewSession
         if (!_beforeEnabled)
         {
             if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.before.disabled", new { generation });
-            _host.BeforeUnavailableForDuration();
+            BeforeUnavailableForDuration();
             return;
         }
         if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.before", new { generation, cachedTarget });
@@ -222,8 +222,8 @@ public sealed partial class EncoderPreviewSession
                 if (!IsCurrent(context)) return;
                 _beforeFinished = true;
                 _host.IsBeforeBusy = false;
-                _host.ClearBeforeImage();
-                _host.BeforeUnavailableForDuration();
+                ClearBeforeImage();
+                BeforeUnavailableForDuration();
                 if (PerfTrace.Enabled) PerfTrace.Write("vm.before.error", new { exception.Message });
             }).ConfigureAwait(false);
         }
@@ -260,13 +260,13 @@ public sealed partial class EncoderPreviewSession
         _beforeFinished = true;
         _host.IsBeforeBusy = false;
         // 実行開始時の目標ではなく、同じ区間で最後に移動した位置を選ぶ。
-        var selection = RetargetInterval(context.Request, _host.CurrentSeconds);
+        var selection = RetargetInterval(context.Request, CurrentSeconds);
         IDisposable? frameOwnership = null;
         var frame = ContainsBeforeFrameTarget(_beforeIntervalSegment?.PhysicalRequest ?? context.Request,
             frames, selection.TargetSeconds, _beforeIntervalSegment) ? SelectBeforeFrame(selection, frames, out frameOwnership) : null;
         using var selectedRaw = frameOwnership;
         if (PerfTrace.Enabled) PerfTrace.Write("vm.before.selection", new { generation = context.Generation,
-            target = _host.CurrentSeconds, requestedTarget = context.Request.TargetSeconds,
+            target = CurrentSeconds, requestedTarget = context.Request.TargetSeconds,
             safeStart = _beforeIntervalSegment?.SafeStartSeconds, safeEnd = _beforeIntervalSegment?.SafeEndSeconds,
             selectedXts = frame?.Xts, missing = frame == null, busy = _host.IsBeforeBusy });
         if (frame != null)
@@ -280,7 +280,7 @@ public sealed partial class EncoderPreviewSession
             // 少数救済で省いた画像は入力末尾の不足ではないため、窓の拡張とは別に最新目標を一度だけ取り直す。
             if (_beforeRescueRetrySelection is { } previous && SameBeforeInput(previous, selection)
                 && Math.Abs(previous.TargetSeconds - selection.TargetSeconds) <= 1e-8)
-            { _host.BeforeUnavailableForDuration(); return; }
+            { BeforeUnavailableForDuration(); return; }
             _beforeRescueRetrySelection = selection;
             if (PerfTrace.Enabled) PerfTrace.Write("vm.before.completion_rescue_retry", new {
                 generation = context.Generation, target = selection.TargetSeconds, context.Request.CorrelationId,
@@ -295,10 +295,10 @@ public sealed partial class EncoderPreviewSession
         // 同じ入力・目標での回復は1回に制限し、着地が毎回遅い入力でも再帰し続けない。
         if (_beforeRecoverySelection is { } prior && SameBeforeInput(prior, selection)
             && Math.Abs(prior.TargetSeconds - selection.TargetSeconds) <= 1e-8)
-        { _host.BeforeUnavailableForDuration(); return; }
+        { BeforeUnavailableForDuration(); return; }
         var shortfall = PreviewWindowShortfall.FromSegment(selection, _beforeIntervalSegment);
         if (shortfall == null || !PreviewWindowRecovery.TryExpand(selection, shortfall, 0, out var recoveryRequest))
-        { _host.BeforeUnavailableForDuration(); return; }
+        { BeforeUnavailableForDuration(); return; }
         _beforeRecoverySelection = selection;
         CancelBefore();
         QueueBefore(selection, Volatile.Read(ref _generation), recoveryRequest: recoveryRequest);
@@ -468,11 +468,11 @@ public sealed partial class EncoderPreviewSession
             DisplaySeconds: PerfTrace.Enabled && frame.Xts.HasValue && request != null && clock != null
                 ? clock.ToInputSeconds(frame, 0, request.Fps) : null,
             SegmentId: source?.SegmentId, TrustedAbsolute: clock?.TrustedAbsolute ?? false,
-            RevisionContext: revisionContext, DisplayRevision: revision);
-        _host.EnqueueImage(work);
+            RevisionContext: revisionContext, DisplayRevision: revision, Timing: GetFrameTiming(frame, request, source), IsProvisional: earlyDisplay);
+        EnqueueImage(work);
         if (earlyDisplay && PerfTrace.Enabled) PerfTrace.Write("vm.before.early.queued", new {
             generation, correlationId = revisionContext?.Request.CorrelationId, work.TraceId,
-            frame.FrameId, frame.Xts, frame.Xdur, target = _host.CurrentSeconds,
+            frame.FrameId, frame.Xts, frame.Xdur, target = CurrentSeconds,
             reason = "単調な等間隔の受信列で目標を読み越した" });
     }
 

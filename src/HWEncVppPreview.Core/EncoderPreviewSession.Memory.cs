@@ -111,7 +111,7 @@ public sealed partial class EncoderPreviewSession
         }
         else
         {
-            double target = context.ResolvedTargetSeconds ?? _host.CurrentSeconds;
+            double target = context.ResolvedTargetSeconds ?? CurrentSeconds;
             if (PreviewSafeRange.Contains(target, uncached.SafeStartSeconds, uncached.SafeEndSeconds)
                 && ContainsFrameTarget(uncached.PhysicalRequest, uncached.Frames, target, uncached.Clock))
             {

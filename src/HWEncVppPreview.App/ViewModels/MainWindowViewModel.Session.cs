@@ -5,9 +5,6 @@ namespace HWEncVppPreview.App.ViewModels;
 
 public sealed partial class MainWindowViewModel
 {
-    bool IEncoderPreviewHost.IsDisposed => _disposed;
-    bool IEncoderPreviewHost.IsInitialized => _initialized;
-    bool IEncoderPreviewHost.IsSuspended => _suspendChanges;
 
     PreviewProgress IEncoderPreviewHost.Progress
     {
@@ -21,6 +18,7 @@ public sealed partial class MainWindowViewModel
             PreviewProgress.DoneTargetNotReached => AppMessages.DoneTargetNotReached,
             PreviewProgress.Start => AppMessages.Start,
             PreviewProgress.End => AppMessages.End,
+            PreviewProgress.Error => AppMessages.Error,
             _ => throw new ArgumentOutOfRangeException(nameof(value)),
         };
     }
@@ -28,8 +26,22 @@ public sealed partial class MainWindowViewModel
     EncoderPreviewConfiguration IEncoderPreviewHost.GetConfiguration(string encoder, string input) => new(encoder, input,
         OptionTextParser.ParseText(InputArgsText),
         OptionTextParser.Parse(FilterLines.Select(line => new OptionLine(line.Text, line.IsEnabled))));
-    Task IEncoderPreviewHost.LoadMetadataAsync(string encoder, CancellationToken token) => LoadMetadataAsync(encoder, token);
-    void IEncoderPreviewHost.ApplyInputInfo(InputInfo info) => ApplyInputInfo(info);
+
+    IReadOnlyList<string> IEncoderPreviewHost.GetInputArgs() => OptionTextParser.ParseText(InputArgsText);
+    void IEncoderPreviewHost.ApplyMetadata(string encoder, EncoderPreviewMetadata metadata)
+    {
+        EncoderDescription = DescribeEncoder(metadata.Version, encoder);
+        _helpIndex = metadata.HelpIndex;
+        HelpSchema = new HelpSchema(metadata.Help);
+    }
+
+    void IEncoderPreviewHost.MetadataUnavailable(string message)
+    {
+        EncoderDescription = Path.GetFileName(EncoderPath);
+        HelpText = AppMessages.HelpUnavailable + message;
+    }
+
+    void IEncoderPreviewHost.MetadataReady() => UpdateHelp();
     void IEncoderPreviewHost.ShowInputInfo(InputInfo info)
     {
         bool squarePixel = info.SarNum <= 0 || info.SarDen <= 0 || info.SarNum == info.SarDen;
@@ -37,30 +49,28 @@ public sealed partial class MainWindowViewModel
         InputInfoText = $"{info.Width}x{info.Height}{sar}  {info.Fps:0.###}fps";
     }
 
-    void IEncoderPreviewHost.SetTimeOnly(double seconds) => SetTimeOnly(seconds);
-    bool IEncoderPreviewHost.TrySetSliderTime(double seconds) => SetProperty(ref _currentSeconds, seconds, nameof(CurrentSeconds));
-    void IEncoderPreviewHost.ShowSliderTime() => CurrentTimeText = FormatTime(_currentSeconds);
-    void IEncoderPreviewHost.DisplayFrame(Y4mFrame frame, RequestContext context) => DisplayFrame(frame, context);
     void IEncoderPreviewHost.ShowExceptionError(string message, string diagnostics, Exception? exception)
         => ShowExceptionError(message, diagnostics, exception);
-    void IEncoderPreviewHost.DropPendingAfterImage()
-    {
-        lock (_session._taskLock) DropImage(ref _pendingAfterImage);
-    }
 
     void IEncoderPreviewHost.CancelInputEdit() => CancelInputEdit();
-    bool IEncoderPreviewHost.HasBeforeImage => BeforeImage != null;
-    Y4mFrame? IEncoderPreviewHost.BeforeDisplayedFrame => _beforeDisplayedFrame;
-    void IEncoderPreviewHost.BeforeUnavailableForDuration() => BeforeUnavailableForDuration();
-    void IEncoderPreviewHost.QueueDurationAfterComparison(bool before, long generation) => QueueDurationAfterComparison(before, generation);
-    void IEncoderPreviewHost.EnqueueImage(ImageWork image) => EnqueueImage(image);
-    void IEncoderPreviewHost.DropPendingBeforeImage() => DropImage(ref _pendingBeforeImage);
-    void IEncoderPreviewHost.ClearBeforeDisplayedRaw()
-        => SetRawFrame(ref _beforeDisplayedFrame, ref _session._beforeDisplayedRaw, null, "VmBeforeDisplayed");
     void IEncoderPreviewHost.ClearBeforeImage() => BeforeImage = null;
-    void IEncoderPreviewHost.OnFrameReady(PreviewFrameResult result) => OnFrameReady(result);
-    void IEncoderPreviewHost.OnCompletedWithWindow(PreviewCompletion completion, OwnedUncachedWindow? window)
-        => OnCompletedWithWindow(completion, window);
+
+    void IEncoderPreviewHost.StateChanged(string property) => OnPropertyChanged(property);
+    void IEncoderPreviewHost.ShowTime(double seconds) => CurrentTimeText = FormatTime(seconds);
+    void IEncoderPreviewHost.ShowDuration(double? seconds)
+        => DurationText = seconds is double value ? FormatTime(value, milliseconds: false) : "";
+    void IEncoderPreviewHost.ShowElapsed(double seconds) => ElapsedText = AppMessages.Elapsed(seconds);
+    void IEncoderPreviewHost.ShowPreviewFailure(PreviewFailureKind kind, string diagnostics, Exception? exception)
+        => ShowExceptionError(kind == PreviewFailureKind.NoDisplayableFrames
+            ? AppMessages.NoDisplayableFrames : AppMessages.ImageDisplayFailed, diagnostics, exception);
+    void IEncoderPreviewHost.BeginShutdown()
+    {
+        _bgraPool.Dispose();
+        UiLanguage.Changed -= OnLanguageChanged;
+    }
+
+    void IEncoderPreviewHost.ClearAfterImage() => PreviewImage = null;
+    void IEncoderPreviewHost.RefreshColorInfo() => RefreshColorInfo();
 
     internal IReadOnlyList<PreviewFrameReference> NavigationFrames(PreviewRequest request, PreviewSegmentSnapshot? segment)
         => _session.NavigationFrames(request, segment);

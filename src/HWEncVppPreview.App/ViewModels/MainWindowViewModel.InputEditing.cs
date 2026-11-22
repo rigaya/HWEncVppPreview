@@ -12,23 +12,23 @@ public sealed partial class MainWindowViewModel
 
     private void SetConfirmedPath(Action setPath)
     {
-        bool suspended = _suspendChanges;
-        _suspendChanges = true;
+        bool suspended = _session.IsSuspended;
+        _session.IsSuspended = true;
         try { setPath(); }
-        finally { _suspendChanges = suspended; }
+        finally { _session.IsSuspended = suspended; }
         InputChanged(bypassDebounce: true);
     }
 
     private void CancelInputEdit()
     {
-        lock (_session._taskLock) _inputEditCancellation?.Cancel();
+        lock (_session.TaskSync) _inputEditCancellation?.Cancel();
     }
 
     private void ScheduleInputEdit()
     {
         CancelInputEdit();
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_session._lifetime.Token);
-        lock (_session._taskLock) _inputEditCancellation = cancellation;
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_session.LifetimeToken);
+        lock (_session.TaskSync) _inputEditCancellation = cancellation;
         _session.Track(PrepareEditedInputAsync());
 
         async Task PrepareEditedInputAsync()
@@ -40,8 +40,8 @@ public sealed partial class MainWindowViewModel
                 Task preparation = Task.CompletedTask;
                 await _session.PostAsync(() =>
                 {
-                    if (_disposed || cancellation.IsCancellationRequested) return;
-                    lock (_session._taskLock)
+                    if (_session.IsDisposed || cancellation.IsCancellationRequested) return;
+                    lock (_session.TaskSync)
                         if (ReferenceEquals(_inputEditCancellation, cancellation)) _inputEditCancellation = null;
                     preparation = _session.QueuePreview(bypassDebounce: true);
                 }).ConfigureAwait(false);
@@ -50,7 +50,7 @@ public sealed partial class MainWindowViewModel
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
             finally
             {
-                lock (_session._taskLock)
+                lock (_session.TaskSync)
                     if (ReferenceEquals(_inputEditCancellation, cancellation)) _inputEditCancellation = null;
                 cancellation.Dispose();
             }

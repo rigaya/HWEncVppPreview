@@ -2,12 +2,12 @@
 
 public sealed partial class EncoderPreviewSession
 {
-    internal PreviewCapabilities _capabilities = new();
+    private PreviewCapabilities _capabilities = new();
     private Task _metadataTask = Task.CompletedTask;
-    internal double _lastIntentTarget;
+    private double _lastIntentTarget;
     private bool _latestIntentReverse;
-    internal PreviewSegmentSnapshot? _intervalSegment, _beforeIntervalSegment;
-    internal OwnedUiPost? _pendingSegmentUpdate;
+    private PreviewSegmentSnapshot? _intervalSegment, _beforeIntervalSegment;
+    private OwnedUiPost? _pendingSegmentUpdate;
     private int _segmentPostQueued;
     private PreviewFrameReference? _navigationAnchor;
     private double _navigationAnchorTarget;
@@ -17,7 +17,7 @@ public sealed partial class EncoderPreviewSession
     private void OnSegmentUpdatedWithWindow(PreviewSegmentUpdate update, OwnedUncachedWindow? source)
     {
         var context = ContextFor(update.Request);
-        if (_host.IsDisposed || context?.Kind != RequestKind.After || context.Generation != Volatile.Read(ref _generation)) return;
+        if (IsDisposed || context?.Kind != RequestKind.After || context.Generation != Volatile.Read(ref _generation)) return;
         // 先読みの各フレームでUIキューに区間全体を積まず、未反映の最新状態だけを保持する。
         // 正IDはUI到着時にcacheを読み直す。待機中はmetadataだけ、ID0の有限窓だけ所有する。
         var frames = update.Segment.SegmentId > 0 ? Array.Empty<Y4mFrame>() : update.Segment.Frames;
@@ -35,7 +35,7 @@ public sealed partial class EncoderPreviewSession
 
     private void QueueSegmentPost()
     {
-        if (!_host.IsDisposed && Interlocked.CompareExchange(ref _segmentPostQueued, 1, 0) == 0)
+        if (!IsDisposed && Interlocked.CompareExchange(ref _segmentPostQueued, 1, 0) == 0)
             _post(ApplyPendingSegment);
     }
 
@@ -102,7 +102,7 @@ public sealed partial class EncoderPreviewSession
             _host.ErrorText = null;
         }
         if (update.IsReadPaused && satisfied && context.Generation == Volatile.Read(ref _generation))
-            QueueBefore(RetargetInterval(context.Request, _host.CurrentSeconds), context.Generation);
+            QueueBefore(RetargetInterval(context.Request, CurrentSeconds), context.Generation);
         UpdateNavigationStatus();
     }
 

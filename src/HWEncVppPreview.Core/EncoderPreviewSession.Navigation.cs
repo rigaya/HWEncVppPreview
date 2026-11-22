@@ -8,7 +8,7 @@ public sealed partial class EncoderPreviewSession
         if (!_seekDragging) return;
         SetBeforeProtectionDirection(0);
         _seekDragging = false;
-        if (seconds == _host.CurrentSeconds)
+        if (seconds == CurrentSeconds)
         {
             // ドラッグ中のAfterを捨てず、確定した同じ目標のBeforeだけを同時取得へ進める。
             long generation = Volatile.Read(ref _generation);
@@ -19,12 +19,37 @@ public sealed partial class EncoderPreviewSession
         else SeekTo(seconds, allowConcurrentBefore: true);
     }
 
+    internal Task Reload()
+    {
+        _cache.Clear();
+        ClearInterval();
+        ClearBeforeInterval();
+        return QueuePreview(bypassCache: true, bypassDebounce: true);
+    }
+
+    internal Task FiltersChanged(bool bypassDebounce)
+    {
+        ClearInterval();
+        return QueuePreview(bypassDebounce: bypassDebounce);
+    }
+
+    internal void DiscardInputRequests()
+    {
+        // 入力切替時の未使用配列は片付ける。貸出中の配列は最後の所有解放まで変更しない。
+        _rawOwnershipScope?.ClearFreeBuffers();
+        lock (_taskLock) _preparationCancellation?.Cancel();
+        BeginIntent(navigation: false);
+    }
+
     internal void SliderChanged(double seconds)
     {
         RecordNavigationIntent();
-        if (!_host.TrySetSliderTime(ClampTime(seconds))) return;
+        seconds = ClampTime(seconds);
+        if (_currentSeconds.Equals(seconds)) return;
+        _currentSeconds = seconds;
+        _host.StateChanged(nameof(CurrentSeconds));
         SetBeforeProtectionDirection(0);
-        _host.ShowSliderTime();
+        _host.ShowTime(_currentSeconds);
         _ = QueuePreview(navigation: true);
     }
 
@@ -36,7 +61,7 @@ public sealed partial class EncoderPreviewSession
     internal void StepFrame(int direction)
     {
         if (direction != 0) RecordNavigationIntent();
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.step", new { direction, pending = _pendingNeighbor != null, reverseWait = _reversePrefetchWait != null, target = _host.CurrentSeconds });
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.step", new { direction, pending = _pendingNeighbor != null, reverseWait = _reversePrefetchWait != null, target = CurrentSeconds });
         LeaveReversePrefetchWaitForForwardStep(direction);
         if (direction == 0 || _pendingNeighbor != null)
         {
@@ -44,7 +69,7 @@ public sealed partial class EncoderPreviewSession
             return;
         }
         direction = Math.Sign(direction);
-        if (_host.IsInitialized && direction < 0 && _host.CurrentSeconds <= 1e-8)
+        if (IsInitialized && direction < 0 && CurrentSeconds <= 1e-8)
         {
             _completedAfterStatus = PreviewProgress.Start;
             UpdateNavigationStatus();
@@ -56,13 +81,13 @@ public sealed partial class EncoderPreviewSession
             var navigation = NavigationFrames(interval, _intervalSegment);
             if (navigation.Count > 0)
             {
-                int anchor = NavigationAnchorIndex(navigation, _host.CurrentSeconds, interval.Fps);
+                int anchor = NavigationAnchorIndex(navigation, CurrentSeconds, interval.Fps);
                 int next = anchor + direction;
                 if (anchor >= 0 && next >= 0 && next < navigation.Count
                     && NavigationNeighborsConnected(navigation[anchor], navigation[next]))
                 {
                     var reference = navigation[next];
-                    if ((reference.InputSeconds - _host.CurrentSeconds) * direction > 1e-9)
+                    if ((reference.InputSeconds - CurrentSeconds) * direction > 1e-9)
                     {
                         if (DisplayCached(reference.Frame, reference.InputSeconds, direction, reference)) return;
                     }
@@ -71,7 +96,7 @@ public sealed partial class EncoderPreviewSession
             // trustedな移動viewがあれば、warmを含む元配列へ戻って候補を増やさない。
             if (_intervalSegment?.Clock.TrustedAbsolute != true && _intervalFrames.Count > 0)
             {
-                double target = IntervalClock(interval, _intervalFrames).ToSelectionSeconds(_host.CurrentSeconds, _intervalFrames, interval.Fps);
+                double target = IntervalClock(interval, _intervalFrames).ToSelectionSeconds(CurrentSeconds, _intervalFrames, interval.Fps);
                 var first = _intervalFrames[0];
                 var last = _intervalFrames[^1];
                 double firstTime = first.Xts ?? 0;
@@ -85,7 +110,7 @@ public sealed partial class EncoderPreviewSession
                     {
                         var frame = _intervalFrames[next];
                         double seconds = FrameSeconds(interval, frame, next);
-                        if (FrameIsSafe(seconds) && (seconds - _host.CurrentSeconds) * direction > 1e-9)
+                        if (FrameIsSafe(seconds) && (seconds - CurrentSeconds) * direction > 1e-9)
                         {
                             if (PerfTrace.Enabled) PerfTrace.Write("vm.step.cache", new { seconds, direction });
                             if (DisplayCached(frame, seconds, direction)) return;
@@ -96,13 +121,13 @@ public sealed partial class EncoderPreviewSession
         }
         if (TryWaitForReversePrefetch(direction)) return;
         // 取り直し中のキー反復は加算せず、実際の隣が届くまで目標を保つ。
-        if (!_host.IsInitialized)
+        if (!IsInitialized)
         {
             // 入力を開く前の操作は、表示位置だけを仮に動かす。
-            SeekTo(_host.CurrentSeconds + direction / (_inputInfo?.Fps ?? 30));
+            SeekTo(CurrentSeconds + direction / (_inputInfo?.Fps ?? 30));
             return;
         }
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.step.refetch", new { direction, target = _host.CurrentSeconds });
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.step.refetch", new { direction, target = CurrentSeconds });
         _ = QueuePreview(navigation: true, neighborDirection: direction,
             requirePhysicalRefetch: _intervalSegment?.Clock.TrustedAbsolute == true);
     }
@@ -115,7 +140,7 @@ public sealed partial class EncoderPreviewSession
         if (reference != null) AdoptNavigationReference(reference);
         long generation = BeginIntent(navigation: true);
         if (PerfTrace.Enabled) PerfTrace.Write("vm.step.accepted", new { generation, seconds, direction, frame.Xts });
-        _host.SetTimeOnly(seconds);
+        SetTimeOnly(seconds);
         // 物理offの結果を移動に再利用しても、診断用sourceはhelp由来の論理設定を維持する。
         var logical = _intervalLogicalRequest ?? _intervalRequest;
         var request = RetargetInterval(_intervalRequest, seconds) with { CorrelationId = generation, AllowConcurrentBackground = false,
@@ -130,7 +155,7 @@ public sealed partial class EncoderPreviewSession
         _host.IsBusy = true;
         _host.ErrorText = null;
         _completedAfterStatus = PreviewProgress.DoneCache;
-        _host.DisplayFrame(frame, context);
+        DisplayFrame(frame, context);
         // 表示は即時に進め、Coreにも最新の移動意図を伝えて古い待ち要求を置き換える。
         Controller.Submit(request, navigation: true);
         NotifyAcceptedFrameStep(request, direction, seconds);
@@ -141,12 +166,12 @@ public sealed partial class EncoderPreviewSession
     {
         RecordNavigationIntent();
         seconds = ClampTime(seconds);
-        if (!force && seconds == _host.CurrentSeconds) return;
+        if (!force && seconds == CurrentSeconds) return;
         SetBeforeProtectionDirection(0);
-        _host.SetTimeOnly(seconds);
+        SetTimeOnly(seconds);
         _ = QueuePreview(navigation: true, allowConcurrentBefore: allowConcurrentBefore, operation: operation);
     }
-    internal double ClampTime(double seconds) => double.IsFinite(seconds) ? Math.Clamp(seconds, 0, _host.HasDuration ? _host.DurationSeconds : double.MaxValue) : 0;
+    internal double ClampTime(double seconds) => double.IsFinite(seconds) ? Math.Clamp(seconds, 0, HasDuration ? DurationSeconds : double.MaxValue) : 0;
     internal long BeginIntent(bool navigation)
     {
         if (!navigation) SetBeforeProtectionDirection(0);
@@ -161,7 +186,7 @@ public sealed partial class EncoderPreviewSession
             CancelBefore();
             Interlocked.Increment(ref _editEpoch);
             _afterRequests.Clear();
-            _host.DropPendingAfterImage();
+            lock (_taskLock) DropImage(ref _pendingAfterImage);
         }
         return generation;
     }
@@ -174,18 +199,18 @@ public sealed partial class EncoderPreviewSession
 
     internal Task QueuePreview(bool bypassCache = false, bool navigation = false, int neighborDirection = 0, bool requirePhysicalRefetch = false, bool bypassDebounce = false, bool allowConcurrentBefore = false, NavigationOperation operation = NavigationOperation.Seek, bool validateRestoredTime = false)
     {
-        if (!_host.IsInitialized || _host.IsSuspended || _host.IsDisposed) return Task.CompletedTask;
+        if (!IsInitialized || IsSuspended || IsDisposed) return Task.CompletedTask;
         _host.CancelInputEdit();
         // シークは向きにかかわらず目標を早く確定する。逆の広い窓はコマ移動と接続範囲内の秒移動だけ。
         if (neighborDirection != 0) operation = NavigationOperation.Frame;
         bool reverse = navigation && (operation == NavigationOperation.Frame && neighborDirection < 0
-            || operation == NavigationOperation.Page && _host.CurrentSeconds < _lastIntentTarget - 1e-8
-                && IsConnectedNavigationTarget(_host.CurrentSeconds, _lastIntentTarget));
-        _lastIntentTarget = _host.CurrentSeconds;
+            || operation == NavigationOperation.Page && CurrentSeconds < _lastIntentTarget - 1e-8
+                && IsConnectedNavigationTarget(CurrentSeconds, _lastIntentTarget));
+        _lastIntentTarget = CurrentSeconds;
         _latestIntentReverse = reverse;
         long generation = BeginIntent(navigation);
         if (!navigation || allowConcurrentBefore) _concurrentComparisonGeneration = generation;
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.after", new { generation, navigation, neighborDirection, bypassCache, target = _host.CurrentSeconds });
+        if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.after", new { generation, navigation, neighborDirection, bypassCache, target = CurrentSeconds });
         long editEpoch = Volatile.Read(ref _editEpoch);
         if (neighborDirection != 0) _pendingNeighbor = new NeighborIntent(generation, neighborDirection);
         // 入力検査中の移動連打では検査そのものを止めず、取得後の最新位置だけを使う。
@@ -202,7 +227,7 @@ public sealed partial class EncoderPreviewSession
         if (!string.IsNullOrWhiteSpace(encoder) && _metadataEncoder != encoder)
         {
             _metadataEncoder = encoder;
-            _metadataTask = _host.LoadMetadataAsync(encoder, _lifetime.Token);
+            _metadataTask = LoadMetadataAsync(encoder, _lifetime.Token);
             Track(_metadataTask);
         }
         if (string.IsNullOrWhiteSpace(encoder) || string.IsNullOrWhiteSpace(input))
@@ -223,7 +248,7 @@ public sealed partial class EncoderPreviewSession
         _host.ErrorText = null;
         _host.Progress = navigation ? PreviewProgress.Processing : PreviewProgress.ProbingInput;
         var configuration = _host.GetConfiguration(encoder, input);
-        double seconds = _host.CurrentSeconds;
+        double seconds = CurrentSeconds;
         _preparation = PrepareAsync();
         Track(_preparation);
         return _preparation;
@@ -238,7 +263,7 @@ public sealed partial class EncoderPreviewSession
                     _inputInfo, validateRestoredTime && seconds > 0, cancellation.Token).ConfigureAwait(false);
                 await PostAsync(() =>
                 {
-                    if (_host.IsDisposed || editEpoch != Volatile.Read(ref _editEpoch) || cancellation.IsCancellationRequested) return;
+                    if (IsDisposed || editEpoch != Volatile.Read(ref _editEpoch) || cancellation.IsCancellationRequested) return;
                     long actualGeneration = generation;
                     bool actualNavigation = navigation;
                     bool actualReverse = reverse;
@@ -249,17 +274,17 @@ public sealed partial class EncoderPreviewSession
                         actualGeneration = Volatile.Read(ref _generation);
                         actualNavigation = true;
                         actualReverse = _latestIntentReverse;
-                        target = _host.CurrentSeconds;
+                        target = CurrentSeconds;
                     }
-                    _host.ApplyInputInfo(info);
-                    if (_host.HasDuration)
-                        target = validateRestoredTime && !actualNavigation && target > _host.DurationSeconds
-                            ? 0 : Math.Min(target, _host.DurationSeconds);
+                    ApplyInputInfo(info);
+                    if (HasDuration)
+                        target = validateRestoredTime && !actualNavigation && target > DurationSeconds
+                            ? 0 : Math.Min(target, DurationSeconds);
                     // 古い移動の準備完了で目標時刻を過去へ戻さない。
-                    if (actualGeneration == Volatile.Read(ref _generation)) _host.SetTimeOnly(target);
+                    if (actualGeneration == Volatile.Read(ref _generation)) SetTimeOnly(target);
                     var request = CreateAfterRequest(configuration, info, capabilities, target,
                         actualGeneration, actualReverse, _concurrentComparisonGeneration == actualGeneration,
-                        _host.HasDuration ? _host.DurationSeconds : null);
+                        HasDuration ? DurationSeconds : null);
                     _host.ShowInputInfo(info);
                     var neighbor = _pendingNeighbor?.Generation == actualGeneration ? _pendingNeighbor : null;
                     var context = new RequestContext(actualGeneration, request, _clock.GetTimestamp(),
@@ -285,7 +310,7 @@ public sealed partial class EncoderPreviewSession
                 };
                 await PostAsync(() =>
                 {
-                    if (_host.IsDisposed || editEpoch != Volatile.Read(ref _editEpoch) || cancellation.IsCancellationRequested) return;
+                    if (IsDisposed || editEpoch != Volatile.Read(ref _editEpoch) || cancellation.IsCancellationRequested) return;
                     if (!IsCurrent(generation) && !_latestIntentNavigation) return;
                     _pendingNeighbor = null;
                     _lastFailedAfter = Volatile.Read(ref _generation);
@@ -319,7 +344,7 @@ public sealed partial class EncoderPreviewSession
 
     internal void UpdateNavigationStatus()
     {
-        if (_host.IsDisposed) return;
+        if (IsDisposed) return;
         long latest = Volatile.Read(ref _generation);
         if (_lastFailedAfter == latest) return;
         _host.IsBusy = _lastDisplayedAfter < latest || _lastCompletedAfter < latest;
@@ -417,11 +442,11 @@ public sealed partial class EncoderPreviewSession
             bool current = IsCurrent(context.Generation);
             if (current)
             {
-                _host.SetTimeOnly(seconds);
+                SetTimeOnly(seconds);
                 _lastIntentTarget = seconds;
                 SetBeforeProtectionDirection(context.NeighborDirection);
             }
-            _host.DisplayFrame(frame, context);
+            DisplayFrame(frame, context);
             if (current) NotifyAcceptedFrameStep(request, context.NeighborDirection, seconds);
             return RetargetInterval(request, seconds);
         }
