@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using HWEncVppPreview.Core;
+using static HWEncVppPreview.Core.EncoderPreviewSession;
 
 namespace HWEncVppPreview.App.ViewModels;
 
@@ -22,10 +23,7 @@ public sealed partial class MainWindowViewModel
     private bool _useSar = true;
     private long _beforeImageGeneration;
     private Y4mFrame? _beforeDisplayedFrame;
-    private PreviewRequest? _beforeIntervalRequest;
-    private IReadOnlyList<Y4mFrame> _beforeIntervalFrames = Array.Empty<Y4mFrame>();
     private CancellationTokenSource? _beforeCancellation;
-    private RequestContext? _beforeExecutionContext;
     private PreviewRequest? _beforeSelectionRequest;
     private TaskCompletionSource? _beforeImmediate;
     private bool _beforeFinished;
@@ -61,7 +59,7 @@ public sealed partial class MainWindowViewModel
             // Spaceは遅延だけを解除し、すでに実行中の元画像は取り消さない。
             if (BeforeImage == null)
             {
-                if (_beforeFinished && _beforeSelectionRequest is { } request) QueueBefore(request, Volatile.Read(ref _generation));
+                if (_beforeFinished && _beforeSelectionRequest is { } request) QueueBefore(request, Volatile.Read(ref _session._generation));
                 _beforeImmediate?.TrySetResult();
             }
         }
@@ -76,7 +74,7 @@ public sealed partial class MainWindowViewModel
             var previous = _beforeImage;
             if (!SetProperty(ref _beforeImage, value)) return;
             previous?.Dispose();
-            if (value == null && _usesOwnedRaw) SetRawFrame(ref _beforeDisplayedFrame, ref _beforeDisplayedRaw, null, "VmBeforeDisplayed");
+            if (value == null && _usesOwnedRaw) SetRawFrame(ref _beforeDisplayedFrame, ref _session._beforeDisplayedRaw, null, "VmBeforeDisplayed");
             RefreshColorInfo();
         }
     }
@@ -101,25 +99,25 @@ public sealed partial class MainWindowViewModel
         if (updatePresentation) _beforeRescueRetrySelection = null;
         if (PerfTrace.Enabled) PerfTrace.Write("vm.cancel.before", new { active = _beforeCancellation != null });
         // キャンセルと破棄を同じ排他区間に置き、古い要求の後処理との競合を防ぐ。
-        lock (_taskLock)
+        lock (_session._taskLock)
         {
             _beforeCancellation?.Cancel();
             _beforeCancellation = null;
             DropImage(ref _pendingBeforeImage);
             _beforePhysicalWindow = null;
         }
-        if (_beforeExecutionContext is { } previousContext)
+        if (_session._beforeExecutionContext is { } previousContext)
         {
-            DropRawPosts(context => ReferenceEquals(context, previousContext));
+            _session.DropRawPosts(context => ReferenceEquals(context, previousContext));
             previousContext.Segment = null;
         }
-        Volatile.Write(ref _beforeExecutionContext, null);
+        Volatile.Write(ref _session._beforeExecutionContext, null);
         _beforeSelectionRequest = null;
         _beforeImmediate = null;
         _beforeFinished = false;
         Interlocked.Increment(ref _beforeImageGeneration);
         if (!updatePresentation) return;
-        SetRawFrame(ref _beforeDisplayedFrame, ref _beforeDisplayedRaw, null, "VmBeforeDisplayed");
+        SetRawFrame(ref _beforeDisplayedFrame, ref _session._beforeDisplayedRaw, null, "VmBeforeDisplayed");
         IsBeforeBusy = false;
         BeforeImage = null;
     }
@@ -127,9 +125,9 @@ public sealed partial class MainWindowViewModel
     private void ClearBeforeInterval()
     {
         SelectBeforePresentationSegment(null);
-        _beforeIntervalRequest = null;
-        _beforeIntervalSegment = null;
-        SetBeforeIntervalFrames(Array.Empty<Y4mFrame>());
+        _session._beforeIntervalRequest = null;
+        _session._beforeIntervalSegment = null;
+        _session.SetBeforeIntervalFrames(Array.Empty<Y4mFrame>());
     }
 
     private void RecordNavigationIntent()
@@ -137,29 +135,29 @@ public sealed partial class MainWindowViewModel
         if (_initialized && !_suspendChanges && !_disposed)
         {
             long timestamp = _clock.GetTimestamp();
-            lock (_taskLock) _lastNavigationIntent = timestamp;
+            lock (_session._taskLock) _lastNavigationIntent = timestamp;
         }
     }
 
     private TimeSpan BeforeDelayRemaining()
     {
         long? last;
-        lock (_taskLock) last = _lastNavigationIntent;
+        lock (_session._taskLock) last = _lastNavigationIntent;
         return last is long timestamp ? BeforeQuietPeriod - _clock.GetElapsedTime(timestamp) : TimeSpan.Zero;
     }
 
     private void ObserveBeforePhysical(RequestContext context, PreviewRequest physical)
     {
         // backendからの通知はUI外。物理計画だけを取消と同じ排他で受け渡す。
-        lock (_taskLock)
-            if (ReferenceEquals(Volatile.Read(ref _beforeExecutionContext), context)
+        lock (_session._taskLock)
+            if (ReferenceEquals(Volatile.Read(ref _session._beforeExecutionContext), context)
                 && context.BeforeCancellation?.IsCancellationRequested != true)
                 _beforePhysicalWindow = new(context, physical);
     }
 
     private void CheckBeforeInterval(PreviewRequest afterRequest)
     {
-        if (_beforeExecutionContext is { } context && !ContainsBeforeTarget(context, afterRequest)) CancelBefore();
+        if (_session._beforeExecutionContext is { } context && !ContainsBeforeTarget(context, afterRequest)) CancelBefore();
     }
 
     private PreviewRequest BeforeRequest(PreviewRequest afterRequest, long generation) => afterRequest with
@@ -179,7 +177,7 @@ public sealed partial class MainWindowViewModel
 
     private void QueueBefore(PreviewRequest afterRequest, long generation, double? cachedTarget = null, PreviewRequest? recoveryRequest = null)
     {
-        if (!IsCurrent(generation)) return;
+        if (!_session.IsCurrent(generation)) return;
         if (!_beforeEnabled)
         {
             if (PerfTrace.Enabled) PerfTrace.Write("vm.queue.before.disabled", new { generation });
@@ -203,7 +201,7 @@ public sealed partial class MainWindowViewModel
         if (TryGetBeforeInterval(before, out var frames))
         {
             if (PerfTrace.Enabled) PerfTrace.Write("vm.before.cache", new { generation });
-            SetBeforeIntervalFrames(frames);
+            _session.SetBeforeIntervalFrames(frames);
             var frame = SelectBeforeFrame(before, frames, out var frameOwnership);
             using var selectedRaw = frameOwnership;
             if (frame != null)
@@ -213,20 +211,20 @@ public sealed partial class MainWindowViewModel
             }
         }
         // 同一区間なら、待機や実行を保ったまま選択する目標だけを更新する。
-        if (_beforeExecutionContext is { } existing && !_beforeFinished && ContainsBeforeTarget(existing, before)) return;
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        if (_session._beforeExecutionContext is { } existing && !_beforeFinished && ContainsBeforeTarget(existing, before)) return;
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_session._lifetime.Token);
         var context = new RequestContext(generation, before, _clock.GetTimestamp(), RequestKind.Before, cancellation,
-            editEpoch: Volatile.Read(ref _editEpoch));
+            editEpoch: Volatile.Read(ref _session._editEpoch));
         var immediate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        lock (_taskLock) _beforeCancellation = cancellation;
+        lock (_session._taskLock) _beforeCancellation = cancellation;
         _beforeImmediate = immediate;
         if (IsShowingBefore || before.AllowConcurrentBackground) immediate.TrySetResult();
         _beforeFinished = false;
-        var previous = Interlocked.Exchange(ref _beforeExecutionContext, context);
+        var previous = Interlocked.Exchange(ref _session._beforeExecutionContext, context);
         // 完了済みBeforeを置き換えると、旧contextは後続のDisposeから辿れなくなる。
         // 交換を先に確定し、Post/worker自身の少数frame所有を残したまま区間の所有をlock外で返す。
-        if (previous != null) ReleaseDetachedContext(previous);
-        Track(ScheduleBeforeAsync(context, immediate));
+        if (previous != null) _session.ReleaseDetachedContext(previous);
+        _session.Track(ScheduleBeforeAsync(context, immediate));
     }
 
     private async Task ScheduleBeforeAsync(RequestContext context, TaskCompletionSource immediate)
@@ -251,9 +249,9 @@ public sealed partial class MainWindowViewModel
                 }
                 token.ThrowIfCancellationRequested();
                 bool retry = false;
-                await PostAsync(() =>
+                await _session.PostAsync(() =>
                 {
-                    if (!IsCurrent(context) || _beforeSelectionRequest is not { } selection) return;
+                    if (!_session.IsCurrent(context) || _beforeSelectionRequest is not { } selection) return;
                     if (TryGetBeforeInterval(selection, out var frames, forCompletion: context.Segment == null))
                     {
                         CompleteBefore(context, frames);
@@ -271,7 +269,7 @@ public sealed partial class MainWindowViewModel
                     // Beforeの再利用は半durationまでなので、miss後に同じ旧末尾へ戻さない。
                     _controller.Submit(context.Request, bypassCache: true, bypassDebounce: true, background: true, cancellationToken: token);
                     submitted = true;
-                    Track(FinishBeforeAsync(context));
+                    _session.Track(FinishBeforeAsync(context));
                 }).ConfigureAwait(false);
                 if (!retry) break;
             }
@@ -279,9 +277,9 @@ public sealed partial class MainWindowViewModel
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception exception)
         {
-            await PostAsync(() =>
+            await _session.PostAsync(() =>
             {
-                if (!IsCurrent(context)) return;
+                if (!_session.IsCurrent(context)) return;
                 _beforeFinished = true;
                 IsBeforeBusy = false;
                 BeforeImage = null;
@@ -300,7 +298,7 @@ public sealed partial class MainWindowViewModel
 
     private void ReleaseBefore(RequestContext context)
     {
-        lock (_taskLock)
+        lock (_session._taskLock)
         {
             if (ReferenceEquals(_beforeCancellation, context.BeforeCancellation)) _beforeCancellation = null;
             context.BeforeCancellation?.Dispose();
@@ -314,27 +312,27 @@ public sealed partial class MainWindowViewModel
     private void CompleteBeforeWithWindows(RequestContext context, IReadOnlyList<Y4mFrame> frames,
         CompletedWindowSources? sources, bool retryLimitedRescue = false)
     {
-        _beforeIntervalRequest = context.Request;
-        _beforeIntervalSegment = context.Segment;
+        _session._beforeIntervalRequest = context.Request;
+        _session._beforeIntervalSegment = context.Segment;
         using var selectedSource = sources?.ShareMatch(frames);
-        if (selectedSource != null) SetBeforeFramesFromWindow(frames, selectedSource);
-        else SetBeforeIntervalFrames(frames, context);
+        if (selectedSource != null) _session.SetBeforeFramesFromWindow(frames, selectedSource);
+        else _session.SetBeforeIntervalFrames(frames, context);
         _beforeFinished = true;
         IsBeforeBusy = false;
         // 実行開始時の目標ではなく、同じ区間で最後に移動した位置を選ぶ。
         var selection = RetargetInterval(context.Request, CurrentSeconds);
         IDisposable? frameOwnership = null;
-        var frame = ContainsBeforeFrameTarget(_beforeIntervalSegment?.PhysicalRequest ?? context.Request,
-            frames, selection.TargetSeconds, _beforeIntervalSegment) ? SelectBeforeFrame(selection, frames, out frameOwnership) : null;
+        var frame = ContainsBeforeFrameTarget(_session._beforeIntervalSegment?.PhysicalRequest ?? context.Request,
+            frames, selection.TargetSeconds, _session._beforeIntervalSegment) ? SelectBeforeFrame(selection, frames, out frameOwnership) : null;
         using var selectedRaw = frameOwnership;
         if (PerfTrace.Enabled) PerfTrace.Write("vm.before.selection", new { generation = context.Generation,
             target = CurrentSeconds, requestedTarget = context.Request.TargetSeconds,
-            safeStart = _beforeIntervalSegment?.SafeStartSeconds, safeEnd = _beforeIntervalSegment?.SafeEndSeconds,
+            safeStart = _session._beforeIntervalSegment?.SafeStartSeconds, safeEnd = _session._beforeIntervalSegment?.SafeEndSeconds,
             selectedXts = frame?.Xts, missing = frame == null, busy = IsBeforeBusy });
         if (frame != null)
         {
             if (!CompleteEarlyBeforeFrame(context, frame))
-                DisplayBeforeFrame(frame, Volatile.Read(ref _generation), finishBusy: true, revisionContext: context);
+                DisplayBeforeFrame(frame, Volatile.Read(ref _session._generation), finishBusy: true, revisionContext: context);
             return;
         }
         if (retryLimitedRescue)
@@ -350,7 +348,7 @@ public sealed partial class MainWindowViewModel
                 firstXts = frames.FirstOrDefault()?.Xts });
             CancelBefore(updatePresentation: false);
             ClearBeforeInterval();
-            QueueBefore(selection, Volatile.Read(ref _generation));
+            QueueBefore(selection, Volatile.Read(ref _session._generation));
             _beforeImmediate?.TrySetResult();
             return;
         }
@@ -358,70 +356,70 @@ public sealed partial class MainWindowViewModel
         if (_beforeRecoverySelection is { } prior && SameBeforeInput(prior, selection)
             && Math.Abs(prior.TargetSeconds - selection.TargetSeconds) <= 1e-8)
         { BeforeUnavailableForDuration(); return; }
-        var shortfall = PreviewWindowShortfall.FromSegment(selection, _beforeIntervalSegment);
+        var shortfall = PreviewWindowShortfall.FromSegment(selection, _session._beforeIntervalSegment);
         if (shortfall == null || !PreviewWindowRecovery.TryExpand(selection, shortfall, 0, out var recoveryRequest))
         { BeforeUnavailableForDuration(); return; }
         _beforeRecoverySelection = selection;
         CancelBefore();
-        QueueBefore(selection, Volatile.Read(ref _generation), recoveryRequest: recoveryRequest);
+        QueueBefore(selection, Volatile.Read(ref _session._generation), recoveryRequest: recoveryRequest);
         _beforeImmediate?.TrySetResult();
     }
 
     private bool TryGetBeforeInterval(PreviewRequest request, out IReadOnlyList<Y4mFrame> frames, bool forCompletion = false)
     {
-        ValidateNavigationState();
+        _session.ValidateNavigationState();
         // 通常検索は候補のmetadataだけを読み、表示する画素は選択後のTry取得で保護する。
         using var completionRead = forCompletion && request.Capabilities.TimestampPassthrough
-            ? ReadCacheAt(request, request.TargetSeconds, "VmId0BeforeWindow") : null;
+            ? _session.ReadCacheAt(request, request.TargetSeconds, "VmId0BeforeWindow") : null;
         var matchedSegment = completionRead?.Segment;
         if (!forCompletion && request.Capabilities.TimestampPassthrough
             && _cache.TryGetAt(request, request.TargetSeconds, out var metadata)) matchedSegment = metadata;
         if (matchedSegment is { } segment
             && ContainsBeforeFrameTarget(segment.PhysicalRequest, segment.Frames, request.TargetSeconds, segment))
         {
-            _beforeIntervalRequest = segment.PhysicalRequest;
-            _beforeIntervalSegment = segment;
+            _session._beforeIntervalRequest = segment.PhysicalRequest;
+            _session._beforeIntervalSegment = segment;
             // Scheduleの完了枝は従来のnull時計を保ち、Readの生存中に最終窓へ所有を移す。
-            if (forCompletion) SetBeforeIntervalWindow(completionRead!.TakeWindow());
-            else SetBeforeIntervalFrames(segment.Frames);
-            frames = _beforeIntervalFrames;
+            if (forCompletion) _session.SetBeforeIntervalWindow(completionRead!.TakeWindow());
+            else _session.SetBeforeIntervalFrames(segment.Frames);
+            frames = _session._beforeIntervalFrames;
             return true;
         }
-        using var exact = ReadCacheExact(request, forCompletion ? "VmId0BeforeWindow" : "VmBeforeExact", out var physical);
-        if (exact != null && ContainsFrameTarget(physical, exact.Frames, request.TargetSeconds, ClockFor(physical, exact.Frames)))
+        using var exact = _session.ReadCacheExact(request, forCompletion ? "VmId0BeforeWindow" : "VmBeforeExact", out var physical);
+        if (exact != null && ContainsFrameTarget(physical, exact.Frames, request.TargetSeconds, _session.ClockFor(physical, exact.Frames)))
         {
-            _beforeIntervalRequest = physical;
-            _beforeIntervalSegment = null;
-            if (forCompletion) SetBeforeIntervalWindow(exact.TakeWindow());
-            else SetBeforeIntervalFrames(exact.Frames);
-            frames = _beforeIntervalFrames;
+            _session._beforeIntervalRequest = physical;
+            _session._beforeIntervalSegment = null;
+            if (forCompletion) _session.SetBeforeIntervalWindow(exact.TakeWindow());
+            else _session.SetBeforeIntervalFrames(exact.Frames);
+            frames = _session._beforeIntervalFrames;
             return true;
         }
         // フィルタなしなら、長寿命Afterの同じフレームを共有し、元画像用のプロセスを起動しない。
-        if (_intervalRequest is { VppArgs.Count: 0 } after && SameBeforeInput(after, request)
-            && ContainsBeforeFrameTarget(after, _intervalFrames, request.TargetSeconds, _intervalSegment))
+        if (_session._intervalRequest is { VppArgs.Count: 0 } after && SameBeforeInput(after, request)
+            && ContainsBeforeFrameTarget(after, _session._intervalFrames, request.TargetSeconds, _session._intervalSegment))
         {
-            _beforeIntervalRequest = after;
-            _beforeIntervalSegment = _intervalSegment;
-            if (forCompletion && _intervalSegment is { SegmentId: > 0 } cachedAfter)
+            _session._beforeIntervalRequest = after;
+            _session._beforeIntervalSegment = _session._intervalSegment;
+            if (forCompletion && _session._intervalSegment is { SegmentId: > 0 } cachedAfter)
             {
                 if (!TryAdoptBeforeCompletion(cachedAfter.SegmentId, after, request.TargetSeconds))
                 { frames = Array.Empty<Y4mFrame>(); return false; }
             }
-            else SetBeforeIntervalFrames(_intervalFrames, shared: _intervalRaw);
-            frames = _beforeIntervalFrames;
+            else _session.SetBeforeIntervalFrames(_session._intervalFrames, shared: _session._intervalRaw);
+            frames = _session._beforeIntervalFrames;
             return true;
         }
         // 最新目標で計画窓を上書きせず、取得した区間の実時刻と安全範囲だけで再利用を判断する。
-        if (_beforeIntervalRequest is { } previous && SameBeforeInput(previous, request)
-            && ContainsBeforeFrameTarget(previous, _beforeIntervalFrames, request.TargetSeconds, _beforeIntervalSegment)
-            && (_beforeIntervalSegment is not { } held
+        if (_session._beforeIntervalRequest is { } previous && SameBeforeInput(previous, request)
+            && ContainsBeforeFrameTarget(previous, _session._beforeIntervalFrames, request.TargetSeconds, _session._beforeIntervalSegment)
+            && (_session._beforeIntervalSegment is not { } held
                 || PreviewSafeRange.Contains(request.TargetSeconds, held.SafeStartSeconds, held.SafeEndSeconds)))
         {
-            if (forCompletion && _beforeIntervalSegment is { SegmentId: > 0 } cachedBefore
+            if (forCompletion && _session._beforeIntervalSegment is { SegmentId: > 0 } cachedBefore
                 && !TryAdoptBeforeCompletion(cachedBefore.SegmentId, previous, request.TargetSeconds))
             { frames = Array.Empty<Y4mFrame>(); return false; }
-            frames = _beforeIntervalFrames;
+            frames = _session._beforeIntervalFrames;
             return true;
         }
         frames = Array.Empty<Y4mFrame>();
@@ -432,10 +430,10 @@ public sealed partial class MainWindowViewModel
     {
         // 正IDのmetadataだけでは全列を所有できない。gate内で取得した最終窓をそのまま移す。
         // 最新prefixで包含を再確認し、消失時は既存missへ戻す。追加の一時bridgeは作らない。
-        using var current = ReadCacheSegment(id, "VmId0BeforeWindow");
+        using var current = _session.ReadCacheSegment(id, "VmId0BeforeWindow");
         if (current?.Segment is not { } latest
             || !ContainsBeforeFrameTarget(physical, current.Frames, target, latest)) return false;
-        SetBeforeIntervalWindow(current.TakeWindow());
+        _session.SetBeforeIntervalWindow(current.TakeWindow());
         return true;
     }
 
@@ -451,10 +449,10 @@ public sealed partial class MainWindowViewModel
 
     private bool SameBeforeInput(PreviewRequest a, PreviewRequest b) => a.EncoderPath == b.EncoderPath
         && a.InputFile == b.InputFile && a.Fps == b.Fps
-        && (a.InputArgs.SequenceEqual(b.InputArgs) || IsKnownLegacyPhysicalSource(a, b)
+        && (a.InputArgs.SequenceEqual(b.InputArgs) || _session.IsKnownLegacyPhysicalSource(a, b)
             && SameArgumentsWithoutPassthrough(a.InputArgs, b.InputArgs))
         && a.Capabilities.OpenClTaskThreads == b.Capabilities.OpenClTaskThreads
-        && (a.Capabilities.TimestampPassthrough == b.Capabilities.TimestampPassthrough || IsKnownLegacyPhysicalSource(a, b))
+        && (a.Capabilities.TimestampPassthrough == b.Capabilities.TimestampPassthrough || _session.IsKnownLegacyPhysicalSource(a, b))
         && a.TimestampOriginSeconds == b.TimestampOriginSeconds;
 
     // 実受信済みなら安全域、未出力ならprobe後の物理窓だけを再利用する。
@@ -464,7 +462,7 @@ public sealed partial class MainWindowViewModel
         if (context.Segment is { } segment)
             return ContainsBeforeFrameTarget(segment.PhysicalRequest, segment.Frames, second.TargetSeconds, segment);
         PreviewRequest? physical;
-        lock (_taskLock)
+        lock (_session._taskLock)
             physical = _beforePhysicalWindow is { } window && ReferenceEquals(window.Context, context) ? window.Request : null;
         // probeの結論が未着なら別目標への窓拡張を推測しない。
         if (physical == null) return Math.Abs(context.Request.TargetSeconds - second.TargetSeconds) <= 1e-8;
@@ -477,7 +475,7 @@ public sealed partial class MainWindowViewModel
     private bool ContainsFrameTarget(PreviewRequest request, IReadOnlyList<Y4mFrame> frames, double target, PreviewClockMap? clock)
     {
         if (frames.Count == 0) return false;
-        clock ??= ClockFor(request, frames);
+        clock ??= _session.ClockFor(request, frames);
         double first = clock.ToInputSeconds(frames[0], 0, request.Fps);
         double last = clock.ToInputSeconds(frames[^1], frames.Count - 1, request.Fps);
         return target >= first - FrameSelector.Duration(frames[0], request.Fps) / 2
@@ -488,7 +486,7 @@ public sealed partial class MainWindowViewModel
     {
         ownership = null;
         if (frames.Count == 0) return null;
-        if (_beforeIntervalSegment is { Clock.TrustedAbsolute: true } segment)
+        if (_session._beforeIntervalSegment is { Clock.TrustedAbsolute: true } segment)
         {
             var navigation = NavigationFrames(request, segment);
             int selected = FrameSelector.Select(navigation.Select(reference => new FrameTiming(reference.InputSeconds,
@@ -498,12 +496,12 @@ public sealed partial class MainWindowViewModel
                 var frame = navigation[selected].Frame;
                 // metadata選択後は取得成功まで区間を変えず、using終了後も選択1枚を保つ。
                 if (!TryRetainSelection(frame, "VmBeforeSelection", out ownership)) return null;
-                _beforeIntervalSegment = navigation[selected].Segment;
+                _session._beforeIntervalSegment = navigation[selected].Segment;
                 return frame;
             }
             return null;
         }
-        var clock = _beforeIntervalSegment?.Clock ?? ClockFor(request, frames);
+        var clock = _session._beforeIntervalSegment?.Clock ?? _session.ClockFor(request, frames);
         double target = clock.ToSelectionSeconds(request.TargetSeconds, frames, request.Fps);
         int index = FrameSelector.Select(frames, target, request.Fps);
         var last = frames.LastOrDefault(frame => frame.Xts.HasValue) ?? frames[^1];
@@ -518,14 +516,14 @@ public sealed partial class MainWindowViewModel
         PreviewSegmentSnapshot? sourceSegment = null, bool earlyDisplay = false)
     {
         // 変換中に選択済みの区間が回収されると再取得になるため、表示準備を始めた時点から守る。
-        SelectBeforePresentationSegment((sourceSegment ?? _beforeIntervalSegment)?.SegmentId, frame.FrameId);
-        revisionContext ??= Volatile.Read(ref _context);
+        SelectBeforePresentationSegment((sourceSegment ?? _session._beforeIntervalSegment)?.SegmentId, frame.FrameId);
+        revisionContext ??= Volatile.Read(ref _session._context);
         long revision = revisionContext == null ? 0 : Volatile.Read(ref revisionContext.DisplayRevision);
         long imageGeneration = Interlocked.Increment(ref _beforeImageGeneration);
         var request = _beforeSelectionRequest;
-        var source = sourceSegment ?? _beforeIntervalSegment;
-        var clock = source?.Clock ?? (request == null ? null : ClockFor(request, new[] { frame }));
-        var work = new ImageWork(frame, generation, Volatile.Read(ref _editEpoch), Before: true,
+        var source = sourceSegment ?? _session._beforeIntervalSegment;
+        var clock = source?.Clock ?? (request == null ? null : _session.ClockFor(request, new[] { frame }));
+        var work = new ImageWork(frame, generation, Volatile.Read(ref _session._editEpoch), Before: true,
             BeforeVersion: imageGeneration, FinishBeforeBusy: finishBusy,
             DisplaySeconds: PerfTrace.Enabled && frame.Xts.HasValue && request != null && clock != null
                 ? clock.ToInputSeconds(frame, 0, request.Fps) : null,

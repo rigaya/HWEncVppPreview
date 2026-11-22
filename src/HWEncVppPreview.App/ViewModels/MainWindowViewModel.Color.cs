@@ -17,7 +17,7 @@ public sealed partial class MainWindowViewModel
         {
             value = double.IsFinite(value) ? Math.Clamp(value, 50, 1000) : 203;
             if (value == _hdrDisplaySettings.ReferenceWhiteNits) return;
-            lock (_taskLock)
+            lock (_session._taskLock)
             {
                 _hdrDisplaySettings = _hdrDisplaySettings with { ReferenceWhiteNits = value };
                 ++_hdrDisplaySettingsRevision;
@@ -26,16 +26,16 @@ public sealed partial class MainWindowViewModel
             RefreshColorInfo();
             // cacheは変換前のYUVを保持する。表示中だけを更新し、cacheの取得時は新しい設定で変換する。
             if (_displayedFrame is { } after && PreviewImage != null && YuvToBgra.GetColorInfo(after.Header).IsHdr)
-                EnqueueImage(new(after, Volatile.Read(ref _generation), Volatile.Read(ref _editEpoch), DisplayOnly: true));
+                EnqueueImage(new(after, Volatile.Read(ref _session._generation), Volatile.Read(ref _session._editEpoch), DisplayOnly: true));
             if (_beforeDisplayedFrame is { } before && BeforeImage != null && YuvToBgra.GetColorInfo(before.Header).IsHdr)
-                EnqueueImage(new(before, Volatile.Read(ref _generation), Volatile.Read(ref _editEpoch), Before: true, DisplayOnly: true));
+                EnqueueImage(new(before, Volatile.Read(ref _session._generation), Volatile.Read(ref _session._editEpoch), Before: true, DisplayOnly: true));
         }
     }
 
     // 旧設定で終わった変換は、新しい画像の待機枠を潰さず同じrawからやり直す。
     private void RequeueForDisplaySettings(ImageWork image)
     {
-        lock (_taskLock)
+        lock (_session._taskLock)
         {
             if (_disposed) return;
             if (image.DisplayOnly)

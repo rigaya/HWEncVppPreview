@@ -1,5 +1,6 @@
 ﻿using Avalonia.Threading;
 using HWEncVppPreview.Core;
+using static HWEncVppPreview.Core.EncoderPreviewSession;
 
 namespace HWEncVppPreview.App.ViewModels;
 
@@ -10,7 +11,7 @@ public sealed partial class MainWindowViewModel
     private void QueueEarlyBeforeFrame(RequestContext context, PreviewFrameResult value, PreviewSegmentSnapshot? segment)
     {
         if (!value.CanDisplayBeforeEnd || value.TargetNotReached || segment?.Clock.TrustedAbsolute != true
-            || !IsCurrent(context) || Volatile.Read(ref context.BeforeCompletionReceived) != 0) return;
+            || !_session.IsCurrent(context) || Volatile.Read(ref context.BeforeCompletionReceived) != 0) return;
         // 同期通知の一枚だけを保ち、UI待ちのために親区間を取得し直さない。
         if (!TryRetainSelection(value.Frame, "VmBeforeEarlyPost", out var ownership))
         {
@@ -19,15 +20,15 @@ public sealed partial class MainWindowViewModel
             return;
         }
         long revision = Volatile.Read(ref context.DisplayRevision);
-        var post = CaptureOwnershipPost(context, ownership, () =>
+        var post = _session.CaptureOwnershipPost(context, ownership, () =>
         {
             // END先着と目標変更をUIで再確認し、古い候補を最新の画像へ戻さない。
-            if (!IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)
+            if (!_session.IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)
                 || Volatile.Read(ref context.BeforeCompletionReceived) != 0
                 || Math.Abs(CurrentSeconds - value.Request.TargetSeconds) > EarlyBeforeTargetToleranceSeconds) return;
             context.BeforeEarlyFrame = value.Frame;
             context.BeforeEarlyTarget = CurrentSeconds;
-            DisplayBeforeFrame(value.Frame, Volatile.Read(ref _generation), revisionContext: context,
+            DisplayBeforeFrame(value.Frame, Volatile.Read(ref _session._generation), revisionContext: context,
                 sourceSegment: segment, earlyDisplay: true);
         });
         try { _postToUi(post.Execute); }
@@ -56,7 +57,7 @@ public sealed partial class MainWindowViewModel
         // 既表示の一枚なら変換だけ省き、ENDで保存した正区間への保護を必ず引き継ぐ。
         if (!same || targetChanged) return false;
         Interlocked.Increment(ref _beforeImageGeneration);
-        SelectBeforePresentationSegment(_beforeIntervalSegment?.SegmentId, frame.FrameId);
+        SelectBeforePresentationSegment(_session._beforeIntervalSegment?.SegmentId, frame.FrameId);
         IsBeforeBusy = false;
         return true;
     }

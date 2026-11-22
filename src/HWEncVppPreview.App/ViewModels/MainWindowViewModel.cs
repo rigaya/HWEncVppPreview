@@ -12,12 +12,13 @@ using Avalonia.Platform;
 using Avalonia.Threading;
 using HWEncVppPreview.App.Services;
 using HWEncVppPreview.Core;
+using static HWEncVppPreview.Core.EncoderPreviewSession;
 
 namespace HWEncVppPreview.App.ViewModels;
 
 /// <summary>画面の操作をCoreへ接続する。Viewと合意したプロパティ名・コマンド名を維持する。</summary>
 /// <remarks>Coreの通知ではUIの完了を待たず、PostでUIスレッドへ戻す。利用終了時はDisposeAsyncを呼ぶ。</remarks>
-public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
+public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable, IEncoderPreviewHost
 {
     private string _encoderPath = "", _inputPath = "", _encoderDescription = "", _inputArgsText = "";
     private bool _isEncoderPathAutomatic;
@@ -41,22 +42,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private readonly TimeSpan _inputEditDelay;
     private PreviewController _controller => _session.Controller;
     private readonly Func<Y4mFrame, HdrDisplaySettings, CancellationToken, Task<byte[]>>? _imageConverter;
-    private readonly CancellationTokenSource _lifetime = new();
-    private readonly object _taskLock = new();
-    private readonly HashSet<Task> _tasks = new();
-    private CancellationTokenSource? _preparationCancellation;
-    private Task _preparation = Task.CompletedTask;
     private Task? _disposeTask;
     private int _shutdownIncomplete;
-    private bool _initialized, _disposed, _suspendChanges, _seekDragging;
-    private long _generation;
-    private RequestContext? _context;
-    private InputInfo? _inputInfo;
+    private bool _initialized, _disposed, _suspendChanges;
     private HelpIndex _helpIndex = new("");
     private HelpSchema? _helpSchema;
-    private string _metadataEncoder = "";
-    private PreviewRequest? _intervalRequest, _intervalLogicalRequest;
-    private IReadOnlyList<Y4mFrame> _intervalFrames = Array.Empty<Y4mFrame>();
     private Y4mFrame? _displayedFrame;
     private readonly HashSet<FilterLineViewModel> _observedLines = new();
 
@@ -100,17 +90,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         var before = backgroundBackend != null ? new ObservedBackend(backgroundBackend, this) :
             backend == null ? new ObservedBackend(new ServerBackend(_timeouts, _clock), this) : observed;
         _session = new EncoderPreviewSession(_clock, _timeouts, observed, before, _cache, _rawOwnershipScope,
-            probe, backend == null, debounceOverride, readTextOverride);
+            probe, backend == null, debounceOverride, readTextOverride, this, _postToUi);
         _controller.ReplayStarted += OnReplayStarted;
         if (_usesOwnedRaw)
         {
-            _controller.OwnedSegmentUpdated += OnOwnedSegmentUpdated;
-            _controller.OwnedFrameReady += OnOwnedFrameReady;
-            _controller.OwnedCompleted += OnOwnedCompleted;
+            _controller.OwnedSegmentUpdated += _session.OnOwnedSegmentUpdated;
+            _controller.OwnedFrameReady += _session.OnOwnedFrameReady;
+            _controller.OwnedCompleted += _session.OnOwnedCompleted;
         }
         else
         {
-            _controller.SegmentUpdated += OnSegmentUpdated;
+            _controller.SegmentUpdated += _session.OnSegmentUpdated;
             _controller.FrameReady += OnFrameReady;
             _controller.Completed += OnCompleted;
         }
@@ -127,12 +117,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             SelectedFilterLine = line;
         });
         RemoveFilterLineCommand = new RelayCommand(p => { if (p is FilterLineViewModel line) { FilterLines.Remove(line); if (ReferenceEquals(SelectedFilterLine, line)) SelectedFilterLine = FilterLines.FirstOrDefault(); } });
-        StepFrameCommand = new RelayCommand(p => StepFrame((int)Number(p)));
-        StepSecondsCommand = new RelayCommand(p => SeekTo(CurrentSeconds + Number(p), operation: NavigationOperation.Page));
-        GoToStartCommand = new RelayCommand(() => SeekTo(0));
-        GoToEndCommand = new RelayCommand(() => { if (HasDuration) SeekTo(DurationSeconds); });
+        StepFrameCommand = new RelayCommand(p => _session.StepFrame((int)Number(p)));
+        StepSecondsCommand = new RelayCommand(p => _session.SeekTo(CurrentSeconds + Number(p), operation: NavigationOperation.Page));
+        GoToStartCommand = new RelayCommand(() => _session.SeekTo(0));
+        GoToEndCommand = new RelayCommand(() => { if (HasDuration) _session.SeekTo(DurationSeconds); });
         CommitTimeTextCommand = new RelayCommand(CommitTime);
-        RefreshCommand = new RelayCommand(() => { _cache.Clear(); ClearInterval(); ClearBeforeInterval(); _ = QueuePreview(bypassCache: true, bypassDebounce: true); });
+        RefreshCommand = new RelayCommand(() => { _cache.Clear(); _session.ClearInterval(); ClearBeforeInterval(); _ = _session.QueuePreview(bypassCache: true, bypassDebounce: true); });
         SaveFiltersCommand = new RelayCommand(() => RunCommand(SaveFiltersAsync));
         LoadFiltersCommand = new RelayCommand(() => RunCommand(LoadFiltersAsync));
         CopyCommandLineCommand = new RelayCommand(() => RunCommand(() => _services.CopyTextAsync(EnabledOptionsText())));
@@ -178,11 +168,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         if (EncoderPath.Length == 0 && _services.FindEncoder() is { Length: > 0 } automaticPath)
             SetEncoderPath(automaticPath, automatic: true);
         _initialized = true;
-        await QueuePreview(bypassDebounce: true, validateRestoredTime: restoreSettings);
+        await _session.QueuePreview(bypassDebounce: true, validateRestoredTime: restoreSettings);
     }
 
     /// <summary>通常要求の入力検査とSubmit登録を待つ。パス文字編集中は待機タイマー登録までを同期点とし、時計を進めた後の完了はWaitForIdleAsyncで待つ。</summary>
-    public Task WaitForPreparationAsync() => _inputEditCancellation != null ? Task.CompletedTask : _preparation;
+    public Task WaitForPreparationAsync() => _inputEditCancellation != null ? Task.CompletedTask : _session._preparation;
 
     /// <summary>入力検査、エンコード、変換、UIへPostした反映をすべて待つ。</summary>
     public async Task WaitForIdleAsync()
@@ -190,11 +180,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         while (true)
         {
             Task[] tasks;
-            lock (_taskLock) tasks = _tasks.ToArray();
+            lock (_session._taskLock) tasks = _session._tasks.ToArray();
             await Task.WhenAll(tasks).ConfigureAwait(false);
             await _controller.WaitForIdleAsync().ConfigureAwait(false);
-            await PostAsync(() => { }).ConfigureAwait(false);
-            lock (_taskLock) { if (_tasks.Count == 0) return; }
+            await _session.PostAsync(() => { }).ConfigureAwait(false);
+            lock (_session._taskLock) { if (_session._tasks.Count == 0) return; }
         }
     }
 
@@ -210,7 +200,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             WindowWidth = width, WindowHeight = height, CurrentSeconds = CurrentSeconds, IsTextListMode = IsTextListMode, Language = Language, HdrReferenceWhiteNits = HdrReferenceWhiteNits,
         };
         try { await Task.Run(() => settings.Save(_services.SettingsPath)).ConfigureAwait(false); }
-        catch (Exception exception) { await PostAsync(() => ShowExceptionError(AppMessages.SaveSettingsFailed, "", exception)).ConfigureAwait(false); }
+        catch (Exception exception) { await _session.PostAsync(() => ShowExceptionError(AppMessages.SaveSettingsFailed, "", exception)).ConfigureAwait(false); }
     }
 
     public string EncoderPath { get => _encoderPath; set => SetEncoderPath(value ?? "", automatic: false); }
@@ -230,9 +220,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             CancelEncoderInitialization();
             EncoderDescription = "";
-            _metadataEncoder = "";
+            _session._metadataEncoder = "";
             _helpIndex = new HelpIndex("");
-            _capabilities = new();
+            _session._capabilities = new();
             HelpSchema = null;
             HelpText = "";
             InputChanged();
@@ -295,7 +285,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             var previous = _previewImage;
             if (!SetProperty(ref _previewImage, value)) return;
             previous?.Dispose();
-            if (value == null && _usesOwnedRaw) SetRawFrame(ref _displayedFrame, ref _displayedRaw, null, "VmDisplayed");
+            if (value == null && _usesOwnedRaw) SetRawFrame(ref _displayedFrame, ref _session._displayedRaw, null, "VmDisplayed");
         }
     }
     /// <summary>SAR を考慮した表示上の幅・高さ (画素)。View はこの比率で拡大縮小して表示する。</summary>
@@ -305,7 +295,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     /// <summary>時刻欄 (双方向)。Enter で CommitTimeTextCommand。</summary>
     public string CurrentTimeText { get => _currentTimeText; set => SetProperty(ref _currentTimeText, value ?? ""); }
     /// <summary>シークバーの目標位置(秒)。ドラッグ中も移動要求を送り、待ちは最新位置へ置き換える。</summary>
-    public double CurrentSeconds { get => _currentSeconds; set { RecordNavigationIntent(); if (SetProperty(ref _currentSeconds, ClampTime(value))) { SetBeforeProtectionDirection(0); CurrentTimeText = FormatTime(_currentSeconds); _ = QueuePreview(navigation: true); } } }
+    public double CurrentSeconds { get => _currentSeconds; set => _session.SliderChanged(value); }
     /// <summary>入力の長さ (秒)。HasDuration が false のときは意味を持たない。</summary>
     public double DurationSeconds { get => _durationSeconds; set => SetProperty(ref _durationSeconds, value); }
     /// <summary>入力の長さが分かっているか。false ならシークバーを隠す (設計書 17.1)。</summary>
@@ -345,22 +335,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     public ICommand ToggleLogCommand { get; }
 
 
-    public void BeginSeekDrag() => _seekDragging = true;
-    public void EndSeekDrag(double seconds)
-    {
-        if (!_seekDragging) return;
-        SetBeforeProtectionDirection(0);
-        _seekDragging = false;
-        if (seconds == CurrentSeconds)
-        {
-            // ドラッグ中のAfterを捨てず、確定した同じ目標のBeforeだけを同時取得へ進める。
-            long generation = Volatile.Read(ref _generation);
-            _concurrentComparisonGeneration = generation;
-            if (_context is { Kind: RequestKind.After } context && IsCurrent(context))
-                QueueBefore(context.Request with { AllowConcurrentBackground = true }, generation);
-        }
-        else SeekTo(seconds, allowConcurrentBefore: true);
-    }
+    public void BeginSeekDrag() => _session.BeginSeekDrag();
+
+    public void EndSeekDrag(double seconds) => _session.EndSeekDrag(seconds);
 
     private void InputChanged(bool bypassDebounce = false)
     {
@@ -370,19 +347,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         try
         {
             CancelDuration();
-            _inputInfo = null;
+            _session._inputInfo = null;
             HasDuration = false;
             DurationSeconds = 0;
             DurationText = "";
-            ClearInterval();
+            _session.ClearInterval();
         }
         finally { _suspendChanges = suspended; }
         if (!_initialized || _suspendChanges || _disposed) return;
         // 入力切替時の未使用配列は片付ける。貸出中の配列は最後の所有解放まで変更しない。
         _rawOwnershipScope?.ClearFreeBuffers();
-        lock (_taskLock) _preparationCancellation?.Cancel();
-        BeginIntent(navigation: false);
-        if (bypassDebounce) { CancelInputEdit(); _ = QueuePreview(bypassDebounce: true); }
+        lock (_session._taskLock) _session._preparationCancellation?.Cancel();
+        _session.BeginIntent(navigation: false);
+        if (bypassDebounce) { CancelInputEdit(); _ = _session.QueuePreview(bypassDebounce: true); }
         else ScheduleInputEdit();
     }
     private void LinesChanged(object? sender, NotifyCollectionChangedEventArgs args)
@@ -400,55 +377,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         { UpdateCatalogUsage(); FiltersChanged(bypassDebounce: args.PropertyName == nameof(FilterLineViewModel.IsEnabled)); }
         if (ReferenceEquals(sender, SelectedFilterLine)) UpdateHelp();
     }
-    private void FiltersChanged(bool bypassDebounce = false) { ClearInterval(); _ = QueuePreview(bypassDebounce: bypassDebounce); }
+    private void FiltersChanged(bool bypassDebounce = false) { _session.ClearInterval(); _ = _session.QueuePreview(bypassDebounce: bypassDebounce); }
     private void UpdateHelp()
     {
         if (_initialized || _helpIndex.OptionNames.Count > 0) HelpText = _helpIndex.Lookup(SelectedFilterLine?.OptionName ?? "");
     }
-    private void ClearInterval()
-    {
-        SetIntervalFrames(Array.Empty<Y4mFrame>());
-        _intervalRequest = null;
-        _intervalLogicalRequest = null;
-        _intervalSegment = null;
-        SetRawAnchor(ref _navigationAnchor, ref _anchorRaw, null);
-    }
-
-    private bool IsCurrent(long generation) => !_disposed && generation == Volatile.Read(ref _generation);
-    private bool IsCurrent(RequestContext context) => context.Kind == RequestKind.Before
-        ? !_disposed && context.EditEpoch == Volatile.Read(ref _editEpoch)
-            && ReferenceEquals(Volatile.Read(ref _beforeExecutionContext), context)
-            && context.BeforeCancellation?.IsCancellationRequested != true
-        : !_disposed && context.EditEpoch == Volatile.Read(ref _editEpoch) && context.Generation >= _lastDisplayedAfter;
-    private RequestContext? ContextFor(PreviewRequest request)
-    {
-        if (_afterRequests.TryGetValue(request.CorrelationId, out var after) && SameRequest(after.Request, request)) return after;
-        var before = Volatile.Read(ref _beforeExecutionContext);
-        if (before != null && SameRequest(before.Request, request)) return before;
-        var context = Volatile.Read(ref _context);
-        return context != null && SameRequest(context.Request, request) ? context : null;
-    }
-    private RequestContext? ContextForPhysical(PreviewRequest request)
-    {
-        // 物理コピーでは時刻flagを除去するため、対応付けは一意な論理CorIdを使う。
-        RequestContext? context = _afterRequests.TryGetValue(request.CorrelationId, out var after) ? after
-            : Volatile.Read(ref _beforeExecutionContext);
-        if (context?.Request.CorrelationId != request.CorrelationId) context = Volatile.Read(ref _context);
-        return context != null && context.Request.CorrelationId == request.CorrelationId
-            && context.Request.EncoderPath == request.EncoderPath && context.Request.InputFile == request.InputFile
-            && context.Request.Fps == request.Fps ? context : null;
-    }
-    private static bool SameRequest(PreviewRequest a, PreviewRequest b) => a.CorrelationId == b.CorrelationId && a.EncoderPath == b.EncoderPath && a.InputFile == b.InputFile
-        && a.TargetSeconds == b.TargetSeconds && a.Fps == b.Fps && a.InputArgs.SequenceEqual(b.InputArgs) && a.VppArgs.SequenceEqual(b.VppArgs);
-
     private void OnFrameReady(PreviewFrameResult value)
     {
         if (_disposed) return;
-        var context = ContextFor(value.Request);
+        var context = _session.ContextFor(value.Request);
         if (context == null) return;
         if (value.IsReplay)
         {
-            DropRawPosts(candidate => ReferenceEquals(candidate, context));
+            _session.DropRawPosts(candidate => ReferenceEquals(candidate, context));
             BeginReplay(context);
         }
         long revision = Volatile.Read(ref context.DisplayRevision);
@@ -460,19 +401,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             try
             {
-                if (IsCurrent(context) && segment != null) context.Segment = segment;
+                if (_session.IsCurrent(context) && segment != null) context.Segment = segment;
                 if (context.Kind == RequestKind.Before) QueueEarlyBeforeFrame(context, value, segment);
             }
             finally
             {
                 // callback開始後に現役contextが交換されても、遅い代入の所有をここで閉じる。
-                ReleaseDetachedContext(context);
+                _session.ReleaseDetachedContext(context);
             }
             return;
         }
-        PostRaw(context, new[] { frame }, () =>
+        _session.PostRaw(context, new[] { frame }, () =>
         {
-            if (!IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)) return;
+            if (!_session.IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)) return;
             if (segment != null) context.Segment = segment;
             if (isReplay) PrepareReplayUi(context);
             DisplayFrame(frame, context);
@@ -480,23 +421,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     }
     private void OnReplayStarted(PreviewRequest request)
     {
-        var context = ContextFor(request);
+        var context = _session.ContextFor(request);
         if (_disposed || context == null) return;
         // 再取得が1枚も返さず失敗しても、初回の変換が後から復活しないよう即時に失効する。
-        DropRawPosts(candidate => ReferenceEquals(candidate, context));
+        _session.DropRawPosts(candidate => ReferenceEquals(candidate, context));
         BeginReplay(context);
         long revision = Volatile.Read(ref context.DisplayRevision);
         Action apply = () =>
         {
-            if (!IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)) return;
+            if (!_session.IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)) return;
             if (context.Kind == RequestKind.Before) { IsBeforeBusy = true; return; }
             PrepareReplayUi(context);
-            if (context.Generation != Volatile.Read(ref _generation)) return;
-            _lastCompletedAfter = Math.Min(_lastCompletedAfter, context.Generation - 1);
+            if (context.Generation != Volatile.Read(ref _session._generation)) return;
+            _session._lastCompletedAfter = Math.Min(_session._lastCompletedAfter, context.Generation - 1);
             IsBusy = true;
             StatusText = AppMessages.Processing;
         };
-        if (context.Kind == RequestKind.Before) Track(PostAsync(apply));
+        if (context.Kind == RequestKind.Before) _session.Track(_session.PostAsync(apply));
         else _postToUi(apply);
     }
     private static void BeginReplay(RequestContext context)
@@ -510,11 +451,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         context.ReplayUiStarted = true;
         context.NeighborResolved = false;
         context.ResolvedTargetSeconds = null;
-        if (context.Generation != Volatile.Read(ref _generation)) return;
-        SetRawAnchor(ref _navigationAnchor, ref _anchorRaw, null);
-        if (_lastFailedAfter == context.Generation)
+        if (context.Generation != Volatile.Read(ref _session._generation)) return;
+        _session.ClearNavigationAnchor();
+        if (_session._lastFailedAfter == context.Generation)
         {
-            _lastFailedAfter = 0;
+            _session._lastFailedAfter = 0;
             ErrorText = null;
         }
     }
@@ -522,23 +463,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
 
     private void OnCompletedWithWindow(PreviewCompletion value, OwnedUncachedWindow? supplied)
     {
-        var context = ContextFor(value.Request);
+        var context = _session.ContextFor(value.Request);
         if (_disposed || context == null) return;
         if (context.Kind == RequestKind.Before) Interlocked.Exchange(ref context.BeforeCompletionReceived, 1);
         if (value.IsReplay)
         {
-            DropRawPosts(candidate => ReferenceEquals(candidate, context));
+            _session.DropRawPosts(candidate => ReferenceEquals(candidate, context));
             BeginReplay(context);
         }
         IReadOnlyList<Y4mFrame> frames = value.Frames;
         // 正IDの完了はUIで最新区間か救済へ必ず置き換えるため、この時点で別の同一区間を取得しない。
         bool needCached = frames.Count == 0 && (!_usesOwnedRaw || value.Segment is not { SegmentId: > 0 });
-        using var cachedCompletion = needCached ? ReadCacheExact(value.Request, "VmCompletion", out _) : null;
+        using var cachedCompletion = needCached ? _session.ReadCacheExact(value.Request, "VmCompletion", out _) : null;
         if (cachedCompletion != null) frames = cachedCompletion.Frames;
-        if (context.Kind == RequestKind.After) _afterRequests.TryRemove(context.Generation, out _);
+        if (context.Kind == RequestKind.After) _session._afterRequests.TryRemove(context.Generation, out _);
         if (!_usesOwnedRaw)
         {
-            PostRaw(context, frames, () => ApplyCompleted(context, value, frames, null));
+            _session.PostRaw(context, frames, () => ApplyCompleted(context, value, frames, null));
             return;
         }
         OwnedUncachedWindow? notification = null, cached = null;
@@ -550,8 +491,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             {
                 // 元の所属が消えても解放済み画素を復活させず、救済に使う少数だけを取得する。
                 rescue = context.Kind == RequestKind.Before
-                    ? RetainEvictedBeforeCompletion(positive, CurrentSeconds)
-                    : RetainEvictedAfterCompletion(positive, context);
+                    ? _session.RetainEvictedBeforeCompletion(positive, CurrentSeconds)
+                    : _session.RetainEvictedAfterCompletion(positive, context);
                 if (!OwnedUncachedWindow.TryCapture(rescue.Frames, "VmCompletionRescue", out notification))
                 {
                     // 部分取得は返却済みなので、失敗したdescriptorを後段の通常Captureへ渡さない。
@@ -569,7 +510,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             }
             if (cachedCompletion != null) cached = cachedCompletion.TakeWindow();
             var sources = new CompletedWindowSources(notification, cached, rescue, rescueUnavailable);
-            PostOwnership(context, sources, () => ApplyCompleted(context, value, frames, sources));
+            _session.PostOwnership(context, sources, () => ApplyCompleted(context, value, frames, sources));
         }
         catch
         {
@@ -582,11 +523,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private void ApplyCompleted(RequestContext context, PreviewCompletion value, IReadOnlyList<Y4mFrame> frames,
         CompletedWindowSources? sources)
     {
-        if (!IsCurrent(context)) return;
+        if (!_session.IsCurrent(context)) return;
         // 途中画像はFrameReadyが1枚だけ渡す。旧世代の完了列で最新の保持区間を戻さない。
-        if (context.Kind == RequestKind.After && context.Generation != Volatile.Read(ref _generation))
+        if (context.Kind == RequestKind.After && context.Generation != Volatile.Read(ref _session._generation))
         { context.Segment = null; return; }
-        RefreshRetainedSnapshots();
+        _session.RefreshRetainedSnapshots();
         var segment = value.Segment;
         bool evictedAfter = false;
         bool retryLimitedBeforeRescue = false;
@@ -603,7 +544,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                         generation = context.Generation, context.Request.CorrelationId, target = CurrentSeconds,
                         neighborDirection = context.NeighborDirection });
                     context.Segment = null;
-                    _ = QueuePreview(navigation: true, neighborDirection: context.NeighborDirection,
+                    _ = _session.QueuePreview(navigation: true, neighborDirection: context.NeighborDirection,
                         requirePhysicalRefetch: segment.Clock.TrustedAbsolute);
                     return;
                 }
@@ -611,14 +552,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                 {
                     // UI待ちの間にevictされてもBeforeの完了を捨てない。最新目標の1枚だけ残す。
                     var original = segment;
-                    segment = sources?.RescueSegment ?? RetainEvictedBeforeCompletion(segment, CurrentSeconds);
+                    segment = sources?.RescueSegment ?? _session.RetainEvictedBeforeCompletion(segment, CurrentSeconds);
                     retryLimitedBeforeRescue = sources?.RescueSegment != null
                         && ContainsBeforeFrameTarget(original.PhysicalRequest, original.Frames, CurrentSeconds, original)
                         && !ContainsBeforeFrameTarget(segment.PhysicalRequest, segment.Frames, CurrentSeconds, segment);
                 }
                 else
                 {
-                    segment = sources?.RescueSegment ?? RetainEvictedAfterCompletion(segment, context);
+                    segment = sources?.RescueSegment ?? _session.RetainEvictedAfterCompletion(segment, context);
                     evictedAfter = true;
                 }
                 frames = segment.Frames;
@@ -643,19 +584,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             return;
         }
         if (value.IsReplay) PrepareReplayUi(context);
-        if (_lastFailedAfter == Volatile.Read(ref _generation)) return;
-        _intervalRequest = segment?.PhysicalRequest ?? value.Request;
-        _intervalLogicalRequest = value.Request;
-        _intervalSegment = segment;
+        if (_session._lastFailedAfter == Volatile.Read(ref _session._generation)) return;
+        _session._intervalRequest = segment?.PhysicalRequest ?? value.Request;
+        _session._intervalLogicalRequest = value.Request;
+        _session._intervalSegment = segment;
         using var intervalSource = sources?.ShareMatch(frames);
-        if (intervalSource != null) SetIntervalFramesFromWindow(frames, intervalSource);
-        else SetIntervalFrames(frames, context);
+        if (intervalSource != null) _session.SetIntervalFramesFromWindow(frames, intervalSource);
+        else _session.SetIntervalFrames(frames, context);
         if (evictedAfter)
         {
             if (frames.Count == 0)
             {
-                if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
-                _lastFailedAfter = context.Generation;
+                _session.ClearPendingNeighbor(context.Generation);
+                _session._lastFailedAfter = context.Generation;
                 ShowError(AppMessages.NoDisplayableFrames, value.Result.StandardError);
                 return;
             }
@@ -666,36 +607,36 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                 DisplayFrame(frames[0], context);
             }
         }
-        _lastCompletedAfter = Math.Max(_lastCompletedAfter, context.Generation);
-        var afterRequest = context.NeighborDirection != 0 ? CompleteNeighbor(context, frames) : value.Request;
-        if (frames.Count == 0 && context.Generation == Volatile.Read(ref _generation) && _lastQueuedAfter < context.Generation)
-        { _lastFailedAfter = context.Generation; ShowError(AppMessages.NoDisplayableFrames, value.Result.StandardError); return; }
+        _session._lastCompletedAfter = Math.Max(_session._lastCompletedAfter, context.Generation);
+        var afterRequest = context.NeighborDirection != 0 ? _session.CompleteNeighbor(context, frames) : value.Request;
+        if (frames.Count == 0 && context.Generation == Volatile.Read(ref _session._generation) && _session._lastQueuedAfter < context.Generation)
+        { _session._lastFailedAfter = context.Generation; ShowError(AppMessages.NoDisplayableFrames, value.Result.StandardError); return; }
         if (ApplyReachedInputEnd(context, value, segment))
         {
             afterRequest = RetargetInterval(afterRequest ?? value.Request, CurrentSeconds);
-            _intervalLogicalRequest = afterRequest;
+            _session._intervalLogicalRequest = afterRequest;
         }
         ErrorText = null;
         LogText = AppendBeforeFallbackDiagnostic(value.Result.StandardError);
         ElapsedText = AppMessages.Elapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
-        if (context.Generation == Volatile.Read(ref _generation))
+        if (context.Generation == Volatile.Read(ref _session._generation))
         {
             if (afterRequest != null)
-                _completedAfterStatus = value.TargetNotReached ? AppMessages.DoneTargetNotReached : value.FromCache ? AppMessages.DoneCache : AppMessages.Done;
+                _session._completedAfterStatus = value.TargetNotReached ? PreviewProgress.DoneTargetNotReached : value.FromCache ? PreviewProgress.DoneCache : PreviewProgress.Done;
             QueueBefore(afterRequest ?? value.Request, context.Generation);
         }
-        UpdateNavigationStatus();
+        _session.UpdateNavigationStatus();
     }
     private void OnFailed(PreviewFailure value)
     {
-        var context = ContextFor(value.Request);
+        var context = _session.ContextFor(value.Request);
         if (context == null) return;
         context.Segment = null;
         string diagnostics = value.Diagnostic ?? value.Result?.StandardError ?? (value.Exception as PreviewBackendException)?.StandardError ?? context.Diagnostics;
-        if (context.Kind == RequestKind.After) _afterRequests.TryRemove(context.Generation, out _);
+        if (context.Kind == RequestKind.After) _session._afterRequests.TryRemove(context.Generation, out _);
         Action apply = () =>
         {
-            if (!IsCurrent(context)) return;
+            if (!_session.IsCurrent(context)) return;
             context.Segment = null;
             if (context.Kind == RequestKind.Before)
             {
@@ -704,27 +645,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                 _beforeFinished = true;
                 IsBeforeBusy = false;
                 Interlocked.Increment(ref _beforeImageGeneration);
-                SetRawFrame(ref _beforeDisplayedFrame, ref _beforeDisplayedRaw, null, "VmBeforeDisplayed");
+                SetRawFrame(ref _beforeDisplayedFrame, ref _session._beforeDisplayedRaw, null, "VmBeforeDisplayed");
                 BeforeImage = null;
                 return;
             }
-            if (context.Generation != Volatile.Read(ref _generation)) return;
-            if (_pendingNeighbor?.Generation == context.Generation) _pendingNeighbor = null;
-            _lastFailedAfter = context.Generation;
+            if (context.Generation != Volatile.Read(ref _session._generation)) return;
+            _session.ClearPendingNeighbor(context.Generation);
+            _session._lastFailedAfter = context.Generation;
             ElapsedText = AppMessages.Elapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
             ShowExceptionError(value.Reason, diagnostics, value.Exception);
         };
-        if (context.Kind == RequestKind.Before) Track(PostAsync(apply));
+        if (context.Kind == RequestKind.Before) _session.Track(_session.PostAsync(apply));
         else _postToUi(apply);
     }
     private void DisplayFrame(Y4mFrame frame, RequestContext context)
     {
         long revision = Volatile.Read(ref context.DisplayRevision);
-        if (context.Generation < _lastQueuedAfter || context.Generation == _lastQueuedAfter && revision <= _lastQueuedRevision) return;
-        _lastQueuedAfter = context.Generation;
-        _lastQueuedRevision = revision;
-        RememberNavigationAnchor(frame, context);
-        var clock = context.Segment?.Clock ?? ClockFor(context.Request, new[] { frame });
+        if (context.Generation < _session._lastQueuedAfter || context.Generation == _session._lastQueuedAfter && revision <= _session._lastQueuedRevision) return;
+        _session._lastQueuedAfter = context.Generation;
+        _session._lastQueuedRevision = revision;
+        _session.RememberNavigationAnchor(frame, context);
+        var clock = context.Segment?.Clock ?? _session.ClockFor(context.Request, new[] { frame });
         EnqueueImage(new ImageWork(frame, context.Generation, context.EditEpoch,
             DisplaySeconds: PerfTrace.Enabled && frame.Xts.HasValue ? clock.ToInputSeconds(frame, 0, context.Request.Fps) : null,
             SegmentId: context.Segment?.SegmentId, TrustedAbsolute: clock.TrustedAbsolute,
@@ -761,130 +702,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         ErrorText = string.IsNullOrWhiteSpace(tail) ? message : message + Environment.NewLine + tail;
     }
 
-    private void StepFrame(int direction)
-    {
-        if (direction != 0) RecordNavigationIntent();
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.step", new { direction, pending = _pendingNeighbor != null, reverseWait = _reversePrefetchWait != null, target = CurrentSeconds });
-        LeaveReversePrefetchWaitForForwardStep(direction);
-        if (direction == 0 || _pendingNeighbor != null)
-        {
-            if (PerfTrace.Enabled) PerfTrace.Write("vm.step.drop", new { direction, pending = _pendingNeighbor != null });
-            return;
-        }
-        direction = Math.Sign(direction);
-        if (_initialized && direction < 0 && CurrentSeconds <= 1e-8)
-        {
-            _completedAfterStatus = AppMessages.Start;
-            UpdateNavigationStatus();
-            return;
-        }
-        ValidateNavigationState();
-        if (_intervalRequest is { } interval && _intervalFrames.Count > 0)
-        {
-            var navigation = NavigationFrames(interval, _intervalSegment);
-            if (navigation.Count > 0)
-            {
-                int anchor = NavigationAnchorIndex(navigation, CurrentSeconds, interval.Fps);
-                int next = anchor + direction;
-                if (anchor >= 0 && next >= 0 && next < navigation.Count
-                    && NavigationNeighborsConnected(navigation[anchor], navigation[next]))
-                {
-                    var reference = navigation[next];
-                    if ((reference.InputSeconds - CurrentSeconds) * direction > 1e-9)
-                    {
-                        if (DisplayCached(reference.Frame, reference.InputSeconds, direction, reference)) return;
-                    }
-                }
-            }
-            // trustedな移動viewがあれば、warmを含む元配列へ戻って候補を増やさない。
-            if (_intervalSegment?.Clock.TrustedAbsolute != true && _intervalFrames.Count > 0)
-            {
-                double target = IntervalClock(interval, _intervalFrames).ToSelectionSeconds(CurrentSeconds, _intervalFrames, interval.Fps);
-                var first = _intervalFrames[0];
-                var last = _intervalFrames[^1];
-                double firstTime = first.Xts ?? 0;
-                double lastTime = last.Xts ?? (_intervalFrames.Count - 1) / FrameSelector.FrameRate(last, interval.Fps);
-                double tolerance = FrameSelector.Duration(last, interval.Fps) / 2;
-                if (target >= firstTime - tolerance && target <= lastTime + tolerance)
-                {
-                    int current = NeighborAnchorIndex(_intervalFrames, target, interval.Fps);
-                    int next = current + direction;
-                    if (current >= 0 && next >= 0 && next < _intervalFrames.Count)
-                    {
-                        var frame = _intervalFrames[next];
-                        double seconds = FrameSeconds(interval, frame, next);
-                        if (FrameIsSafe(seconds) && (seconds - CurrentSeconds) * direction > 1e-9)
-                        {
-                            if (PerfTrace.Enabled) PerfTrace.Write("vm.step.cache", new { seconds, direction });
-                            if (DisplayCached(frame, seconds, direction)) return;
-                        }
-                    }
-                }
-            }
-        }
-        if (TryWaitForReversePrefetch(direction)) return;
-        // 取り直し中のキー反復は加算せず、実際の隣が届くまで目標を保つ。
-        if (!_initialized)
-        {
-            // 入力を開く前の操作は、表示位置だけを仮に動かす。
-            SeekTo(CurrentSeconds + direction / (_inputInfo?.Fps ?? 30));
-            return;
-        }
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.step.refetch", new { direction, target = CurrentSeconds });
-        _ = QueuePreview(navigation: true, neighborDirection: direction,
-            requirePhysicalRefetch: _intervalSegment?.Clock.TrustedAbsolute == true);
-    }
-    private bool DisplayCached(Y4mFrame frame, double seconds, int direction, PreviewFrameReference? reference = null)
-    {
-        if (_intervalRequest == null) return true;
-        if (!TryRetainSelection(frame, "VmStepSelection", out var retained)) return false;
-        using var selectedRaw = retained;
-        // 取得失敗は呼出元の既存cache miss経路へ。anchor/世代/目標を先にcommitしない。
-        if (reference != null) AdoptNavigationReference(reference);
-        long generation = BeginIntent(navigation: true);
-        if (PerfTrace.Enabled) PerfTrace.Write("vm.step.accepted", new { generation, seconds, direction, frame.Xts });
-        SetTimeOnly(seconds);
-        // 物理offの結果を移動に再利用しても、診断用sourceはhelp由来の論理設定を維持する。
-        var logical = _intervalLogicalRequest ?? _intervalRequest;
-        var request = RetargetInterval(_intervalRequest, seconds) with { CorrelationId = generation, AllowConcurrentBackground = false,
-            InputArgs = logical.InputArgs, VppArgs = logical.VppArgs, Capabilities = _capabilities,
-            TimestampOriginTrusted = _inputInfo?.TimestampOriginTrusted ?? _intervalRequest.TimestampOriginTrusted };
-        CheckBeforeInterval(request);
-        var context = new RequestContext(generation, request, _clock.GetTimestamp(), editEpoch: _editEpoch);
-        context.SetSegmentSharing(_intervalSegment, _intervalRaw);
-        _lastIntentTarget = seconds;
-        RegisterContext(context);
-        SetBeforeProtectionDirection(direction);
-        IsBusy = true;
-        ErrorText = null;
-        _completedAfterStatus = AppMessages.DoneCache;
-        DisplayFrame(frame, context);
-        // 表示は即時に進め、Coreにも最新の移動意図を伝えて古い待ち要求を置き換える。
-        _controller.Submit(request, navigation: true);
-        NotifyAcceptedFrameStep(request, direction, seconds);
-        Track(ReleaseContextAsync(context));
-        return true;
-    }
-    private void SeekTo(double seconds, bool force = false, bool allowConcurrentBefore = false, NavigationOperation operation = NavigationOperation.Seek)
-    {
-        RecordNavigationIntent();
-        seconds = ClampTime(seconds);
-        if (!force && seconds == CurrentSeconds) return;
-        SetBeforeProtectionDirection(0);
-        SetTimeOnly(seconds);
-        _ = QueuePreview(navigation: true, allowConcurrentBefore: allowConcurrentBefore, operation: operation);
-    }
     private void SetTimeOnly(double seconds)
     {
         _currentSeconds = seconds;
         OnPropertyChanged(nameof(CurrentSeconds));
         CurrentTimeText = FormatTime(seconds);
     }
-    private double ClampTime(double seconds) => double.IsFinite(seconds) ? Math.Clamp(seconds, 0, HasDuration ? DurationSeconds : double.MaxValue) : 0;
     private void CommitTime()
     {
         if (!TryParseTime(CurrentTimeText, out double seconds)) { ShowError(AppMessages.InvalidTime, ""); return; }
-        SeekTo(seconds, force: true, allowConcurrentBefore: true);
+        _session.SeekTo(seconds, force: true, allowConcurrentBefore: true);
     }
     private static bool TryParseTime(string text, out double seconds)
     {
@@ -940,15 +767,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             SelectedFilterLine = FilterLines.FirstOrDefault();
         }
         finally { _suspendChanges = false; }
-        _ = QueuePreview(bypassDebounce: true);
+        _ = _session.QueuePreview(bypassDebounce: true);
     }
     private void RunCommand(Func<Task> command)
     {
-        Track(ExecuteAsync());
+        _session.Track(ExecuteAsync());
         async Task ExecuteAsync()
         {
             try { await command(); }
-            catch (Exception exception) { await PostAsync(() => { if (!_disposed) ShowExceptionError(AppMessages.OperationFailed, "", exception); }); }
+            catch (Exception exception) { await _session.PostAsync(() => { if (!_disposed) ShowExceptionError(AppMessages.OperationFailed, "", exception); }); }
         }
     }
 
@@ -957,13 +784,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         try
         {
             var metadata = await _session.ReadMetadataAsync(encoder, token).ConfigureAwait(false);
-            await PostAsync(() =>
+            await _session.PostAsync(() =>
             {
                 if (_disposed || EncoderPath != encoder) return;
                 EncoderDescription = DescribeEncoder(metadata.Version, encoder);
                 _helpIndex = metadata.HelpIndex;
                 HelpSchema = new HelpSchema(metadata.Help);
-                _capabilities = metadata.Capabilities;
+                _session._capabilities = metadata.Capabilities;
                 _ = StartEncoderInitialization(encoder);
                 UpdateHelp();
             }).ConfigureAwait(false);
@@ -971,11 +798,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception exception)
         {
-            await PostAsync(() =>
+            await _session.PostAsync(() =>
             {
                 if (_disposed || EncoderPath != encoder) return;
-                _metadataEncoder = "";
-                _capabilities = new();
+                _session._metadataEncoder = "";
+                _session._capabilities = new();
                 EncoderDescription = Path.GetFileName(encoder);
                 HelpText = AppMessages.HelpUnavailable + exception.Message;
             }).ConfigureAwait(false);
@@ -995,18 +822,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         return first.Length > 48 ? first[..48] + "…" : first;
     }
 
-    private void Track(Task task)
-    {
-        lock (_taskLock) _tasks.Add(task);
-        _ = task.ContinueWith(completed => { lock (_taskLock) _tasks.Remove(completed); }, CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-    }
-    private Task PostAsync(Action action)
-    {
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _postToUi(() => { try { action(); completion.TrySetResult(); } catch (Exception exception) { completion.TrySetException(exception); } });
-        return completion.Task;
-    }
     public ValueTask DisposeAsync()
     {
         _disposeTask ??= DisposeCoreAsync();
@@ -1018,10 +833,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _disposed = true;
         _rawOwnershipScope?.ClosePool();
         _bgraPool.Dispose();
-        DropRawPosts(_ => true);
+        _session.DropRawPosts(_ => true);
         UiLanguage.Changed -= OnLanguageChanged;
         _initialized = false;
-        Interlocked.Increment(ref _generation);
+        Interlocked.Increment(ref _session._generation);
         var deadline = new CleanupDeadline(_clock, _timeouts.ViewModelDispose);
         Task cancellations = Task.Run(() =>
         {
@@ -1030,20 +845,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             CancelDuration();
             TraceDisposeStage("duration_cancel.end");
             TraceDisposeStage("lifetime_cancel.begin");
-            _lifetime.Cancel();
+            _session._lifetime.Cancel();
             TraceDisposeStage("lifetime_cancel.end");
             TraceDisposeStage("before_cancel.begin");
             CancelBefore(updatePresentation: false);
             TraceDisposeStage("before_cancel.end");
             TraceDisposeStage("preparation_cancel.begin");
-            lock (_taskLock) _preparationCancellation?.Cancel();
+            lock (_session._taskLock) _session._preparationCancellation?.Cancel();
             TraceDisposeStage("preparation_cancel.end");
         });
-        _controller.OwnedSegmentUpdated -= OnOwnedSegmentUpdated;
-        _controller.OwnedFrameReady -= OnOwnedFrameReady;
-        _controller.OwnedCompleted -= OnOwnedCompleted;
+        _controller.OwnedSegmentUpdated -= _session.OnOwnedSegmentUpdated;
+        _controller.OwnedFrameReady -= _session.OnOwnedFrameReady;
+        _controller.OwnedCompleted -= _session.OnOwnedCompleted;
         _controller.ReplayStarted -= OnReplayStarted;
-        _controller.SegmentUpdated -= OnSegmentUpdated;
+        _controller.SegmentUpdated -= _session.OnSegmentUpdated;
         _controller.FrameReady -= OnFrameReady;
         _controller.Completed -= OnCompleted;
         _controller.Failed -= OnFailed;
@@ -1063,13 +878,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         Task pending = Task.Run(async () =>
         {
             Task[] tasks;
-            lock (_taskLock) tasks = _tasks.ToArray();
+            lock (_session._taskLock) tasks = _session._tasks.ToArray();
             await Task.WhenAll(tasks).ConfigureAwait(false);
         });
         await WaitForVmShutdownAsync(pending, deadline, "vm_tasks").ConfigureAwait(false);
         TraceDisposeStage("wait_idle.end");
         TraceDisposeStage("cleanup.begin");
-        Task cleanup = PostAsync(() =>
+        Task cleanup = _session.PostAsync(() =>
         {
             HasDuration = false;
             DurationSeconds = 0;
@@ -1077,37 +892,37 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             PreviewImage = null;
             BeforeImage = null;
             IsBeforeBusy = false;
-            lock (_taskLock)
+            lock (_session._taskLock)
             {
                 DropImage(ref _pendingAfterDisplayRefresh);
                 DropImage(ref _pendingBeforeDisplayRefresh);
                 DropImage(ref _pendingAfterImage);
                 DropImage(ref _pendingBeforeImage);
             }
-            SetRawFrame(ref _displayedFrame, ref _displayedRaw, null, "VmDisplayed");
-            SetRawFrame(ref _beforeDisplayedFrame, ref _beforeDisplayedRaw, null, "VmBeforeDisplayed");
+            SetRawFrame(ref _displayedFrame, ref _session._displayedRaw, null, "VmDisplayed");
+            SetRawFrame(ref _beforeDisplayedFrame, ref _session._beforeDisplayedRaw, null, "VmBeforeDisplayed");
             RefreshColorInfo();
-            ClearInterval();
+            _session.ClearInterval();
             ClearBeforeInterval();
             _cache.Clear();
-            Interlocked.Exchange(ref _pendingSegmentUpdate, null)?.Dispose();
+            Interlocked.Exchange(ref _session._pendingSegmentUpdate, null)?.Dispose();
             // Dispose後もウィンドウ等がVMを参照し得るため、完了した要求の区間もここで手放す。
-            if (_context != null) _context.Segment = null;
-            foreach (var context in _afterRequests.Values) context.Segment = null;
-            _afterRequests.Clear();
-            Volatile.Write(ref _context, null);
-            if (_beforeExecutionContext is { } beforeContext) beforeContext.Segment = null;
-            _beforeExecutionContext = null;
+            if (_session._context != null) _session._context.Segment = null;
+            foreach (var context in _session._afterRequests.Values) context.Segment = null;
+            _session._afterRequests.Clear();
+            Volatile.Write(ref _session._context, null);
+            if (_session._beforeExecutionContext is { } beforeContext) beforeContext.Segment = null;
+            _session._beforeExecutionContext = null;
             _beforePhysicalWindow = null;
         });
         await WaitForVmShutdownAsync(cleanup, deadline, "ui_cleanup").ConfigureAwait(false);
         Task resources = Task.WhenAll(cancellations, controller, probe, pending);
         ObserveVmShutdownTask(resources);
-        if (resources.IsCompleted) _lifetime.Dispose();
+        if (resources.IsCompleted) _session._lifetime.Dispose();
         else
         {
             // 未回収の取消callbackや準備taskとCTSのDisposeを競合させない。
-            Task release = resources.ContinueWith(_ => _lifetime.Dispose(), CancellationToken.None,
+            Task release = resources.ContinueWith(_ => _session._lifetime.Dispose(), CancellationToken.None,
                 TaskContinuationOptions.None, TaskScheduler.Default);
             ObserveVmShutdownTask(release);
         }
@@ -1147,57 +962,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         PerfTrace.Write("vm.dispose.stage", new { stage, synchronizationContext = SynchronizationContext.Current?.GetType().FullName });
         PerfTrace.Flush();
     }
-    private enum RequestKind { After, Before }
-    private sealed class RequestContext(long generation, PreviewRequest request, long started, RequestKind kind = RequestKind.After,
-        CancellationTokenSource? beforeCancellation = null, long editEpoch = 0, int neighborDirection = 0)
-    {
-        public long Generation { get; } = generation;
-        public PreviewRequest Request { get; } = request;
-        public long Started { get; } = started;
-        public RequestKind Kind { get; } = kind;
-        public long EditEpoch { get; } = editEpoch;
-        public int NeighborDirection { get; } = neighborDirection;
-        public CancellationTokenSource? BeforeCancellation { get; } = beforeCancellation;
-        public long DisplayRevision;
-        public int ReplayStarted;
-        public int BeforeCompletionReceived;
-        public Y4mFrame? BeforeEarlyFrame;
-        public double BeforeEarlyTarget;
-        public string? BeforeEarlyFallbackReason;
-        public bool ReplayUiStarted;
-        public bool NeighborResolved { get; set; }
-        public double? ResolvedTargetSeconds { get; set; }
-        private readonly object _segmentSync = new();
-        private PreviewSegmentSnapshot? _segment;
-        private RawSegmentHold? _segmentRaw;
-        public PreviewSegmentSnapshot? Segment
-        {
-            get
-            {
-                lock (_segmentSync) return _segment;
-            }
-            set => SetSegmentSharing(value);
-        }
-        public void SetSegmentSharing(PreviewSegmentSnapshot? value, RawSegmentHold? source = null)
-        {
-            RawSegmentHold? previous;
-            lock (_segmentSync)
-            {
-                // 正IDはmetadataだけ。ID0は同じ窓のhandleを共有し、交換後の旧所有はlock外で返す。
-                var retained = value == null ? null : AcquireRawSegment(value, value.Frames, _segmentRaw, source);
-                previous = _segmentRaw;
-                _segment = value == null ? null : value with { Frames = retained!.Frames };
-                _segmentRaw = retained;
-            }
-            previous?.Dispose();
-        }
-        public RawSegmentHold AcquireIntervalHold(PreviewSegmentSnapshot? segment, IReadOnlyList<Y4mFrame> frames,
-            RawSegmentHold? current, string kind)
-        {
-            lock (_segmentSync) return AcquireRawSegment(segment, frames, current, _segmentRaw, kind);
-        }
-        public string Diagnostics { get; set; } = "";
-    }
     private sealed class ObservedBackend(IPreviewBackend inner, MainWindowViewModel owner) : IPreviewBackend, IRawOwnedBackend
     {
         public Task InitializeEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
@@ -1216,7 +980,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         private async Task<PreviewRunResult> RunObservedAsync(PreviewRequest request,
             Func<CancellationToken, Task<PreviewRunResult>> run, CancellationToken cancellationToken)
         {
-            var context = owner.ContextForPhysical(request);
+            var context = owner._session.ContextForPhysical(request);
             if (context?.Kind == RequestKind.Before) owner.ObserveBeforePhysical(context, request);
             using var cancellation = context?.BeforeCancellation == null ? null
                 : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, context.BeforeCancellation.Token);

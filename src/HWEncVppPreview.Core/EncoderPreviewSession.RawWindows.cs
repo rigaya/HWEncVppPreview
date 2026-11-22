@@ -1,11 +1,9 @@
-﻿using HWEncVppPreview.Core;
+﻿namespace HWEncVppPreview.Core;
 
-namespace HWEncVppPreview.App.ViewModels;
-
-public sealed partial class MainWindowViewModel
+public sealed partial class EncoderPreviewSession
 {
     // intervalは正IDのdescriptorだけを持つ。ID0/nullの有限窓だけ一度所有し、slot間はhandleを渡す。
-    private void SetIntervalFrames(IReadOnlyList<Y4mFrame> frames, RequestContext? source = null)
+    internal void SetIntervalFrames(IReadOnlyList<Y4mFrame> frames, RequestContext? source = null)
     {
         var retained = source == null
             ? AcquireRawSegment(_intervalSegment, frames, _intervalRaw, windowKind: "VmId0IntervalWindow")
@@ -16,7 +14,7 @@ public sealed partial class MainWindowViewModel
         previous?.Dispose();
     }
 
-    private void SetBeforeIntervalFrames(IReadOnlyList<Y4mFrame> frames, RequestContext? source = null,
+    internal void SetBeforeIntervalFrames(IReadOnlyList<Y4mFrame> frames, RequestContext? source = null,
         RawSegmentHold? shared = null)
     {
         var retained = source == null
@@ -25,7 +23,7 @@ public sealed partial class MainWindowViewModel
         SetBeforeIntervalWindow(retained);
     }
 
-    private void SetBeforeIntervalWindow(RawSegmentHold retained)
+    internal void SetBeforeIntervalWindow(RawSegmentHold retained)
     {
         var previous = _beforeIntervalRaw;
         _beforeIntervalRaw = retained;
@@ -33,7 +31,7 @@ public sealed partial class MainWindowViewModel
         previous?.Dispose();
     }
 
-    private void SetIntervalFramesFromWindow(IReadOnlyList<Y4mFrame> frames, RawSegmentHold source)
+    internal void SetIntervalFramesFromWindow(IReadOnlyList<Y4mFrame> frames, RawSegmentHold source)
     {
         var retained = AcquireRawSegment(_intervalSegment, frames, _intervalRaw, source, "VmId0IntervalWindow");
         var previous = _intervalRaw;
@@ -42,18 +40,18 @@ public sealed partial class MainWindowViewModel
         previous?.Dispose();
     }
 
-    private void SetBeforeFramesFromWindow(IReadOnlyList<Y4mFrame> frames, RawSegmentHold source)
+    internal void SetBeforeFramesFromWindow(IReadOnlyList<Y4mFrame> frames, RawSegmentHold source)
         => SetBeforeIntervalWindow(AcquireRawSegment(_beforeIntervalSegment, frames, _beforeIntervalRaw,
             source, "VmId0BeforeWindow"));
 
-    private abstract class RawSegmentHold : IDisposable
+    internal abstract class RawSegmentHold : IDisposable
     {
         // descriptorはrawの解放後も参照できる。画素の生存保証とは分ける。
         public abstract IReadOnlyList<Y4mFrame> Frames { get; }
         public abstract void Dispose();
     }
 
-    private sealed class CachedSegmentMetadata(IReadOnlyList<Y4mFrame> frames) : RawSegmentHold
+    internal sealed class CachedSegmentMetadata(IReadOnlyList<Y4mFrame> frames) : RawSegmentHold
     {
         public override IReadOnlyList<Y4mFrame> Frames { get; } = Array.AsReadOnly(frames.ToArray());
         public override void Dispose() { }
@@ -76,7 +74,7 @@ public sealed partial class MainWindowViewModel
         return OwnedUncachedWindow.Capture(frames, windowKind);
     }
 
-    private sealed class OwnedUncachedWindow : RawSegmentHold
+    internal sealed class OwnedUncachedWindow : RawSegmentHold
     {
         private readonly RawFrameWindow _window;
         private OwnedUncachedWindow(RawFrameWindow window) => _window = window;
@@ -104,7 +102,7 @@ public sealed partial class MainWindowViewModel
     }
 
     // 完了通知と別のキャッシュ読取は異なる列を持ち得るため、両方の取得済み所有をUI処理まで保つ。
-    private sealed class CompletedWindowSources(OwnedUncachedWindow? notification, OwnedUncachedWindow? cached,
+    internal sealed class CompletedWindowSources(OwnedUncachedWindow? notification, OwnedUncachedWindow? cached,
         PreviewSegmentSnapshot? rescue = null, bool rescueUnavailable = false) : IDisposable
     {
         public PreviewSegmentSnapshot? RescueSegment { get; } = rescue;
@@ -116,5 +114,56 @@ public sealed partial class MainWindowViewModel
             notification?.Dispose();
             cached?.Dispose();
         }
+    }
+    internal enum RequestKind { After, Before }
+    internal sealed class RequestContext(long generation, PreviewRequest request, long started, RequestKind kind = RequestKind.After,
+        CancellationTokenSource? beforeCancellation = null, long editEpoch = 0, int neighborDirection = 0)
+    {
+        public long Generation { get; } = generation;
+        public PreviewRequest Request { get; } = request;
+        public long Started { get; } = started;
+        public RequestKind Kind { get; } = kind;
+        public long EditEpoch { get; } = editEpoch;
+        public int NeighborDirection { get; } = neighborDirection;
+        public CancellationTokenSource? BeforeCancellation { get; } = beforeCancellation;
+        public long DisplayRevision;
+        public int ReplayStarted;
+        public int BeforeCompletionReceived;
+        public Y4mFrame? BeforeEarlyFrame;
+        public double BeforeEarlyTarget;
+        public string? BeforeEarlyFallbackReason;
+        public bool ReplayUiStarted;
+        public bool NeighborResolved { get; set; }
+        public double? ResolvedTargetSeconds { get; set; }
+        private readonly object _segmentSync = new();
+        private PreviewSegmentSnapshot? _segment;
+        private RawSegmentHold? _segmentRaw;
+        public PreviewSegmentSnapshot? Segment
+        {
+            get
+            {
+                lock (_segmentSync) return _segment;
+            }
+            set => SetSegmentSharing(value);
+        }
+        public void SetSegmentSharing(PreviewSegmentSnapshot? value, RawSegmentHold? source = null)
+        {
+            RawSegmentHold? previous;
+            lock (_segmentSync)
+            {
+                // 正IDはmetadataだけ。ID0は同じ窓のhandleを共有し、交換後の旧所有はlock外で返す。
+                var retained = value == null ? null : AcquireRawSegment(value, value.Frames, _segmentRaw, source);
+                previous = _segmentRaw;
+                _segment = value == null ? null : value with { Frames = retained!.Frames };
+                _segmentRaw = retained;
+            }
+            previous?.Dispose();
+        }
+        public RawSegmentHold AcquireIntervalHold(PreviewSegmentSnapshot? segment, IReadOnlyList<Y4mFrame> frames,
+            RawSegmentHold? current, string kind)
+        {
+            lock (_segmentSync) return AcquireRawSegment(segment, frames, current, _segmentRaw, kind);
+        }
+        public string Diagnostics { get; set; } = "";
     }
 }

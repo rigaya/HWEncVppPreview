@@ -29,7 +29,7 @@ public sealed partial class MainWindowViewModel
         bool visible = _beforeEnabled && (CompareMode != PreviewCompareMode.Single || IsShowingBefore);
         // 同じ取得区間を共有する元画像では、後処理画像の保護だけを使って従来の回収順を保つ。
         // 次の要求を準備している間も、直前の共有区間を別画像の保護へ切り替えない。
-        bool shared = (_context?.Request ?? _intervalLogicalRequest ?? _intervalRequest)?.VppArgs.Count == 0;
+        bool shared = (_session._context?.Request ?? _session._intervalLogicalRequest ?? _session._intervalRequest)?.VppArgs.Count == 0;
         long? segmentId = visible && !shared ? _beforePresentationSegmentId : null;
         _cache.ProtectDisplayedBeforeSegment(segmentId, segmentId.HasValue ? _beforePresentationFrameId : 0,
             segmentId.HasValue ? _beforeProtectionDirection : 0);

@@ -1,26 +1,23 @@
-﻿using Avalonia.Threading;
-using HWEncVppPreview.Core;
+﻿namespace HWEncVppPreview.Core;
 
-namespace HWEncVppPreview.App.ViewModels;
-
-public sealed partial class MainWindowViewModel
+public sealed partial class EncoderPreviewSession
 {
-    private PreviewCapabilities _capabilities = new();
+    internal PreviewCapabilities _capabilities = new();
     private Task _metadataTask = Task.CompletedTask;
-    private double _lastIntentTarget;
+    internal double _lastIntentTarget;
     private bool _latestIntentReverse;
-    private PreviewSegmentSnapshot? _intervalSegment, _beforeIntervalSegment;
-    private OwnedUiPost? _pendingSegmentUpdate;
+    internal PreviewSegmentSnapshot? _intervalSegment, _beforeIntervalSegment;
+    internal OwnedUiPost? _pendingSegmentUpdate;
     private int _segmentPostQueued;
     private PreviewFrameReference? _navigationAnchor;
     private double _navigationAnchorTarget;
 
-    private void OnSegmentUpdated(PreviewSegmentUpdate update) => OnSegmentUpdatedWithWindow(update, null);
+    internal void OnSegmentUpdated(PreviewSegmentUpdate update) => OnSegmentUpdatedWithWindow(update, null);
 
     private void OnSegmentUpdatedWithWindow(PreviewSegmentUpdate update, OwnedUncachedWindow? source)
     {
         var context = ContextFor(update.Request);
-        if (_disposed || context?.Kind != RequestKind.After || context.Generation != Volatile.Read(ref _generation)) return;
+        if (_host.IsDisposed || context?.Kind != RequestKind.After || context.Generation != Volatile.Read(ref _generation)) return;
         // 先読みの各フレームでUIキューに区間全体を積まず、未反映の最新状態だけを保持する。
         // 正IDはUI到着時にcacheを読み直す。待機中はmetadataだけ、ID0の有限窓だけ所有する。
         var frames = update.Segment.SegmentId > 0 ? Array.Empty<Y4mFrame>() : update.Segment.Frames;
@@ -38,8 +35,8 @@ public sealed partial class MainWindowViewModel
 
     private void QueueSegmentPost()
     {
-        if (!_disposed && Interlocked.CompareExchange(ref _segmentPostQueued, 1, 0) == 0)
-            _postToUi(ApplyPendingSegment);
+        if (!_host.IsDisposed && Interlocked.CompareExchange(ref _segmentPostQueued, 1, 0) == 0)
+            _post(ApplyPendingSegment);
     }
 
     private void ApplyPendingSegment()
@@ -101,11 +98,11 @@ public sealed partial class MainWindowViewModel
         {
             _lastCompletedAfter = Math.Max(_lastCompletedAfter, context.Generation);
             if (context.NeighborDirection == 0 || context.ResolvedTargetSeconds.HasValue)
-                _completedAfterStatus = AppMessages.Done;
-            ErrorText = null;
+                _completedAfterStatus = PreviewProgress.Done;
+            _host.ErrorText = null;
         }
         if (update.IsReadPaused && satisfied && context.Generation == Volatile.Read(ref _generation))
-            QueueBefore(RetargetInterval(context.Request, CurrentSeconds), context.Generation);
+            _host.QueueBefore(RetargetInterval(context.Request, _host.CurrentSeconds), context.Generation);
         UpdateNavigationStatus();
     }
 
@@ -127,7 +124,10 @@ public sealed partial class MainWindowViewModel
         return navigation;
     }
 
-    private bool CacheHasSegment(long segmentId) => _cache.ContainsSegment(segmentId);
+    internal bool CacheHasSegment(long segmentId) => _cache.ContainsSegment(segmentId);
+
+    internal void ClearNavigationAnchor()
+        => SetRawAnchor(ref _navigationAnchor, ref _anchorRaw, null);
 
     private bool IsConnectedNavigationTarget(double target, double previous)
     {
@@ -142,7 +142,7 @@ public sealed partial class MainWindowViewModel
             && PreviewSafeRange.Contains(target, segment.SafeStartSeconds, segment.SafeEndSeconds);
     }
 
-    private void ValidateNavigationState()
+    internal void ValidateNavigationState()
     {
         RefreshRetainedSnapshots();
         if (_navigationAnchor is { SegmentId: > 0 } anchor && !CacheHasSegment(anchor.SegmentId))
@@ -150,7 +150,7 @@ public sealed partial class MainWindowViewModel
         if (_intervalSegment is { SegmentId: > 0 } interval && !CacheHasSegment(interval.SegmentId))
             ClearInterval();
         if (_beforeIntervalSegment is { SegmentId: > 0 } before && !CacheHasSegment(before.SegmentId))
-            ClearBeforeInterval();
+            _host.ClearBeforeInterval();
     }
 
     private int NavigationAnchorIndex(IReadOnlyList<PreviewFrameReference> frames, double target, double fps)
@@ -209,7 +209,7 @@ public sealed partial class MainWindowViewModel
         _navigationAnchorTarget = frame.InputSeconds;
     }
 
-    private void RememberNavigationAnchor(Y4mFrame frame, RequestContext context)
+    internal void RememberNavigationAnchor(Y4mFrame frame, RequestContext context)
     {
         if (context.Segment is not { Clock.TrustedAbsolute: true } segment) return;
         for (int i = 0; i < segment.Frames.Count; ++i)
@@ -221,27 +221,27 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    private bool FrameIsSafe(double seconds) => _intervalSegment == null
+    internal bool FrameIsSafe(double seconds) => _intervalSegment == null
         || PreviewSafeRange.Contains(seconds, _intervalSegment.SafeStartSeconds, _intervalSegment.SafeEndSeconds);
 
-    private PreviewClockMap IntervalClock(PreviewRequest request, IReadOnlyList<Y4mFrame> frames)
+    internal PreviewClockMap IntervalClock(PreviewRequest request, IReadOnlyList<Y4mFrame> frames)
         => _intervalSegment != null && SameImageSource(_intervalSegment.PhysicalRequest, request)
             ? _intervalSegment.Clock : ClockFor(request, frames);
 
-    private PreviewClockMap ClockFor(PreviewRequest request, IReadOnlyList<Y4mFrame> frames)
+    internal PreviewClockMap ClockFor(PreviewRequest request, IReadOnlyList<Y4mFrame> frames)
     {
         double seek = CommandBuilder.Plan(request).SeekSeconds ?? 0;
         double? first = frames.FirstOrDefault()?.Xts;
-        bool aligned = !_controller.IsLegacySource(request) && request.TimestampOriginTrusted && request.Capabilities.TimestampPassthrough && request.TimestampOriginSeconds is double origin
+        bool aligned = !Controller.IsLegacySource(request) && request.TimestampOriginTrusted && request.Capabilities.TimestampPassthrough && request.TimestampOriginSeconds is double origin
             && double.IsFinite(origin) && first is double timestamp && double.IsFinite(timestamp)
             && timestamp >= origin - 1e-6 && timestamp - origin >= seek - 0.5;
         return new(request.TimestampOriginSeconds, seek, aligned);
     }
 
-    private bool IsKnownLegacyPhysicalSource(PreviewRequest physical, PreviewRequest logical)
+    internal bool IsKnownLegacyPhysicalSource(PreviewRequest physical, PreviewRequest logical)
     {
         if (_intervalSegment?.Clock.TrustedAbsolute != false || physical.Capabilities.TimestampPassthrough
-            || _intervalLogicalRequest is not { } saved || !_controller.IsLegacySource(saved)) return false;
+            || _intervalLogicalRequest is not { } saved || !Controller.IsLegacySource(saved)) return false;
         if (FrameCache.SameContent(saved, logical)) return true;
         // F0共有だけは、論理VPPに置かれた時刻flagをBeforeが除いた差も認める。
         return physical.VppArgs.Count == 0 && logical.VppArgs.Count == 0
@@ -251,11 +251,11 @@ public sealed partial class MainWindowViewModel
             && SameArgumentsWithoutPassthrough(saved.VppArgs, logical.VppArgs);
     }
 
-    private static bool SameArgumentsWithoutPassthrough(IReadOnlyList<string> first, IReadOnlyList<string> second)
+    internal static bool SameArgumentsWithoutPassthrough(IReadOnlyList<string> first, IReadOnlyList<string> second)
         => first.Where(value => !value.Equals("--timestamp-passthrough", StringComparison.Ordinal))
             .SequenceEqual(second.Where(value => !value.Equals("--timestamp-passthrough", StringComparison.Ordinal)));
 
-    private bool SameImageSource(PreviewRequest a, PreviewRequest b) => a.EncoderPath == b.EncoderPath
+    internal bool SameImageSource(PreviewRequest a, PreviewRequest b) => a.EncoderPath == b.EncoderPath
         && a.InputFile == b.InputFile && a.TimestampOriginSeconds == b.TimestampOriginSeconds
         && (a.InputArgs.SequenceEqual(b.InputArgs) && a.VppArgs.SequenceEqual(b.VppArgs)
             || IsKnownLegacyPhysicalSource(a, b) && SameArgumentsWithoutPassthrough(a.InputArgs, b.InputArgs)

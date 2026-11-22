@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using HWEncVppPreview.Core;
+using static HWEncVppPreview.Core.EncoderPreviewSession;
 
 namespace HWEncVppPreview.App.ViewModels;
 
@@ -13,7 +14,7 @@ public sealed partial class MainWindowViewModel
     // 長さの寿命は入力単位とし、フィルタ編集や移動の要求世代とは分ける。
     private void CancelDuration()
     {
-        lock (_taskLock)
+        lock (_session._taskLock)
         {
             _durationAfterSeen = _durationBeforeSeen = _durationBeforeUnavailable = false;
             ++_durationGeneration;
@@ -29,7 +30,7 @@ public sealed partial class MainWindowViewModel
         if (info.Duration == null && HasDuration) info = info with { Duration = TimeSpan.FromSeconds(DurationSeconds) };
         if (_reachedInputEndSeconds is double actualEnd)
             info = info with { Duration = TimeSpan.FromSeconds(Math.Min(info.Duration?.TotalSeconds ?? actualEnd, actualEnd)) };
-        _inputInfo = info;
+        _session._inputInfo = info;
         HasDuration = info.Duration.HasValue;
         DurationSeconds = info.Duration?.TotalSeconds ?? 0;
         DurationText = info.Duration is { } duration ? FormatTime(duration.TotalSeconds, milliseconds: false) : "";
@@ -50,11 +51,11 @@ public sealed partial class MainWindowViewModel
         HasDuration = true;
         DurationSeconds = duration;
         DurationText = FormatTime(duration, milliseconds: false);
-        if (_inputInfo != null) _inputInfo = _inputInfo with { Duration = TimeSpan.FromSeconds(duration) };
+        if (_session._inputInfo != null) _session._inputInfo = _session._inputInfo with { Duration = TimeSpan.FromSeconds(duration) };
         if (CurrentSeconds < end - PreviewSafeRange.ToleranceSeconds) return false;
         // 通常の時刻setterは新しいシークになるため、確定した同じ世代の表示位置だけを直す。
         SetTimeOnly(start);
-        _lastIntentTarget = start;
+        _session._lastIntentTarget = start;
         return true;
     }
 
@@ -86,29 +87,29 @@ public sealed partial class MainWindowViewModel
         var identity = new DurationIdentity(encoder, input, JsonSerializer.Serialize(inputArgs));
         CancellationTokenSource cancellation;
         long generation;
-        lock (_taskLock)
+        lock (_session._taskLock)
         {
             if (_disposed || identity == _durationAttempt) return;
             _durationAttempt = identity;
             generation = _durationGeneration;
-            cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+            cancellation = CancellationTokenSource.CreateLinkedTokenSource(_session._lifetime.Token);
             _durationCancellation = cancellation;
         }
-        Track(ReadDurationAsync());
+        _session.Track(ReadDurationAsync());
 
         async Task ReadDurationAsync()
         {
             try
             {
-                var duration = await _session.ProbeDurationAsync(encoder, input, inputArgs, _capabilities, cancellation.Token).ConfigureAwait(false);
-                await PostAsync(() =>
+                var duration = await _session.ProbeDurationAsync(encoder, input, inputArgs, _session._capabilities, cancellation.Token).ConfigureAwait(false);
+                await _session.PostAsync(() =>
                 {
                     if (_disposed || generation != _durationGeneration || identity != _durationAttempt || duration == null || HasDuration) return;
                     // 画像や目標時刻には触れず、後から得られた長さだけを反映する。
                     HasDuration = true;
                     DurationSeconds = Math.Min(duration.Value.TotalSeconds, _reachedInputEndSeconds ?? double.MaxValue);
                     DurationText = FormatTime(DurationSeconds, milliseconds: false);
-                    if (_inputInfo != null) _inputInfo = _inputInfo with { Duration = TimeSpan.FromSeconds(DurationSeconds) };
+                    if (_session._inputInfo != null) _session._inputInfo = _session._inputInfo with { Duration = TimeSpan.FromSeconds(DurationSeconds) };
                 }).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
@@ -118,7 +119,7 @@ public sealed partial class MainWindowViewModel
             }
             finally
             {
-                lock (_taskLock)
+                lock (_session._taskLock)
                 {
                     if (ReferenceEquals(_durationCancellation, cancellation)) _durationCancellation = null;
                     cancellation.Dispose();

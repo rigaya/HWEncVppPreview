@@ -21,15 +21,15 @@ public sealed partial class MainWindowViewModel
 
     private void CancelInputEdit()
     {
-        lock (_taskLock) _inputEditCancellation?.Cancel();
+        lock (_session._taskLock) _inputEditCancellation?.Cancel();
     }
 
     private void ScheduleInputEdit()
     {
         CancelInputEdit();
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        lock (_taskLock) _inputEditCancellation = cancellation;
-        Track(PrepareEditedInputAsync());
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_session._lifetime.Token);
+        lock (_session._taskLock) _inputEditCancellation = cancellation;
+        _session.Track(PrepareEditedInputAsync());
 
         async Task PrepareEditedInputAsync()
         {
@@ -38,19 +38,19 @@ public sealed partial class MainWindowViewModel
                 // パスや入力引数の文字入力では、metadata/probeのプロセス起動より前に待つ。
                 await Task.Delay(_inputEditDelay, _clock, cancellation.Token).ConfigureAwait(false);
                 Task preparation = Task.CompletedTask;
-                await PostAsync(() =>
+                await _session.PostAsync(() =>
                 {
                     if (_disposed || cancellation.IsCancellationRequested) return;
-                    lock (_taskLock)
+                    lock (_session._taskLock)
                         if (ReferenceEquals(_inputEditCancellation, cancellation)) _inputEditCancellation = null;
-                    preparation = QueuePreview(bypassDebounce: true);
+                    preparation = _session.QueuePreview(bypassDebounce: true);
                 }).ConfigureAwait(false);
                 await preparation.ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
             finally
             {
-                lock (_taskLock)
+                lock (_session._taskLock)
                     if (ReferenceEquals(_inputEditCancellation, cancellation)) _inputEditCancellation = null;
                 cancellation.Dispose();
             }

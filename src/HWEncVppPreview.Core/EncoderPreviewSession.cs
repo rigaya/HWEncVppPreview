@@ -22,8 +22,13 @@ public sealed partial class EncoderPreviewSession
     internal EncoderPreviewSession(TimeProvider clock, PreviewTimeouts timeouts, IPreviewBackend backend,
         IPreviewBackend backgroundBackend, FrameCache cache, RawOwnershipScope? ownershipScope,
         InputProbe? probe, bool defaultBackend, TimeSpan? debounce,
-        Func<string, string, CancellationToken, Task<string>>? readTextOverride)
+        Func<string, string, CancellationToken, Task<string>>? readTextOverride,
+        IEncoderPreviewHost host, Action<Action> post)
     {
+        _host = host;
+        _post = post;
+        _cache = cache;
+        _usesOwnedRaw = ownershipScope != null;
         _clock = clock;
         _timeouts = timeouts;
         _probe = probe ?? new InputProbe(timeouts, clock);

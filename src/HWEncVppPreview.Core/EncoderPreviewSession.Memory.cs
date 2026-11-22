@@ -1,8 +1,6 @@
-﻿using HWEncVppPreview.Core;
+﻿namespace HWEncVppPreview.Core;
 
-namespace HWEncVppPreview.App.ViewModels;
-
-public sealed partial class MainWindowViewModel
+public sealed partial class EncoderPreviewSession
 {
     private void ReleaseObsoleteRequestSnapshots(long generation)
     {
@@ -21,10 +19,10 @@ public sealed partial class MainWindowViewModel
         using var retainedAnchor = anchor == null ? null : RetainRawFrames(new[] { anchor.Frame }, "VmAnchor");
         ClearInterval();
         SetRawAnchor(ref _navigationAnchor, ref _anchorRaw, anchor);
-        ClearBeforeInterval();
+        _host.ClearBeforeInterval();
     }
 
-    private void RefreshRetainedSnapshots()
+    internal void RefreshRetainedSnapshots()
     {
         if (_intervalSegment is { SegmentId: > 0 } after)
         {
@@ -39,7 +37,7 @@ public sealed partial class MainWindowViewModel
         if (_beforeIntervalSegment is { SegmentId: > 0 } before)
         {
             var latest = _cache.GetSegment(before.SegmentId);
-            if (latest == null) ClearBeforeInterval();
+            if (latest == null) _host.ClearBeforeInterval();
             else
             {
                 _beforeIntervalSegment = latest;
@@ -62,9 +60,9 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    private PreviewSegmentSnapshot RetainEvictedBeforeCompletion(PreviewSegmentSnapshot segment, double target)
+    internal PreviewSegmentSnapshot RetainEvictedBeforeCompletion(PreviewSegmentSnapshot segment, double target)
     {
-        int selected = ContainsBeforeFrameTarget(segment.PhysicalRequest, segment.Frames, target, segment)
+        int selected = _host.ContainsBeforeFrameTarget(segment.PhysicalRequest, segment.Frames, target, segment)
             ? FrameSelector.Select(segment, target, segment.PhysicalRequest.Fps) : -1;
         // 失われたcacheのIDや接続性は復活させない。元番号はRetainFrameOnlyの時計へ引き継ぐ。
         var retained = selected >= 0 ? new PreviewFrameReference(segment, selected).RetainFrameOnly().Segment
@@ -72,7 +70,7 @@ public sealed partial class MainWindowViewModel
         return retained with { SegmentId = 0, CanStitch = false, IsActive = false };
     }
 
-    private PreviewSegmentSnapshot RetainEvictedAfterCompletion(PreviewSegmentSnapshot segment, RequestContext context)
+    internal PreviewSegmentSnapshot RetainEvictedAfterCompletion(PreviewSegmentSnapshot segment, RequestContext context)
     {
         var uncached = segment with { SegmentId = 0, CanStitch = false, IsActive = false };
         var request = context.Request;
@@ -113,9 +111,9 @@ public sealed partial class MainWindowViewModel
         }
         else
         {
-            double target = context.ResolvedTargetSeconds ?? CurrentSeconds;
+            double target = context.ResolvedTargetSeconds ?? _host.CurrentSeconds;
             if (PreviewSafeRange.Contains(target, uncached.SafeStartSeconds, uncached.SafeEndSeconds)
-                && ContainsFrameTarget(uncached.PhysicalRequest, uncached.Frames, target, uncached.Clock))
+                && _host.ContainsFrameTarget(uncached.PhysicalRequest, uncached.Frames, target, uncached.Clock))
             {
                 first = FrameSelector.Select(uncached, target, request.Fps);
                 count = first >= 0 ? 1 : 0;
@@ -127,7 +125,7 @@ public sealed partial class MainWindowViewModel
             { Frames = Array.AsReadOnly(uncached.Frames.Skip(first).Take(count).ToArray()) };
     }
 
-    private static PreviewSegmentSnapshot? RetainSelectedFrame(PreviewSegmentSnapshot? segment, Y4mFrame frame)
+    internal static PreviewSegmentSnapshot? RetainSelectedFrame(PreviewSegmentSnapshot? segment, Y4mFrame frame)
     {
         if (segment == null) return null;
         for (int i = 0; i < segment.Frames.Count; i++)
