@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Numerics;
+using System.Runtime.InteropServices;
 using HWEncVppPreview.Core;
 using SkiaSharp;
 
@@ -23,23 +26,103 @@ internal static class EngineImage
         int ow = (w + scale - 1) / scale, oh = (height + scale - 1) / scale;
         var dest = new Y4mHeader { Width = ow, Height = oh, FpsNum = h.FpsNum, FpsDen = h.FpsDen, SarNum = h.SarNum, SarDen = h.SarDen,
             Chroma = h.Chroma, BitDepth = h.BitDepth, ColorSpaceTag = h.ColorSpaceTag, ExtTags = h.ExtTags };
-        var data = new byte[dest.FrameBytes]; var input = source.Data; int bps = h.BytesPerSample;
-        var (icw, ich) = h.ChromaPlaneSize; var (ocw, och) = dest.ChromaPlaneSize;
-        int inOffset = 0, outOffset = 0;
+        var data = new byte[dest.FrameBytes];
+        var input = source.Data;
+        if (scale == 1 && x == 0 && y == 0 && w == h.Width && height == h.Height)
+        {
+            input.AsSpan(0, data.Length).CopyTo(data);
+            return new Y4mFrame(dest, source.Xts, source.Xdur, data);
+        }
+
+        int sampleBytes = h.BytesPerSample;
+        var (chromaWidth, chromaHeight) = h.ChromaPlaneSize;
+        var (outChromaWidth, outChromaHeight) = dest.ChromaPlaneSize;
+        int inputOffset = 0, outputOffset = 0;
         for (int plane = 0; plane < 3; plane++)
         {
-            int iw = plane == 0 ? h.Width : icw, ih = plane == 0 ? h.Height : ich;
-            int dw = plane == 0 ? ow : ocw, dh = plane == 0 ? oh : och;
-            int px = plane == 0 ? x : x / sx, py = plane == 0 ? y : y / sy;
-            for (int row = 0; row < dh; row++) for (int col = 0; col < dw; col++)
-            {
-                int from = inOffset + ((py + row * scale) * iw + px + col * scale) * bps;
-                int to = outOffset + (row * dw + col) * bps;
-                for (int b = 0; b < bps; b++) data[to + b] = input[from + b];
-            }
-            inOffset += iw * ih * bps; outOffset += dw * dh * bps;
+            bool luma = plane == 0;
+            int stride = luma ? h.Width : chromaWidth;
+            int inputBytes = stride * (luma ? h.Height : chromaHeight) * sampleBytes;
+            int outputWidth = luma ? ow : outChromaWidth;
+            int outputBytes = outputWidth * (luma ? oh : outChromaHeight) * sampleBytes;
+            int left = luma ? x : x / sx;
+            int top = luma ? y : y / sy;
+            int cropWidth = luma ? w : (w + sx - 1) / sx;
+            int cropHeight = luma ? height : (height + sy - 1) / sy;
+            var inputPlane = input.AsSpan(inputOffset, inputBytes);
+            var outputPlane = data.AsSpan(outputOffset, outputBytes);
+            if (sampleBytes == 1)
+                ScalePlane<byte>(inputPlane, outputPlane, stride, left, top, cropWidth, cropHeight, outputWidth, scale);
+            else
+                ScalePlane<ushort>(MemoryMarshal.Cast<byte, ushort>(inputPlane), MemoryMarshal.Cast<byte, ushort>(outputPlane),
+                    stride, left, top, cropWidth, cropHeight, outputWidth, scale);
+            inputOffset += inputBytes;
+            outputOffset += outputBytes;
         }
         return new Y4mFrame(dest, source.Xts, source.Xdur, data);
+    }
+
+    private static void ScalePlane<T>(ReadOnlySpan<T> source, Span<T> destination, int stride,
+        int left, int top, int width, int height, int outputWidth, int scale) where T : unmanaged, IBinaryInteger<T>
+    {
+        int start = top * stride + left;
+        if (scale == 1)
+        {
+            for (int y = 0; y < height; y++)
+                source.Slice(start + y * stride, width).CopyTo(destination.Slice(y * outputWidth, width));
+            return;
+        }
+
+        // 等倍に次いでよく使う1/2の全面ブロックは、2行の和を取って4で割る。
+        if (scale == 2 && width % 2 == 0 && height % 2 == 0)
+        {
+            for (int y = 0; y < height; y += 2)
+            {
+                var first = source.Slice(start + y * stride, width);
+                var second = source.Slice(start + (y + 1) * stride, width);
+                var output = destination.Slice(y / 2 * outputWidth, outputWidth);
+                for (int x = 0; x < output.Length; x++)
+                {
+                    int i = x * 2;
+                    int sum = ReadSample(first[i]) + ReadSample(first[i + 1]) + ReadSample(second[i]) + ReadSample(second[i + 1]);
+                    output[x] = StoreSample((sum + 2) / 4);
+                }
+            }
+            return;
+        }
+
+        int outputIndex = 0;
+        for (int y = 0; y < height; y += scale)
+        {
+            int rows = Math.Min(scale, height - y);
+            for (int x = 0; x < width; x += scale)
+            {
+                int columns = Math.Min(scale, width - x);
+                int count = rows * columns;
+                int sum = 0;
+                for (int dy = 0; dy < rows; dy++)
+                {
+                    var row = source.Slice(start + (y + dy) * stride + x, columns);
+                    foreach (var sample in row) sum += ReadSample(sample);
+                }
+                // 右端・下端は存在する画素だけを数え、0.5は切り上げる。
+                destination[outputIndex++] = StoreSample((sum + count / 2) / count);
+            }
+        }
+
+        static int ReadSample(T sample)
+        {
+            int value = int.CreateTruncating(sample);
+            return !BitConverter.IsLittleEndian && typeof(T) == typeof(ushort)
+                ? BinaryPrimitives.ReverseEndianness((ushort)value) : value;
+        }
+
+        static T StoreSample(int value)
+        {
+            if (!BitConverter.IsLittleEndian && typeof(T) == typeof(ushort))
+                value = BinaryPrimitives.ReverseEndianness((ushort)value);
+            return T.CreateTruncating(value);
+        }
     }
     public static byte[] Encode(Y4mFrame frame, string format)
     {
