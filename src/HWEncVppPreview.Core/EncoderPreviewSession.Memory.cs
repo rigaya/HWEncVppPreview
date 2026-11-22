@@ -19,7 +19,7 @@ public sealed partial class EncoderPreviewSession
         using var retainedAnchor = anchor == null ? null : RetainRawFrames(new[] { anchor.Frame }, "VmAnchor");
         ClearInterval();
         SetRawAnchor(ref _navigationAnchor, ref _anchorRaw, anchor);
-        _host.ClearBeforeInterval();
+        ClearBeforeInterval();
     }
 
     internal void RefreshRetainedSnapshots()
@@ -37,7 +37,7 @@ public sealed partial class EncoderPreviewSession
         if (_beforeIntervalSegment is { SegmentId: > 0 } before)
         {
             var latest = _cache.GetSegment(before.SegmentId);
-            if (latest == null) _host.ClearBeforeInterval();
+            if (latest == null) ClearBeforeInterval();
             else
             {
                 _beforeIntervalSegment = latest;
@@ -62,7 +62,7 @@ public sealed partial class EncoderPreviewSession
 
     internal PreviewSegmentSnapshot RetainEvictedBeforeCompletion(PreviewSegmentSnapshot segment, double target)
     {
-        int selected = _host.ContainsBeforeFrameTarget(segment.PhysicalRequest, segment.Frames, target, segment)
+        int selected = ContainsBeforeFrameTarget(segment.PhysicalRequest, segment.Frames, target, segment)
             ? FrameSelector.Select(segment, target, segment.PhysicalRequest.Fps) : -1;
         // 失われたcacheのIDや接続性は復活させない。元番号はRetainFrameOnlyの時計へ引き継ぐ。
         var retained = selected >= 0 ? new PreviewFrameReference(segment, selected).RetainFrameOnly().Segment
@@ -113,7 +113,7 @@ public sealed partial class EncoderPreviewSession
         {
             double target = context.ResolvedTargetSeconds ?? _host.CurrentSeconds;
             if (PreviewSafeRange.Contains(target, uncached.SafeStartSeconds, uncached.SafeEndSeconds)
-                && _host.ContainsFrameTarget(uncached.PhysicalRequest, uncached.Frames, target, uncached.Clock))
+                && ContainsFrameTarget(uncached.PhysicalRequest, uncached.Frames, target, uncached.Clock))
             {
                 first = FrameSelector.Select(uncached, target, request.Fps);
                 count = first >= 0 ? 1 : 0;

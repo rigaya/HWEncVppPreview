@@ -78,7 +78,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _usesOwnedRaw = owned != null || (backend == null && backgroundBackend == null
             && cache == null && converter == null && probe == null);
         _imageConverter = converter != null ? (frame, settings, token) => converter(frame, token) : null;
-        _beforeEnabled = beforeEnabled;
         _services = services ?? new AvaloniaViewModelServices();
         _clock = timeProvider ?? TimeProvider.System;
         _timeouts = timeouts ?? PreviewTimeouts.Default;
@@ -86,11 +85,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         // 同じ長さなら読取が全体を上書きし、所有権が貸出中の画素を守るため、入力世代や形式では分けない。
         _rawOwnershipScope = owned?.Scope ?? (_usesOwnedRaw ? new RawOwnershipScope(new RawBufferPool()) : null);
         _cache = cache ?? (_rawOwnershipScope != null ? new FrameCache(_rawOwnershipScope) : new FrameCache());
-        var observed = new ObservedBackend(backend ?? new ServerBackend(_timeouts, _clock), this);
-        var before = backgroundBackend != null ? new ObservedBackend(backgroundBackend, this) :
-            backend == null ? new ObservedBackend(new ServerBackend(_timeouts, _clock), this) : observed;
-        _session = new EncoderPreviewSession(_clock, _timeouts, observed, before, _cache, _rawOwnershipScope,
-            probe, backend == null, debounceOverride, readTextOverride, this, _postToUi);
+        _session = new EncoderPreviewSession(_clock, _timeouts, backend, backgroundBackend, _cache, _rawOwnershipScope,
+            probe, debounceOverride, readTextOverride, this, _postToUi, beforeEnabled);
         _controller.ReplayStarted += OnReplayStarted;
         if (_usesOwnedRaw)
         {
@@ -122,7 +118,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         GoToStartCommand = new RelayCommand(() => _session.SeekTo(0));
         GoToEndCommand = new RelayCommand(() => { if (HasDuration) _session.SeekTo(DurationSeconds); });
         CommitTimeTextCommand = new RelayCommand(CommitTime);
-        RefreshCommand = new RelayCommand(() => { _cache.Clear(); _session.ClearInterval(); ClearBeforeInterval(); _ = _session.QueuePreview(bypassCache: true, bypassDebounce: true); });
+        RefreshCommand = new RelayCommand(() => { _cache.Clear(); _session.ClearInterval(); _session.ClearBeforeInterval(); _ = _session.QueuePreview(bypassCache: true, bypassDebounce: true); });
         SaveFiltersCommand = new RelayCommand(() => RunCommand(SaveFiltersAsync));
         LoadFiltersCommand = new RelayCommand(() => RunCommand(LoadFiltersAsync));
         CopyCommandLineCommand = new RelayCommand(() => RunCommand(() => _services.CopyTextAsync(EnabledOptionsText())));
@@ -402,7 +398,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             try
             {
                 if (_session.IsCurrent(context) && segment != null) context.Segment = segment;
-                if (context.Kind == RequestKind.Before) QueueEarlyBeforeFrame(context, value, segment);
+                if (context.Kind == RequestKind.Before) _session.QueueEarlyBeforeFrame(context, value, segment);
             }
             finally
             {
@@ -554,8 +550,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
                     var original = segment;
                     segment = sources?.RescueSegment ?? _session.RetainEvictedBeforeCompletion(segment, CurrentSeconds);
                     retryLimitedBeforeRescue = sources?.RescueSegment != null
-                        && ContainsBeforeFrameTarget(original.PhysicalRequest, original.Frames, CurrentSeconds, original)
-                        && !ContainsBeforeFrameTarget(segment.PhysicalRequest, segment.Frames, CurrentSeconds, segment);
+                        && _session.ContainsBeforeFrameTarget(original.PhysicalRequest, original.Frames, CurrentSeconds, original)
+                        && !_session.ContainsBeforeFrameTarget(segment.PhysicalRequest, segment.Frames, CurrentSeconds, segment);
                 }
                 else
                 {
@@ -579,8 +575,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         {
             context.BeforeEarlyFallbackReason = value.EarlyDisplayFallbackReason
                 ?? (value.IsReplay ? "時刻条件の再取得に切り替わった" : context.BeforeEarlyFallbackReason);
-            CaptureBeforeFallbackDiagnostic(value.Result.StandardError);
-            CompleteBeforeWithWindows(context, frames, sources, retryLimitedBeforeRescue);
+            _session.CaptureBeforeFallbackDiagnostic(value.Result.StandardError);
+            _session.CompleteBeforeWithWindows(context, frames, sources, retryLimitedBeforeRescue);
             return;
         }
         if (value.IsReplay) PrepareReplayUi(context);
@@ -617,13 +613,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             _session._intervalLogicalRequest = afterRequest;
         }
         ErrorText = null;
-        LogText = AppendBeforeFallbackDiagnostic(value.Result.StandardError);
+        LogText = _session.AppendBeforeFallbackDiagnostic(value.Result.StandardError);
         ElapsedText = AppMessages.Elapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
         if (context.Generation == Volatile.Read(ref _session._generation))
         {
             if (afterRequest != null)
                 _session._completedAfterStatus = value.TargetNotReached ? PreviewProgress.DoneTargetNotReached : value.FromCache ? PreviewProgress.DoneCache : PreviewProgress.Done;
-            QueueBefore(afterRequest ?? value.Request, context.Generation);
+            _session.QueueBefore(afterRequest ?? value.Request, context.Generation);
         }
         _session.UpdateNavigationStatus();
     }
@@ -641,10 +637,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             if (context.Kind == RequestKind.Before)
             {
                 BeforeUnavailableForDuration();
-                CaptureBeforeFallbackDiagnostic(AppendExceptionDetails(diagnostics, value.Exception));
-                _beforeFinished = true;
+                _session.CaptureBeforeFallbackDiagnostic(AppendExceptionDetails(diagnostics, value.Exception));
+                _session._beforeFinished = true;
                 IsBeforeBusy = false;
-                Interlocked.Increment(ref _beforeImageGeneration);
+                Interlocked.Increment(ref _session._beforeImageGeneration);
                 SetRawFrame(ref _beforeDisplayedFrame, ref _session._beforeDisplayedRaw, null, "VmBeforeDisplayed");
                 BeforeImage = null;
                 return;
@@ -688,7 +684,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         if (PerfTrace.Enabled) PerfTrace.Write("vm.error", new { message, diagnostics, exception = exception?.ToString() });
         IsBusy = false;
         StatusText = AppMessages.Error;
-        LogText = AppendBeforeFallbackDiagnostic(AppendExceptionDetails(diagnostics, exception));
+        LogText = _session.AppendBeforeFallbackDiagnostic(AppendExceptionDetails(diagnostics, exception));
         string[] lines = diagnostics.Split('\n');
         string tail = string.Join(Environment.NewLine, lines.TakeLast(6));
         // readerの後片付けで末尾が埋まっても、長いkey間隔による窓の保持上限や探索上限の理由を隠さない。
@@ -848,7 +844,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             _session._lifetime.Cancel();
             TraceDisposeStage("lifetime_cancel.end");
             TraceDisposeStage("before_cancel.begin");
-            CancelBefore(updatePresentation: false);
+            _session.CancelBefore(updatePresentation: false);
             TraceDisposeStage("before_cancel.end");
             TraceDisposeStage("preparation_cancel.begin");
             lock (_session._taskLock) _session._preparationCancellation?.Cancel();
@@ -903,7 +899,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             SetRawFrame(ref _beforeDisplayedFrame, ref _session._beforeDisplayedRaw, null, "VmBeforeDisplayed");
             RefreshColorInfo();
             _session.ClearInterval();
-            ClearBeforeInterval();
+            _session.ClearBeforeInterval();
             _cache.Clear();
             Interlocked.Exchange(ref _session._pendingSegmentUpdate, null)?.Dispose();
             // Dispose後もウィンドウ等がVMを参照し得るため、完了した要求の区間もここで手放す。
@@ -913,7 +909,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
             Volatile.Write(ref _session._context, null);
             if (_session._beforeExecutionContext is { } beforeContext) beforeContext.Segment = null;
             _session._beforeExecutionContext = null;
-            _beforePhysicalWindow = null;
+            _session._beforePhysicalWindow = null;
         });
         await WaitForVmShutdownAsync(cleanup, deadline, "ui_cleanup").ConfigureAwait(false);
         Task resources = Task.WhenAll(cancellations, controller, probe, pending);
@@ -962,42 +958,4 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         PerfTrace.Write("vm.dispose.stage", new { stage, synchronizationContext = SynchronizationContext.Current?.GetType().FullName });
         PerfTrace.Flush();
     }
-    private sealed class ObservedBackend(IPreviewBackend inner, MainWindowViewModel owner) : IPreviewBackend, IRawOwnedBackend
-    {
-        public Task InitializeEncoderAsync(string encoderPath, CancellationToken cancellationToken = default)
-            => inner.InitializeEncoderAsync(encoderPath, cancellationToken);
-        public Task<bool?> GetHistoryRequirementAsync(PreviewRequest request, CancellationToken cancellationToken = default)
-            => inner.GetHistoryRequirementAsync(request, cancellationToken);
-        public Task<PreviewRunResult> RunAsync(PreviewRequest request, IPreviewSink sink, CancellationToken cancellationToken = default)
-            => RunObservedAsync(request, token => inner.RunAsync(request, sink, token), cancellationToken);
-
-        public Task<PreviewRunResult> RunOwnedAsync(PreviewRequest request, IRawOwnedSink sink,
-            RawOwnershipScope scope, CancellationToken cancellationToken = default)
-            => RunObservedAsync(request, token => inner is IRawOwnedBackend owned
-                ? owned.RunOwnedAsync(request, sink, scope, token)
-                : Task.FromException<PreviewRunResult>(new InvalidOperationException("owned backendが必要です。")), cancellationToken);
-
-        private async Task<PreviewRunResult> RunObservedAsync(PreviewRequest request,
-            Func<CancellationToken, Task<PreviewRunResult>> run, CancellationToken cancellationToken)
-        {
-            var context = owner._session.ContextForPhysical(request);
-            if (context?.Kind == RequestKind.Before) owner.ObserveBeforePhysical(context, request);
-            using var cancellation = context?.BeforeCancellation == null ? null
-                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, context.BeforeCancellation.Token);
-            try
-            {
-                var result = await run(cancellation?.Token ?? cancellationToken).ConfigureAwait(false);
-                if (context != null) context.Diagnostics = result.StandardError;
-                return result;
-            }
-            catch (PreviewBackendException exception)
-            {
-                if (context != null) context.Diagnostics = exception.StandardError;
-                throw;
-            }
-        }
-        public ValueTask AbortAsync() => inner.AbortAsync();
-        public ValueTask DisposeAsync() => inner.DisposeAsync();
-    }
-
 }

@@ -1,17 +1,13 @@
-﻿using Avalonia.Threading;
-using HWEncVppPreview.Core;
-using static HWEncVppPreview.Core.EncoderPreviewSession;
+﻿namespace HWEncVppPreview.Core;
 
-namespace HWEncVppPreview.App.ViewModels;
-
-public sealed partial class MainWindowViewModel
+public sealed partial class EncoderPreviewSession
 {
     private const double EarlyBeforeTargetToleranceSeconds = 1e-8;
 
-    private void QueueEarlyBeforeFrame(RequestContext context, PreviewFrameResult value, PreviewSegmentSnapshot? segment)
+    internal void QueueEarlyBeforeFrame(RequestContext context, PreviewFrameResult value, PreviewSegmentSnapshot? segment)
     {
         if (!value.CanDisplayBeforeEnd || value.TargetNotReached || segment?.Clock.TrustedAbsolute != true
-            || !_session.IsCurrent(context) || Volatile.Read(ref context.BeforeCompletionReceived) != 0) return;
+            || !IsCurrent(context) || Volatile.Read(ref context.BeforeCompletionReceived) != 0) return;
         // 同期通知の一枚だけを保ち、UI待ちのために親区間を取得し直さない。
         if (!TryRetainSelection(value.Frame, "VmBeforeEarlyPost", out var ownership))
         {
@@ -20,18 +16,18 @@ public sealed partial class MainWindowViewModel
             return;
         }
         long revision = Volatile.Read(ref context.DisplayRevision);
-        var post = _session.CaptureOwnershipPost(context, ownership, () =>
+        var post = CaptureOwnershipPost(context, ownership, () =>
         {
             // END先着と目標変更をUIで再確認し、古い候補を最新の画像へ戻さない。
-            if (!_session.IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)
+            if (!IsCurrent(context) || revision != Volatile.Read(ref context.DisplayRevision)
                 || Volatile.Read(ref context.BeforeCompletionReceived) != 0
-                || Math.Abs(CurrentSeconds - value.Request.TargetSeconds) > EarlyBeforeTargetToleranceSeconds) return;
+                || Math.Abs(_host.CurrentSeconds - value.Request.TargetSeconds) > EarlyBeforeTargetToleranceSeconds) return;
             context.BeforeEarlyFrame = value.Frame;
-            context.BeforeEarlyTarget = CurrentSeconds;
-            DisplayBeforeFrame(value.Frame, Volatile.Read(ref _session._generation), revisionContext: context,
+            context.BeforeEarlyTarget = _host.CurrentSeconds;
+            DisplayBeforeFrame(value.Frame, Volatile.Read(ref _generation), revisionContext: context,
                 sourceSegment: segment, earlyDisplay: true);
         });
-        try { _postToUi(post.Execute); }
+        try { _post(post.Execute); }
         catch { post.Dispose(); throw; }
     }
 
@@ -39,14 +35,14 @@ public sealed partial class MainWindowViewModel
     {
         var early = context.BeforeEarlyFrame;
         if (early == null) return false;
-        bool applied = BeforeImage != null && ReferenceEquals(_beforeDisplayedFrame, early);
+        bool applied = _host.HasBeforeImage && ReferenceEquals(_host.BeforeDisplayedFrame, early);
         bool same = applied && ReferenceEquals(frame, early);
-        bool targetChanged = Math.Abs(context.BeforeEarlyTarget - CurrentSeconds) > EarlyBeforeTargetToleranceSeconds;
+        bool targetChanged = Math.Abs(context.BeforeEarlyTarget - _host.CurrentSeconds) > EarlyBeforeTargetToleranceSeconds;
         string reason = context.BeforeEarlyFallbackReason ?? (targetChanged ? "目標時刻が変わった"
             : same ? "早期画像と最終選択が一致した" : applied ? "完了時の最終選択が異なった" : "早期画像は未適用");
         if (PerfTrace.Enabled)
         {
-            var data = new { context.Generation, context.Request.CorrelationId, target = CurrentSeconds,
+            var data = new { context.Generation, context.Request.CorrelationId, target = _host.CurrentSeconds,
                 earlyTarget = context.BeforeEarlyTarget, oldFrameId = early.FrameId, oldXts = early.Xts,
                 oldXdur = early.Xdur, newFrameId = frame.FrameId, newXts = frame.Xts, newXdur = frame.Xdur,
                 applied, same, reason };
@@ -57,8 +53,8 @@ public sealed partial class MainWindowViewModel
         // 既表示の一枚なら変換だけ省き、ENDで保存した正区間への保護を必ず引き継ぐ。
         if (!same || targetChanged) return false;
         Interlocked.Increment(ref _beforeImageGeneration);
-        SelectBeforePresentationSegment(_session._beforeIntervalSegment?.SegmentId, frame.FrameId);
-        IsBeforeBusy = false;
+        SelectBeforePresentationSegment(_beforeIntervalSegment?.SegmentId, frame.FrameId);
+        _host.IsBeforeBusy = false;
         return true;
     }
 }

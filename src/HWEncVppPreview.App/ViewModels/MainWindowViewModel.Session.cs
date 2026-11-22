@@ -49,17 +49,15 @@ public sealed partial class MainWindowViewModel
     }
 
     void IEncoderPreviewHost.CancelInputEdit() => CancelInputEdit();
-    void IEncoderPreviewHost.RecordNavigationIntent() => RecordNavigationIntent();
-    void IEncoderPreviewHost.SetBeforeProtectionDirection(int direction) => SetBeforeProtectionDirection(direction);
-    void IEncoderPreviewHost.QueueBefore(PreviewRequest request, long generation) => QueueBefore(request, generation);
-    void IEncoderPreviewHost.CancelBefore() => CancelBefore();
-    void IEncoderPreviewHost.QueueConcurrentBefore(PreviewRequest request, long generation) => QueueConcurrentBefore(request, generation);
-    void IEncoderPreviewHost.CheckBeforeInterval(PreviewRequest request) => CheckBeforeInterval(request);
-    void IEncoderPreviewHost.ClearBeforeInterval() => ClearBeforeInterval();
-    bool IEncoderPreviewHost.ContainsBeforeFrameTarget(PreviewRequest request, IReadOnlyList<Y4mFrame> frames, double target, PreviewSegmentSnapshot? segment)
-        => ContainsBeforeFrameTarget(request, frames, target, segment);
-    bool IEncoderPreviewHost.ContainsFrameTarget(PreviewRequest request, IReadOnlyList<Y4mFrame> frames, double target, PreviewClockMap? clock)
-        => ContainsFrameTarget(request, frames, target, clock);
+    bool IEncoderPreviewHost.HasBeforeImage => BeforeImage != null;
+    Y4mFrame? IEncoderPreviewHost.BeforeDisplayedFrame => _beforeDisplayedFrame;
+    void IEncoderPreviewHost.BeforeUnavailableForDuration() => BeforeUnavailableForDuration();
+    void IEncoderPreviewHost.QueueDurationAfterComparison(bool before, long generation) => QueueDurationAfterComparison(before, generation);
+    void IEncoderPreviewHost.EnqueueImage(ImageWork image) => EnqueueImage(image);
+    void IEncoderPreviewHost.DropPendingBeforeImage() => DropImage(ref _pendingBeforeImage);
+    void IEncoderPreviewHost.ClearBeforeDisplayedRaw()
+        => SetRawFrame(ref _beforeDisplayedFrame, ref _session._beforeDisplayedRaw, null, "VmBeforeDisplayed");
+    void IEncoderPreviewHost.ClearBeforeImage() => BeforeImage = null;
     void IEncoderPreviewHost.OnFrameReady(PreviewFrameResult result) => OnFrameReady(result);
     void IEncoderPreviewHost.OnCompletedWithWindow(PreviewCompletion completion, OwnedUncachedWindow? window)
         => OnCompletedWithWindow(completion, window);

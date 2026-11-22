@@ -6,7 +6,7 @@ public sealed partial class EncoderPreviewSession
     internal void EndSeekDrag(double seconds)
     {
         if (!_seekDragging) return;
-        _host.SetBeforeProtectionDirection(0);
+        SetBeforeProtectionDirection(0);
         _seekDragging = false;
         if (seconds == _host.CurrentSeconds)
         {
@@ -14,16 +14,16 @@ public sealed partial class EncoderPreviewSession
             long generation = Volatile.Read(ref _generation);
             _concurrentComparisonGeneration = generation;
             if (_context is { Kind: RequestKind.After } context && IsCurrent(context))
-                _host.QueueBefore(context.Request with { AllowConcurrentBackground = true }, generation);
+                QueueBefore(context.Request with { AllowConcurrentBackground = true }, generation);
         }
         else SeekTo(seconds, allowConcurrentBefore: true);
     }
 
     internal void SliderChanged(double seconds)
     {
-        _host.RecordNavigationIntent();
+        RecordNavigationIntent();
         if (!_host.TrySetSliderTime(ClampTime(seconds))) return;
-        _host.SetBeforeProtectionDirection(0);
+        SetBeforeProtectionDirection(0);
         _host.ShowSliderTime();
         _ = QueuePreview(navigation: true);
     }
@@ -35,7 +35,7 @@ public sealed partial class EncoderPreviewSession
 
     internal void StepFrame(int direction)
     {
-        if (direction != 0) _host.RecordNavigationIntent();
+        if (direction != 0) RecordNavigationIntent();
         if (PerfTrace.Enabled) PerfTrace.Write("vm.step", new { direction, pending = _pendingNeighbor != null, reverseWait = _reversePrefetchWait != null, target = _host.CurrentSeconds });
         LeaveReversePrefetchWaitForForwardStep(direction);
         if (direction == 0 || _pendingNeighbor != null)
@@ -121,12 +121,12 @@ public sealed partial class EncoderPreviewSession
         var request = RetargetInterval(_intervalRequest, seconds) with { CorrelationId = generation, AllowConcurrentBackground = false,
             InputArgs = logical.InputArgs, VppArgs = logical.VppArgs, Capabilities = _capabilities,
             TimestampOriginTrusted = _inputInfo?.TimestampOriginTrusted ?? _intervalRequest.TimestampOriginTrusted };
-        _host.CheckBeforeInterval(request);
+        CheckBeforeInterval(request);
         var context = new RequestContext(generation, request, _clock.GetTimestamp(), editEpoch: _editEpoch);
         context.SetSegmentSharing(_intervalSegment, _intervalRaw);
         _lastIntentTarget = seconds;
         RegisterContext(context);
-        _host.SetBeforeProtectionDirection(direction);
+        SetBeforeProtectionDirection(direction);
         _host.IsBusy = true;
         _host.ErrorText = null;
         _completedAfterStatus = PreviewProgress.DoneCache;
@@ -139,17 +139,17 @@ public sealed partial class EncoderPreviewSession
     }
     internal void SeekTo(double seconds, bool force = false, bool allowConcurrentBefore = false, NavigationOperation operation = NavigationOperation.Seek)
     {
-        _host.RecordNavigationIntent();
+        RecordNavigationIntent();
         seconds = ClampTime(seconds);
         if (!force && seconds == _host.CurrentSeconds) return;
-        _host.SetBeforeProtectionDirection(0);
+        SetBeforeProtectionDirection(0);
         _host.SetTimeOnly(seconds);
         _ = QueuePreview(navigation: true, allowConcurrentBefore: allowConcurrentBefore, operation: operation);
     }
     internal double ClampTime(double seconds) => double.IsFinite(seconds) ? Math.Clamp(seconds, 0, _host.HasDuration ? _host.DurationSeconds : double.MaxValue) : 0;
     internal long BeginIntent(bool navigation)
     {
-        if (!navigation) _host.SetBeforeProtectionDirection(0);
+        if (!navigation) SetBeforeProtectionDirection(0);
         long generation = Interlocked.Increment(ref _generation);
         ReleaseObsoleteRequestSnapshots(generation);
         _latestIntentNavigation = navigation;
@@ -158,7 +158,7 @@ public sealed partial class EncoderPreviewSession
         Volatile.Write(ref _context, null);
         if (!navigation)
         {
-            _host.CancelBefore();
+            CancelBefore();
             Interlocked.Increment(ref _editEpoch);
             _afterRequests.Clear();
             _host.DropPendingAfterImage();
@@ -264,14 +264,14 @@ public sealed partial class EncoderPreviewSession
                     var neighbor = _pendingNeighbor?.Generation == actualGeneration ? _pendingNeighbor : null;
                     var context = new RequestContext(actualGeneration, request, _clock.GetTimestamp(),
                         editEpoch: editEpoch, neighborDirection: neighbor?.Direction ?? 0);
-                    _host.CheckBeforeInterval(request);
+                    CheckBeforeInterval(request);
                     RegisterContext(context);
                     _host.Progress = PreviewProgress.Processing;
                     ReleaseIntervalSnapshotsForSubmission();
                     SubmitAfter(request, bypassCache, requirePhysicalRefetch, actualNavigation,
                         actualReverse, neighbor?.Direction ?? 0, bypassDebounce);
                     // 無フィルタではAfterの確定frameがそのままBeforeなので、別の有限取得を競合させない。
-                    if (request.AllowConcurrentBackground && request.VppArgs.Count > 0) _host.QueueConcurrentBefore(request, actualGeneration);
+                    if (request.AllowConcurrentBackground && request.VppArgs.Count > 0) QueueConcurrentBefore(request, actualGeneration);
                     Track(ReleaseContextAsync(context));
                 }).ConfigureAwait(false);
             }
@@ -419,7 +419,7 @@ public sealed partial class EncoderPreviewSession
             {
                 _host.SetTimeOnly(seconds);
                 _lastIntentTarget = seconds;
-                _host.SetBeforeProtectionDirection(context.NeighborDirection);
+                SetBeforeProtectionDirection(context.NeighborDirection);
             }
             _host.DisplayFrame(frame, context);
             if (current) NotifyAcceptedFrameStep(request, context.NeighborDirection, seconds);

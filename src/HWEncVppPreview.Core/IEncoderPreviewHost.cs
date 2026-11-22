@@ -29,15 +29,16 @@ internal interface IEncoderPreviewHost
     void ShowExceptionError(string message, string diagnostics, Exception? exception);
     void DropPendingAfterImage();
     void CancelInputEdit();
-    void RecordNavigationIntent();
-    void SetBeforeProtectionDirection(int direction);
-    void QueueBefore(PreviewRequest request, long generation);
-    void CancelBefore();
-    void QueueConcurrentBefore(PreviewRequest request, long generation);
-    void CheckBeforeInterval(PreviewRequest request);
-    void ClearBeforeInterval();
-    bool ContainsBeforeFrameTarget(PreviewRequest request, IReadOnlyList<Y4mFrame> frames, double target, PreviewSegmentSnapshot? segment);
-    bool ContainsFrameTarget(PreviewRequest request, IReadOnlyList<Y4mFrame> frames, double target, PreviewClockMap? clock);
+    bool HasBeforeImage { get; }
+    Y4mFrame? BeforeDisplayedFrame { get; }
+    bool IsBeforeBusy { get; set; }
+    string LogText { get; set; }
+    void BeforeUnavailableForDuration();
+    void QueueDurationAfterComparison(bool before, long generation);
+    void EnqueueImage(ImageWork image);
+    void DropPendingBeforeImage();
+    void ClearBeforeDisplayedRaw();
+    void ClearBeforeImage();
     void OnFrameReady(PreviewFrameResult result);
     void OnCompletedWithWindow(PreviewCompletion completion, OwnedUncachedWindow? window);
 }

@@ -102,7 +102,7 @@ public sealed partial class EncoderPreviewSession
             _host.ErrorText = null;
         }
         if (update.IsReadPaused && satisfied && context.Generation == Volatile.Read(ref _generation))
-            _host.QueueBefore(RetargetInterval(context.Request, _host.CurrentSeconds), context.Generation);
+            QueueBefore(RetargetInterval(context.Request, _host.CurrentSeconds), context.Generation);
         UpdateNavigationStatus();
     }
 
@@ -150,7 +150,7 @@ public sealed partial class EncoderPreviewSession
         if (_intervalSegment is { SegmentId: > 0 } interval && !CacheHasSegment(interval.SegmentId))
             ClearInterval();
         if (_beforeIntervalSegment is { SegmentId: > 0 } before && !CacheHasSegment(before.SegmentId))
-            _host.ClearBeforeInterval();
+            ClearBeforeInterval();
     }
 
     private int NavigationAnchorIndex(IReadOnlyList<PreviewFrameReference> frames, double target, double fps)

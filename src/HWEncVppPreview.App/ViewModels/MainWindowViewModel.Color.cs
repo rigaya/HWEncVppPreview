@@ -1,4 +1,5 @@
 ﻿using HWEncVppPreview.Core;
+using static HWEncVppPreview.Core.EncoderPreviewSession;
 using System.Globalization;
 
 namespace HWEncVppPreview.App.ViewModels;

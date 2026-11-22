@@ -100,10 +100,10 @@ public sealed partial class MainWindowViewModel
                         }
                         if (image.RevisionContext is { } context && image.DisplayRevision != Volatile.Read(ref context.DisplayRevision))
                         {
-                            if (image.Before && _session.IsCurrent(image.Generation) && image.BeforeVersion == _beforeImageGeneration) IsBeforeBusy = false;
+                            if (image.Before && _session.IsCurrent(image.Generation) && image.BeforeVersion == _session._beforeImageGeneration) IsBeforeBusy = false;
                             return;
                         }
-                        if (image.Before) { if (_session.IsCurrent(image.Generation) && image.BeforeVersion == _beforeImageGeneration) { IsBeforeBusy = false; BeforeImage = null; BeforeUnavailableForDuration(); } }
+                        if (image.Before) { if (_session.IsCurrent(image.Generation) && image.BeforeVersion == _session._beforeImageGeneration) { IsBeforeBusy = false; BeforeImage = null; BeforeUnavailableForDuration(); } }
                         else if (image.Generation == Volatile.Read(ref _session._generation))
                         { _session._lastFailedAfter = image.Generation; ShowExceptionError(AppMessages.ImageDisplayFailed, "", exception); }
                     }).ConfigureAwait(false);
@@ -135,7 +135,7 @@ public sealed partial class MainWindowViewModel
         }
         if (image.RevisionContext is { } context && image.DisplayRevision != Volatile.Read(ref context.DisplayRevision))
         {
-            if (image.Before && _session.IsCurrent(image.Generation) && image.BeforeVersion == _beforeImageGeneration) IsBeforeBusy = false;
+            if (image.Before && _session.IsCurrent(image.Generation) && image.BeforeVersion == _session._beforeImageGeneration) IsBeforeBusy = false;
             return;
         }
         if (image.TrustedAbsolute && image.SegmentId is > 0 && !_session.CacheHasSegment(image.SegmentId.Value))
@@ -146,7 +146,7 @@ public sealed partial class MainWindowViewModel
             {
                 if (image.Before)
                 {
-                    if (_session._context is { Kind: RequestKind.After } after) QueueBefore(after.Request, after.Generation);
+                    if (_session._context is { Kind: RequestKind.After } after) _session.QueueBefore(after.Request, after.Generation);
                 }
                 else _ = _session.QueuePreview(navigation: true);
             }
@@ -154,10 +154,10 @@ public sealed partial class MainWindowViewModel
         }
         if (image.Before)
         {
-            if (!_session.IsCurrent(image.Generation) || image.BeforeVersion != _beforeImageGeneration) return;
+            if (!_session.IsCurrent(image.Generation) || image.BeforeVersion != _session._beforeImageGeneration) return;
             var bitmap = CreateBitmap(image.Frame, data, image.TraceId);
             SetRawFrame(ref _beforeDisplayedFrame, ref _session._beforeDisplayedRaw, image.Frame, "VmBeforeDisplayed");
-            SelectBeforePresentationSegment(image.SegmentId, image.Frame.FrameId);
+            _session.SelectBeforePresentationSegment(image.SegmentId, image.Frame.FrameId);
             RecalculateDisplaySizes();
             BeforeImage = bitmap;
             if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.TraceId, image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
@@ -176,33 +176,9 @@ public sealed partial class MainWindowViewModel
         if (PerfTrace.Enabled) PerfTrace.Write("vm.apply", new { image.TraceId, image.Generation, image.DisplayRevision, image.Before, image.Frame.Xts, target = CurrentSeconds, displaySeconds = image.DisplaySeconds, segmentId = image.SegmentId, trustedAbsolute = image.TrustedAbsolute });
         if (_session._context is { Kind: RequestKind.After } current && _session.IsCurrent(current)
             && current.Request.AllowConcurrentBackground && (current.Request.VppArgs.Count > 0 || current.Request.Continuous))
-            QueueBefore(RetargetInterval(current.Request, CurrentSeconds), current.Generation);
+            _session.QueueBefore(RetargetInterval(current.Request, CurrentSeconds), current.Generation);
         QueueDurationAfterComparison(image.Before, image.Generation);
         _session.UpdateNavigationStatus();
-    }
-
-    private sealed class ImageWork(Y4mFrame Frame, long Generation, long EditEpoch,
-        bool Before = false, long BeforeVersion = 0, bool FinishBeforeBusy = false,
-        double? DisplaySeconds = null, long? SegmentId = null, bool TrustedAbsolute = false,
-        RequestContext? RevisionContext = null, long DisplayRevision = 0, long TraceId = 0, bool DisplayOnly = false) : IDisposable
-    {
-        private IDisposable? _raw = RetainRawFrames(new[] { Frame }, "VmWork");
-        public Y4mFrame Frame { get; } = Frame;
-        public long Generation { get; } = Generation;
-        public long EditEpoch { get; } = EditEpoch;
-        public bool Before { get; } = Before;
-        public long BeforeVersion { get; } = BeforeVersion;
-        public bool FinishBeforeBusy { get; } = FinishBeforeBusy;
-        public double? DisplaySeconds { get; } = DisplaySeconds;
-        public long? SegmentId { get; } = SegmentId;
-        public bool TrustedAbsolute { get; } = TrustedAbsolute;
-        public RequestContext? RevisionContext { get; } = RevisionContext;
-        public long DisplayRevision { get; } = DisplayRevision;
-        public long TraceId { get; set; } = TraceId;
-        public bool DisplayOnly { get; } = DisplayOnly;
-        public ImageWork Retain() => new(Frame, Generation, EditEpoch, Before, BeforeVersion, FinishBeforeBusy,
-            DisplaySeconds, SegmentId, TrustedAbsolute, RevisionContext, DisplayRevision, TraceId, DisplayOnly);
-        public void Dispose() => Interlocked.Exchange(ref _raw, null)?.Dispose();
     }
 
     private static void DropImage(ref ImageWork? slot)

@@ -19,23 +19,27 @@ public sealed partial class EncoderPreviewSession
 
     internal PreviewController Controller { get; }
 
-    internal EncoderPreviewSession(TimeProvider clock, PreviewTimeouts timeouts, IPreviewBackend backend,
-        IPreviewBackend backgroundBackend, FrameCache cache, RawOwnershipScope? ownershipScope,
-        InputProbe? probe, bool defaultBackend, TimeSpan? debounce,
+    internal EncoderPreviewSession(TimeProvider clock, PreviewTimeouts timeouts, IPreviewBackend? backend,
+        IPreviewBackend? backgroundBackend, FrameCache cache, RawOwnershipScope? ownershipScope,
+        InputProbe? probe, TimeSpan? debounce,
         Func<string, string, CancellationToken, Task<string>>? readTextOverride,
-        IEncoderPreviewHost host, Action<Action> post)
+        IEncoderPreviewHost host, Action<Action> post, bool beforeEnabled)
     {
         _host = host;
+        _beforeEnabled = beforeEnabled;
         _post = post;
         _cache = cache;
         _usesOwnedRaw = ownershipScope != null;
         _clock = clock;
         _timeouts = timeouts;
         _probe = probe ?? new InputProbe(timeouts, clock);
-        _borrowInputProbe = probe == null && defaultBackend;
+        _borrowInputProbe = probe == null && backend == null;
         _readTextOverride = readTextOverride;
-        Controller = new PreviewController(timeouts, clock, backend, cache, debounce: debounce,
-            backgroundBackend: backgroundBackend, ownershipScope: ownershipScope);
+        var observed = new ObservedBackend(backend ?? new ServerBackend(timeouts, clock), this);
+        var before = backgroundBackend != null ? new ObservedBackend(backgroundBackend, this) :
+            backend == null ? new ObservedBackend(new ServerBackend(timeouts, clock), this) : observed;
+        Controller = new PreviewController(timeouts, clock, observed, cache, debounce: debounce,
+            backgroundBackend: before, ownershipScope: ownershipScope);
     }
 
     internal async Task<EncoderPreviewMetadata> ReadMetadataAsync(string encoder, CancellationToken token)
