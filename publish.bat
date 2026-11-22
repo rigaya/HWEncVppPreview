@@ -61,7 +61,7 @@ if errorlevel 1 (
 set "READY_OUT="
 set /p READY_OUT=<"%CLI_TMP%\out.txt"
 rmdir /s /q "%CLI_TMP%" >nul 2>&1
-if /I not "%READY_OUT%"=="AMTPREVIEW READY version=1" (
+if /I not "%READY_OUT%"=="AMTPREVIEW READY version=2" (
     echo ERROR: published CLI did not print AMTPREVIEW READY. got: [%READY_OUT%] 1>&2
     exit /b 1
 )
