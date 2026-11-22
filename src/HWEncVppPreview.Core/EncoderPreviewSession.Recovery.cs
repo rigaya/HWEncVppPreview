@@ -241,7 +241,7 @@ public sealed partial class EncoderPreviewSession
         _host.ShowElapsed(_clock.GetElapsedTime(context.Started).TotalSeconds);
         if (context.Generation == Volatile.Read(ref _generation))
         {
-            if (afterRequest != null)
+            if (afterRequest != null && (context.NeighborDirection == 0 || context.ResolvedTargetSeconds.HasValue))
                 _completedAfterStatus = value.TargetNotReached ? PreviewProgress.DoneTargetNotReached : value.FromCache ? PreviewProgress.DoneCache : PreviewProgress.Done;
             QueueBefore(afterRequest ?? value.Request, context.Generation);
         }

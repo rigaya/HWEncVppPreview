@@ -366,7 +366,8 @@ public sealed partial class EncoderPreviewSession
     internal PreviewRequest? CompleteNeighbor(RequestContext context, IReadOnlyList<Y4mFrame> frames)
     {
         var request = context.Request;
-        if (context.NeighborResolved) return RetargetInterval(request, context.ResolvedTargetSeconds ?? request.TargetSeconds);
+        if (context.NeighborResolved)
+            return context.ResolvedTargetSeconds is double resolved ? RetargetInterval(request, resolved) : null;
         var navigation = NavigationFrames(request, context.Segment);
         if (navigation.Count > 0)
         {

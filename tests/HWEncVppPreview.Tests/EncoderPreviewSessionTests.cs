@@ -43,6 +43,22 @@ public sealed class EncoderPreviewSessionTests
         Assert.Same(frames.After.Frame, frames.Before.Frame);
     }
 
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(1)]
+    public async Task コマ送りの境界を確定した後も完了通知で移動扱いにしない(int direction)
+    {
+        await using var session = new EncoderPreviewSession();
+        var request = new PreviewRequest { TargetSeconds = 10, Fps = 30 };
+        var context = new EncoderPreviewSession.RequestContext(0, request, 0, neighborDirection: direction);
+
+        Assert.Null(session.CompleteNeighbor(context, []));
+        Assert.True(context.NeighborResolved);
+        Assert.Null(context.ResolvedTargetSeconds);
+
+        Assert.Null(session.CompleteNeighbor(context, []));
+    }
+
     private sealed class VariableRateBackend : IPreviewBackend
     {
         private static readonly Y4mHeader Format = new()
