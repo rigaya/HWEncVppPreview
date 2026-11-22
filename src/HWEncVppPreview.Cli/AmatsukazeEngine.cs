@@ -24,6 +24,7 @@ public sealed partial class AmatsukazeEngine : IAsyncDisposable
     private EncoderPreviewSession? _encoderSession;
     private long _configuredGeneration = -1;
     private int _sarNum, _sarDen;
+    private char _sourceInterlace = '?', _avsOutputInterlace = '?';
     private Dictionary<string, string> _colorTags = new(StringComparer.Ordinal);
     private long _gen = -1;
     private Task _configured = Task.CompletedTask;
@@ -151,6 +152,8 @@ public sealed partial class AmatsukazeEngine : IAsyncDisposable
                     await _encoderSession.DisposeAsync().ConfigureAwait(false);
                     _encoderSession = null;
                 }
+                char sourceInterlace = ReadInterlace(command, "interlace");
+                char outputInterlace = ReadInterlace(command, "afterInterlace");
                 var source = await Task.Run(() => _open(_directory, RequiredString(command, "path"))).ConfigureAwait(false);
                 if (token.IsCancellationRequested) { source.Dispose(); token.ThrowIfCancellationRequested(); }
                 var info = source.Info;
@@ -158,6 +161,8 @@ public sealed partial class AmatsukazeEngine : IAsyncDisposable
                 try { (_sarNum, _sarDen) = ReadSar(command, header.SarNum, header.SarDen); }
                 catch { source.Dispose(); throw; }
                 _controller = new FrameNumberController(source);
+                _sourceInterlace = sourceInterlace;
+                _avsOutputInterlace = outputInterlace;
                 _colorTags = tags;
                 _configuredGeneration = gen;
                 await WriteAsync($"AMTPREVIEW INFO gen={gen} frames={info.NumFrames} fpsnum={header.FpsNum} fpsden={header.FpsDen} width={header.Width} height={header.Height} sarnum={_sarNum} sarden={_sarDen}",
@@ -167,6 +172,18 @@ public sealed partial class AmatsukazeEngine : IAsyncDisposable
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception e) { await ReportErrorAsync(0, gen, e, token).ConfigureAwait(false); }
+    }
+
+    private static char ReadInterlace(JsonElement command, string property)
+    {
+        if (!command.TryGetProperty(property, out var value)) return '?';
+        return value.GetString() switch
+        {
+            "tff" => 't',
+            "bff" => 'b',
+            "progressive" => 'p',
+            _ => throw new ArgumentException($"{property}が不正です。"),
+        };
     }
 
     private static Dictionary<string, string> ReadColorTags(JsonElement command)
@@ -255,13 +272,15 @@ public sealed partial class AmatsukazeEngine : IAsyncDisposable
                 }
                 else selected = await _controller.GetFrameAsync(position, token).ConfigureAwait(false);
                 var input = selected.Frame;
-                if (_colorTags.Count > 0)
+                var original = input.Header;
+                char interlace = side == "before" ? _sourceInterlace : _avsOutputInterlace;
+                if (_colorTags.Count > 0 || interlace != '?')
                 {
-                    var original = input.Header;
                     var tags = new Dictionary<string, string>(original.ExtTags, StringComparer.Ordinal);
                     foreach (var pair in _colorTags) tags[pair.Key] = pair.Value;
                     var updated = new Y4mHeader { Width = original.Width, Height = original.Height, FpsNum = original.FpsNum, FpsDen = original.FpsDen,
-                        SarNum = _sarNum, SarDen = _sarDen, Chroma = original.Chroma, BitDepth = original.BitDepth, ColorSpaceTag = original.ColorSpaceTag, ExtTags = tags };
+                        SarNum = _sarNum, SarDen = _sarDen, Interlace = interlace == '?' ? original.Interlace : interlace,
+                        Chroma = original.Chroma, BitDepth = original.BitDepth, ColorSpaceTag = original.ColorSpaceTag, ExtTags = tags };
                     input = new Y4mFrame(updated, input.Xts, input.Xdur, input.Data);
                 }
                 var transformed = EngineImage.Transform(input, scale, crop);

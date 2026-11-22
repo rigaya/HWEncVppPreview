@@ -60,6 +60,34 @@ public sealed class EngineImageTests
         Assert.Equal(Pack(cropped, depth), EngineImage.Transform(frame, 1, [1, 0, 2, 2]).Data);
     }
 
+    [Theory]
+    [InlineData('t', 8, 2, new[] { 12, 102, 16, 106 }, new[] { 12, 102 })]
+    [InlineData('b', 10, 2, new[] { 12, 102, 16, 106 }, new[] { 12, 102 })]
+    [InlineData('t', 10, 3, new[] { 13, 103, 17 }, new[] { 12, 102 })]
+    [InlineData('p', 8, 2, new[] { 56, 58, 60, 62 }, new[] { 56, 58 })]
+    public void 各平面の偶数行と奇数行をインタレ時だけ分ける(
+        char interlace, int depth, int scale, int[] luma, int[] chroma)
+    {
+        var header = new Y4mHeader { Width = 6, Height = 8, Chroma = Y4mChroma.C420, BitDepth = depth, Interlace = interlace };
+        int offset = depth == 8 ? 0 : 256;
+        var input = new Y4mFrame(header, null, null,
+            Pack(Plane(6, 8, offset).Concat(Plane(3, 4, offset + 20)).Concat(Plane(3, 4, offset + 40)), depth));
+
+        Y4mFrame scaled = EngineImage.Transform(input, scale, null);
+        var (chromaWidth, _) = scaled.Header.ChromaPlaneSize;
+        Assert.Equal(interlace, scaled.Header.Interlace);
+        Assert.Equal(Pack(Expected(luma, scaled.Header.Width, offset)
+            .Concat(Expected(chroma, chromaWidth, offset + 20))
+            .Concat(Expected(chroma, chromaWidth, offset + 40)), depth), scaled.Data);
+        Assert.Equal(input.Data, EngineImage.Transform(input, 1, null).Data);
+
+        static IEnumerable<int> Plane(int width, int height, int offset) =>
+            Enumerable.Range(0, height).SelectMany(y => Enumerable.Repeat(offset + (y % 2 == 0 ? 11 : 100) + y, width));
+
+        static IEnumerable<int> Expected(int[] rows, int width, int offset) =>
+            rows.SelectMany(value => Enumerable.Repeat(offset + value, width));
+    }
+
     private static byte[] Pack(IEnumerable<int> values, int depth)
     {
         var samples = values.ToArray();

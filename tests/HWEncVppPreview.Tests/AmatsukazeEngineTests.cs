@@ -102,6 +102,16 @@ public sealed partial class AmatsukazeEngineTests
         }
         public void Dispose() { }
     }
+    private sealed class InterlacedSource : IFrameNumberSource
+    {
+        public FrameNumberInfo Info { get; } = new(1, new Y4mHeader { Width = 4, Height = 4, FpsNum = 30, FpsDen = 1 });
+        public KfmFrameProperties? GetProperties(int position) => null;
+        public Y4mFrame GetFrame(int position) =>
+            new(Info.Header, null, null,
+                [20, 20, 20, 20, 120, 120, 120, 120, 20, 20, 20, 20, 120, 120, 120, 120, 128, 128, 128, 128, 128, 128, 128, 128]);
+        public void Dispose() { }
+    }
+
     private sealed class BlockingSource : IFrameNumberSource
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -240,6 +250,43 @@ public sealed partial class AmatsukazeEngineTests
         }
         // 遅れて発行された応答も出力に残し、破棄まで終わってからEOFを返す。
         output.Complete();
+    }
+
+    [Theory]
+    [InlineData("tff", "progressive", 20, 120, 70, 70)]
+    [InlineData("bff", "bff", 20, 120, 20, 120)]
+    [InlineData("progressive", "progressive", 70, 70, 70, 70)]
+    public async Task AviSynthのフィルタ前後に別々のインタレ指定を使う(
+        string inputInterlace, string outputInterlace, int beforeTop, int beforeBottom, int afterTop, int afterBottom)
+    {
+        var input = new ChannelStream();
+        var output = new ChannelStream();
+        var engine = new AmatsukazeEngine(input, output, TextWriter.Null, "/tmp", "/tmp", new(), (_, _) => new InterlacedSource());
+        Task run = RunEngineAsync(engine, output);
+        try
+        {
+            Assert.Equal("AMTPREVIEW READY version=2", await output.LineAsync());
+            input.Send(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                cmd = "config", gen = 1, kind = "avs", path = "test.avs",
+                interlace = inputInterlace, afterInterlace = outputInterlace, matrix = "bt709",
+            }));
+            Assert.StartsWith("AMTPREVIEW INFO gen=1 ", await output.LineAsync());
+
+            await CheckSide("before", beforeTop, beforeBottom);
+            await CheckSide("after", afterTop, afterBottom);
+        }
+        finally
+        {
+            await CompleteEngineAsync(input, run);
+        }
+
+        async Task CheckSide(string side, int top, int bottom)
+        {
+            input.Send(System.Text.Json.JsonSerializer.Serialize(new { cmd = "frame", gen = 1, id = 1, pos = 0, side, scale = 2 }));
+            Assert.Contains("width=2 height=2 bytes=6", await output.LineAsync());
+            Assert.Equal(new byte[] { (byte)top, (byte)top, (byte)bottom, (byte)bottom, 128, 128 }, await output.BytesAsync(6));
+        }
     }
 
     private static async Task CompleteEngineAsync(ChannelStream input, Task run)

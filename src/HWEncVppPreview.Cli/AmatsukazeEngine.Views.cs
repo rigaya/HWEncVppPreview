@@ -22,16 +22,9 @@ public sealed partial class AmatsukazeEngine
             arguments.AddRange(["--avsdll", Path.Combine(_directory, "AviSynth.dll")]);
         arguments.Add("--avs");
 
-        if (command.TryGetProperty("interlace", out var interlace))
-        {
-            switch (interlace.GetString())
-            {
-                case "tff": arguments.AddRange(["--interlace", "tff"]); break;
-                case "bff": arguments.AddRange(["--interlace", "bff"]); break;
-                case "progressive": break;
-                default: throw new ArgumentException("interlaceが不正です。");
-            }
-        }
+        char sourceInterlace = ReadInterlace(command, "interlace");
+        if (sourceInterlace is 't' or 'b')
+            arguments.AddRange(["--interlace", sourceInterlace == 't' ? "tff" : "bff"]);
 
         string[] vpp = command.TryGetProperty("vpp", out var array)
             ? array.EnumerateArray().Select(value => value.GetString() ?? throw new ArgumentException("vppが不正です。")).ToArray()
@@ -42,6 +35,7 @@ public sealed partial class AmatsukazeEngine
         if (state.Input is not { } info)
             throw new InvalidOperationException(state.Error ?? "入力映像の情報を取得できませんでした。");
         (_sarNum, _sarDen) = ReadSar(command, info.SarNum, info.SarDen);
+        _sourceInterlace = sourceInterlace;
         _colorTags = tags;
         _configuredGeneration = gen;
         var duration = state.DurationSeconds is double seconds
@@ -354,6 +348,7 @@ public sealed partial class AmatsukazeEngine
                 Width = original.Width, Height = original.Height, FpsNum = original.FpsNum, FpsDen = original.FpsDen,
                 SarNum = original.SarNum > 0 ? original.SarNum : _sarNum,
                 SarDen = original.SarDen > 0 ? original.SarDen : _sarDen,
+                Interlace = side == "before" ? _sourceInterlace : original.Interlace,
                 Chroma = original.Chroma, BitDepth = original.BitDepth, ColorSpaceTag = original.ColorSpaceTag, ExtTags = tags,
             };
             // プレビューから借りたrawはVIEWが保持し、変換結果だけを転送側で所有する。

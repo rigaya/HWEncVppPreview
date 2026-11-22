@@ -25,7 +25,7 @@ internal static class EngineImage
         if (x % sx != 0 || y % sy != 0) throw new ArgumentException("cropの開始位置は色差の境界に合わせてください。");
         int ow = (w + scale - 1) / scale, oh = (height + scale - 1) / scale;
         var dest = new Y4mHeader { Width = ow, Height = oh, FpsNum = h.FpsNum, FpsDen = h.FpsDen, SarNum = h.SarNum, SarDen = h.SarDen,
-            Chroma = h.Chroma, BitDepth = h.BitDepth, ColorSpaceTag = h.ColorSpaceTag, ExtTags = h.ExtTags };
+            Interlace = h.Interlace, Chroma = h.Chroma, BitDepth = h.BitDepth, ColorSpaceTag = h.ColorSpaceTag, ExtTags = h.ExtTags };
         var data = new byte[dest.FrameBytes];
         var input = source.Data;
         if (scale == 1 && x == 0 && y == 0 && w == h.Width && height == h.Height)
@@ -34,6 +34,7 @@ internal static class EngineImage
             return new Y4mFrame(dest, source.Xts, source.Xdur, data);
         }
 
+        int rowStep = h.Interlace is 't' or 'b' ? 2 : 1;
         int sampleBytes = h.BytesPerSample;
         var (chromaWidth, chromaHeight) = h.ChromaPlaneSize;
         var (outChromaWidth, outChromaHeight) = dest.ChromaPlaneSize;
@@ -52,10 +53,10 @@ internal static class EngineImage
             var inputPlane = input.AsSpan(inputOffset, inputBytes);
             var outputPlane = data.AsSpan(outputOffset, outputBytes);
             if (sampleBytes == 1)
-                ScalePlane<byte>(inputPlane, outputPlane, stride, left, top, cropWidth, cropHeight, outputWidth, scale);
+                ScalePlane<byte>(inputPlane, outputPlane, stride, left, top, cropWidth, cropHeight, outputWidth, scale, rowStep);
             else
                 ScalePlane<ushort>(MemoryMarshal.Cast<byte, ushort>(inputPlane), MemoryMarshal.Cast<byte, ushort>(outputPlane),
-                    stride, left, top, cropWidth, cropHeight, outputWidth, scale);
+                    stride, left, top, cropWidth, cropHeight, outputWidth, scale, rowStep);
             inputOffset += inputBytes;
             outputOffset += outputBytes;
         }
@@ -63,7 +64,7 @@ internal static class EngineImage
     }
 
     private static void ScalePlane<T>(ReadOnlySpan<T> source, Span<T> destination, int stride,
-        int left, int top, int width, int height, int outputWidth, int scale) where T : unmanaged, IBinaryInteger<T>
+        int left, int top, int width, int height, int outputWidth, int scale, int rowStep) where T : unmanaged, IBinaryInteger<T>
     {
         int start = top * stride + left;
         if (scale == 1)
@@ -73,14 +74,19 @@ internal static class EngineImage
             return;
         }
 
-        // 等倍に次いでよく使う1/2の全面ブロックは、2行の和を取って4で割る。
-        if (scale == 2 && width % 2 == 0 && height % 2 == 0)
+        int outputHeight = destination.Length / outputWidth;
+        // インタレでは、切り出し後の先頭行を基準に各平面の偶数行と奇数行を分ける。
+        int FirstRow(int y) => y / rowStep * rowStep * scale + y % rowStep;
+
+        // 全面を1/2にできる場合は、同じフィールドの2行を使って4画素を平均する。
+        if (scale == 2 && width % 2 == 0 && height % (2 * rowStep) == 0)
         {
-            for (int y = 0; y < height; y += 2)
+            for (int y = 0; y < outputHeight; y++)
             {
-                var first = source.Slice(start + y * stride, width);
-                var second = source.Slice(start + (y + 1) * stride, width);
-                var output = destination.Slice(y / 2 * outputWidth, outputWidth);
+                int firstRow = FirstRow(y);
+                var first = source.Slice(start + firstRow * stride, width);
+                var second = source.Slice(start + (firstRow + rowStep) * stride, width);
+                var output = destination.Slice(y * outputWidth, outputWidth);
                 for (int x = 0; x < output.Length; x++)
                 {
                     int i = x * 2;
@@ -92,9 +98,10 @@ internal static class EngineImage
         }
 
         int outputIndex = 0;
-        for (int y = 0; y < height; y += scale)
+        for (int y = 0; y < outputHeight; y++)
         {
-            int rows = Math.Min(scale, height - y);
+            int firstRow = FirstRow(y);
+            int rows = Math.Min(scale, (height - 1 - firstRow) / rowStep + 1);
             for (int x = 0; x < width; x += scale)
             {
                 int columns = Math.Min(scale, width - x);
@@ -102,7 +109,7 @@ internal static class EngineImage
                 int sum = 0;
                 for (int dy = 0; dy < rows; dy++)
                 {
-                    var row = source.Slice(start + (y + dy) * stride + x, columns);
+                    var row = source.Slice(start + (firstRow + dy * rowStep) * stride + x, columns);
                     foreach (var sample in row) sum += ReadSample(sample);
                 }
                 // 右端・下端は存在する画素だけを数え、0.5は切り上げる。
