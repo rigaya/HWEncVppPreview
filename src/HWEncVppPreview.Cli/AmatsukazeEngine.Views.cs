@@ -159,6 +159,7 @@ public sealed partial class AmatsukazeEngine
         long lastGeneration = -1;
         string? diagnostic = null;
         bool wroteView = false;
+        var delivery = new EncoderPreviewViewDelivery();
 
         // 受付直後の通知がなかった場合（同じ位置や表示モードなど）も、現在の状態から開始する。
         using (var current = await session.AcquireViewAsync(cancellationToken: token).ConfigureAwait(false))
@@ -228,7 +229,7 @@ public sealed partial class AmatsukazeEngine
                 // 不要な背景の更新だけで画像を返さないが、新しい世代で表示が未到着なら空の結果を返して失効を伝える。
                 if ((wantsAfter && hasAfter) || (wantsBefore && hasBefore) || wroteView)
                 {
-                    if (!await WriteViewAsync(id, gen, view, options, includeOldFrames: edge, token, superseded)
+                    if (!await WriteViewAsync(id, gen, view, options, includeOldFrames: edge, token, superseded, delivery)
                         .ConfigureAwait(false)) return false;
                     wroteView = true;
                 }
@@ -278,7 +279,7 @@ public sealed partial class AmatsukazeEngine
         _ => throw new ArgumentException("未対応の表示操作です。"),
     };
 
-    private sealed record ViewOptions(string Format, int Scale, int[]? Crop);
+    internal sealed record ViewOptions(string Format, int Scale, int[]? Crop);
     private static ViewOptions ReadViewOptions(JsonElement command)
     {
         string format = command.TryGetProperty("format", out var value) ? value.GetString() ?? "" : "yuv";
@@ -293,14 +294,16 @@ public sealed partial class AmatsukazeEngine
     private Task<bool> WriteDoneAsync(long id, long gen, string status, CancellationToken token, Task? superseded = null)
         => WriteAsync($"AMTPREVIEW DONE id={id} gen={gen} status={status}", generation: gen, cancellationToken: token, superseded: superseded);
 
-    private Task<bool> WriteViewAsync(long id, long gen, EncoderPreviewView view, ViewOptions options, bool includeOldFrames,
-        CancellationToken token, Task? superseded = null)
+    internal async Task<bool> WriteViewAsync(long id, long gen, EncoderPreviewView view, ViewOptions options, bool includeOldFrames,
+        CancellationToken token, Task? superseded = null, EncoderPreviewViewDelivery? delivery = null)
     {
         var state = view.State;
         var frames = new List<object>(2);
         var payloads = new List<byte[]>(2);
-        if (state.DisplayMode != EncoderPreviewDisplayMode.Before) Append("after", view.After);
-        if (state.DisplayMode != EncoderPreviewDisplayMode.After) Append("before", view.Before);
+        var after = state.DisplayMode == EncoderPreviewDisplayMode.Before ? null : Select(view.After);
+        var before = state.DisplayMode == EncoderPreviewDisplayMode.After ? null : Select(view.Before);
+        if (after is not null) Append("after", after, delivery?.ReuseAfter(after) == true);
+        if (before is not null) Append("before", before, delivery?.ReuseBefore(before) == true);
         byte[] metadata = JsonSerializer.SerializeToUtf8Bytes(new
         {
             currentSeconds = state.CurrentSeconds,
@@ -312,13 +315,33 @@ public sealed partial class AmatsukazeEngine
             frames,
         });
         long bytes = payloads.Sum(payload => payload.LongLength);
-        return WriteAsync($"AMTPREVIEW VIEW id={id} gen={gen} revision={state.ViewRevision} metaBytes={metadata.Length} bytes={bytes}",
-            metadata, gen, token, payloads, superseded);
+        bool sent = await WriteAsync($"AMTPREVIEW VIEW id={id} gen={gen} revision={state.ViewRevision} metaBytes={metadata.Length} bytes={bytes}",
+            metadata, gen, token, payloads, superseded).ConfigureAwait(false);
+        if (sent) delivery?.Remember(after, before);
+        return sent;
 
-        void Append(string side, EncoderPreviewFrame? selected)
+        EncoderPreviewFrame? Select(EncoderPreviewFrame? frame)
+            => frame is not null && (includeOldFrames || frame.Generation == state.Generation) ? frame : null;
+
+        void Append(string side, EncoderPreviewFrame selected, bool reuse)
         {
-            if (selected is null || (!includeOldFrames && selected.Generation != state.Generation)) return;
             token.ThrowIfCancellationRequested();
+            var timing = selected.Timing;
+            if (reuse)
+            {
+                frames.Add(new
+                {
+                    side,
+                    inputSeconds = Finite(timing.InputSeconds),
+                    xts = Finite(timing.Xts),
+                    xdur = Finite(timing.Xdur),
+                    durationSeconds = Finite(timing.DurationSeconds),
+                    provisional = selected.IsProvisional,
+                    bytes = 0,
+                    reuse = true,
+                });
+                return;
+            }
             var input = selected.Frame;
             var original = input.Header;
             var tags = new Dictionary<string, string>(original.ExtTags, StringComparer.Ordinal);
@@ -340,7 +363,6 @@ public sealed partial class AmatsukazeEngine
             var (chromaWidth, _) = h.ChromaPlaneSize;
             int lumaPitch = checked(h.Width * h.BytesPerSample), chromaPitch = checked(chromaWidth * h.BytesPerSample);
             string chroma = h.Chroma switch { Y4mChroma.C420 => "420", Y4mChroma.C422 => "422", _ => "444" };
-            var timing = selected.Timing;
             frames.Add(new
             {
                 side,

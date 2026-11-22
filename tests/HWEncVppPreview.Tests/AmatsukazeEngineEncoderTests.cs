@@ -85,6 +85,64 @@ public sealed partial class AmatsukazeEngineTests
     }
 
     [Fact]
+    public async Task 暫定から確定した同一の画像は再送せず別の画素や再表示は送る()
+    {
+        await using var protocol = new EncoderProtocolFixture();
+        await protocol.ConfigureEncoderAsync("bob");
+        var after = CreateFrame(1);
+        var before = CreateFrame(2);
+        var delivery = new EncoderPreviewViewDelivery();
+        var provisional = await SendAsync(1, after, before with { IsProvisional = true }, delivery);
+        Assert.All(provisional.Frames, frame => Assert.Equal(EncoderPeerFixture.FrameBytes, frame.Pixels.Length));
+        Assert.True(provisional.Frames.Single(frame => frame.Side == "before").Provisional);
+
+        var confirmed = await SendAsync(2, after, before, delivery);
+        Assert.Equal(2, confirmed.Frames.Length);
+        Assert.All(confirmed.Frames, frame =>
+        {
+            Assert.True(frame.Reuse);
+            Assert.False(frame.Provisional);
+            Assert.Empty(frame.Pixels);
+        });
+
+        // 同じXtsでもCoreが選び直した異なる画像は送る。
+        var different = CreateFrame(3);
+        var changed = await SendAsync(3, after, different, delivery);
+        Assert.True(changed.Frames.Single(frame => frame.Side == "after").Reuse);
+        var replacement = changed.Frames.Single(frame => frame.Side == "before");
+        Assert.False(replacement.Reuse);
+        Assert.All(replacement.Pixels, pixel => Assert.Equal(3, pixel));
+
+        await SendAsync(4, after, null, delivery);
+        var restored = await SendAsync(5, after, different, delivery);
+        Assert.False(restored.Frames.Single(frame => frame.Side == "before").Reuse);
+
+        var snapshot = await SendAsync(6, after, different, null, "png");
+        Assert.All(snapshot.Frames, frame =>
+        {
+            Assert.False(frame.Reuse);
+            Assert.Equal(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, frame.Pixels[..8]);
+        });
+        await protocol.FinishAsync();
+
+        static EncoderPreviewFrame CreateFrame(byte pixel)
+        {
+            var header = new Y4mHeader { Width = 4, Height = 4, FpsNum = 30, FpsDen = 1 };
+            var frame = new Y4mFrame(header, 1, null, Enumerable.Repeat(pixel, header.FrameBytes).ToArray());
+            return new(frame, new(1, 1, null, 1d / 30), 1);
+        }
+
+        async Task<EngineView> SendAsync(long revision, EncoderPreviewFrame afterFrame, EncoderPreviewFrame? beforeFrame,
+            EncoderPreviewViewDelivery? previous, string format = "yuv")
+        {
+            var state = new EncoderPreviewState(1, revision, 1, 8, null, EncoderPreviewDisplayMode.SideBySide,
+                PreviewProgress.Done, false, false, null, "", false);
+            using var view = new EncoderPreviewView(state, afterFrame, beforeFrame, null);
+            return await protocol.SendViewAsync(view, previous, format);
+        }
+    }
+
+    [Fact]
     public async Task 取消を受け付けた要求の応答を捨て同じ世代で読み直す()
     {
         await using var protocol = new EncoderProtocolFixture();
@@ -166,7 +224,7 @@ public sealed partial class AmatsukazeEngineTests
     }
 
     private sealed record EngineFrame(string Side, double InputSeconds, double? Xts, double? Xdur,
-        int Width, int Height, byte[] Pixels);
+        int Width, int Height, byte[] Pixels, bool Reuse, bool Provisional);
     private sealed record EngineView(long Revision, double CurrentSeconds, EngineFrame[] Frames);
 
     private sealed class CountedSink : IPreviewSink
@@ -184,12 +242,13 @@ public sealed partial class AmatsukazeEngineTests
         public EncoderPeerFixture Encoder { get; } = new(new FakeTimeProvider());
 
         private readonly Task _run;
+        private readonly AmatsukazeEngine _engine;
 
         public EncoderProtocolFixture()
         {
-            var engine = new AmatsukazeEngine(Input, Output, TextWriter.Null, "/tmp", "/tmp",
+            _engine = new AmatsukazeEngine(Input, Output, TextWriter.Null, "/tmp", "/tmp",
                 new() { ["QSVEnc"] = "fake" }, (_, _) => new Source(), encoderSessionFactory: Encoder.CreateSession);
-            _run = RunEngineAsync(engine, Output);
+            _run = RunEngineAsync(_engine, Output);
         }
 
         public async Task ConfigureEncoderAsync(string mode)
@@ -209,10 +268,18 @@ public sealed partial class AmatsukazeEngineTests
             Assert.Equal(8, double.Parse(fields["durationSeconds"], CultureInfo.InvariantCulture));
         }
 
+        public async Task<EngineView> SendViewAsync(EncoderPreviewView view, EncoderPreviewViewDelivery? delivery, string format)
+        {
+            Assert.True(await _engine.WriteViewAsync(9, 1, view, new(format, 1, null), includeOldFrames: true,
+                CancellationToken.None, delivery: delivery));
+            return await ReadViewAsync(await Output.LineAsync(), 9);
+        }
+
         public async Task<EngineView[]> CommandAsync(string json, long id)
         {
             Input.Send(json);
             var views = new List<EngineView>();
+            var latest = new Dictionary<string, EngineFrame>(StringComparer.Ordinal);
             string prefix = FormattableString.Invariant($"AMTPREVIEW DONE id={id} gen=1 ");
             while (true)
             {
@@ -223,7 +290,15 @@ public sealed partial class AmatsukazeEngineTests
                     Assert.NotEmpty(views);
                     return views.ToArray();
                 }
-                views.Add(await ReadViewAsync(line, id));
+                var view = await ReadViewAsync(line, id);
+                var frames = view.Frames.Select(frame =>
+                {
+                    if (!frame.Reuse) return frame;
+                    Assert.True(latest.TryGetValue(frame.Side, out var previous));
+                    return frame with { Width = previous!.Width, Height = previous.Height, Pixels = previous.Pixels };
+                }).ToArray();
+                latest = frames.ToDictionary(frame => frame.Side, StringComparer.Ordinal);
+                views.Add(view with { Frames = frames });
             }
         }
 
@@ -241,10 +316,12 @@ public sealed partial class AmatsukazeEngineTests
             {
                 string side = item.GetProperty("side").GetString()!;
                 int frameBytes = item.GetProperty("bytes").GetInt32();
+                bool reuse = item.TryGetProperty("reuse", out var flag) && flag.GetBoolean();
+                Assert.Equal(reuse, frameBytes == 0);
                 frames.Add(new(side, item.GetProperty("inputSeconds").GetDouble(),
                     NullableNumber(item.GetProperty("xts")), NullableNumber(item.GetProperty("xdur")),
-                    item.GetProperty("width").GetInt32(), item.GetProperty("height").GetInt32(),
-                    await Output.BytesAsync(frameBytes)));
+                    reuse ? 0 : item.GetProperty("width").GetInt32(), reuse ? 0 : item.GetProperty("height").GetInt32(),
+                    reuse ? [] : await Output.BytesAsync(frameBytes), reuse, item.GetProperty("provisional").GetBoolean()));
             }
             Assert.Equal(bytes, frames.Sum(frame => frame.Pixels.Length));
             return new(revision, root.GetProperty("currentSeconds").GetDouble(), frames.ToArray());
