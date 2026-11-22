@@ -32,5 +32,4 @@ public static class AppMessages
     public static string CommaUnavailable => T("値にカンマは使えません。エンコーダがパラメータの区切りとして扱います。", "Commas cannot be used in values; the encoder treats them as separators.");
     public static string SchemaUnavailable => T("helpのスキーマを取得していません。テキストで編集してください。", "Help schema is unavailable. Edit the text instead.");
     public static string Elapsed(double seconds) => $"{seconds:0.00}" + T("秒", " s");
-    public static string EncoderInfoFailed(int exitCode) => T("エンコーダの情報取得に失敗しました: ", "Could not read encoder info: ") + exitCode;
 }

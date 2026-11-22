@@ -1,7 +1,6 @@
 ﻿using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -35,14 +34,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     private readonly IViewModelServices _services;
     private readonly TimeProvider _clock;
     private readonly PreviewTimeouts _timeouts;
-    private readonly InputProbe _probe;
-    private readonly bool _borrowInputProbe;
+    private readonly EncoderPreviewSession _session;
     private readonly FrameCache _cache;
     private readonly bool _usesOwnedRaw;
     private readonly RawOwnershipScope? _rawOwnershipScope;
     private readonly TimeSpan _inputEditDelay;
-    private readonly Func<string, string, CancellationToken, Task<string>>? _readTextOverride;
-    private readonly PreviewController _controller;
+    private PreviewController _controller => _session.Controller;
     private readonly Func<Y4mFrame, HdrDisplaySettings, CancellationToken, Task<byte[]>>? _imageConverter;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly object _taskLock = new();
@@ -96,17 +93,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         _clock = timeProvider ?? TimeProvider.System;
         _timeouts = timeouts ?? PreviewTimeouts.Default;
         _inputEditDelay = debounceOverride ?? TimeSpan.FromMilliseconds(150);
-        _readTextOverride = readTextOverride;
-        _probe = probe ?? new InputProbe(_timeouts, _clock);
-        _borrowInputProbe = probe == null && backend == null;
         // 同じ長さなら読取が全体を上書きし、所有権が貸出中の画素を守るため、入力世代や形式では分けない。
         _rawOwnershipScope = owned?.Scope ?? (_usesOwnedRaw ? new RawOwnershipScope(new RawBufferPool()) : null);
         _cache = cache ?? (_rawOwnershipScope != null ? new FrameCache(_rawOwnershipScope) : new FrameCache());
         var observed = new ObservedBackend(backend ?? new ServerBackend(_timeouts, _clock), this);
         var before = backgroundBackend != null ? new ObservedBackend(backgroundBackend, this) :
             backend == null ? new ObservedBackend(new ServerBackend(_timeouts, _clock), this) : observed;
-        _controller = new PreviewController(_timeouts, _clock, observed, _cache,
-            debounce: debounceOverride, backgroundBackend: before, ownershipScope: _rawOwnershipScope);
+        _session = new EncoderPreviewSession(_clock, _timeouts, observed, before, _cache, _rawOwnershipScope,
+            probe, backend == null, debounceOverride, readTextOverride);
         _controller.ReplayStarted += OnReplayStarted;
         if (_usesOwnedRaw)
         {
@@ -962,15 +956,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
     {
         try
         {
-            string version = await ReadTextAsync(encoder, "--version", token).ConfigureAwait(false);
-            string help = await ReadTextAsync(encoder, "--help", token).ConfigureAwait(false);
+            var metadata = await _session.ReadMetadataAsync(encoder, token).ConfigureAwait(false);
             await PostAsync(() =>
             {
                 if (_disposed || EncoderPath != encoder) return;
-                EncoderDescription = DescribeEncoder(version, encoder);
-                _helpIndex = new HelpIndex(help);
-                HelpSchema = new HelpSchema(help);
-                _capabilities = CommandBuilder.CapabilitiesFromHelp(_helpIndex);
+                EncoderDescription = DescribeEncoder(metadata.Version, encoder);
+                _helpIndex = metadata.HelpIndex;
+                HelpSchema = new HelpSchema(metadata.Help);
+                _capabilities = metadata.Capabilities;
                 _ = StartEncoderInitialization(encoder);
                 UpdateHelp();
             }).ConfigureAwait(false);
@@ -1002,28 +995,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         return first.Length > 48 ? first[..48] + "…" : first;
     }
 
-    private async Task<string> ReadTextAsync(string encoder, string argument, CancellationToken token)
-    {
-        // 実プロセスを使わない試験でも、受け取った文字列の処理は通常経路を通す。
-        if (_readTextOverride != null) return await _readTextOverride(encoder, argument, token).ConfigureAwait(false);
-        using var process = new Process { StartInfo = new ProcessStartInfo(encoder)
-        { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true } };
-        process.StartInfo.ArgumentList.Add(argument);
-        process.Start();
-        using var registration = token.Register(() => { try { if (!process.HasExited) process.Kill(true); } catch (InvalidOperationException) { } });
-        var output = process.StandardOutput.ReadToEndAsync();
-        var error = process.StandardError.ReadToEndAsync();
-        try { await process.WaitForExitAsync().WaitAsync(_timeouts.Metadata, _clock, token).ConfigureAwait(false); }
-        finally
-        {
-            if (!process.HasExited) process.Kill(true);
-            await process.WaitForExitAsync().ConfigureAwait(false);
-            await Task.WhenAll(output, error).ConfigureAwait(false);
-        }
-        if (process.ExitCode != 0) throw new InvalidOperationException(AppMessages.EncoderInfoFailed(process.ExitCode));
-        string stdout = await output.ConfigureAwait(false);
-        return string.IsNullOrWhiteSpace(stdout) ? await error.ConfigureAwait(false) : stdout;
-    }
     private void Track(Task task)
     {
         lock (_taskLock) _tasks.Add(task);
@@ -1085,7 +1056,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IAsyncDisposabl
         if (_controller.ShutdownIncomplete) Interlocked.Exchange(ref _shutdownIncomplete, 1);
         TraceDisposeStage("controller_dispose.end");
         TraceDisposeStage("probe_dispose.begin");
-        Task probe = Task.Run(async () => await _probe.DisposeAsync().ConfigureAwait(false));
+        Task probe = Task.Run(async () => await _session.DisposeProbeAsync().ConfigureAwait(false));
         await WaitForVmShutdownAsync(probe, deadline, "probe").ConfigureAwait(false);
         TraceDisposeStage("probe_dispose.end");
         TraceDisposeStage("wait_idle.begin");

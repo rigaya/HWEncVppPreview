@@ -105,24 +105,9 @@ public sealed partial class MainWindowViewModel
             {
                 await _metadataTask.WaitAsync(cancellation.Token).ConfigureAwait(false);
                 PreviewCapabilities capabilities = _capabilities;
-                InputInfo info = _inputInfo ?? await (_borrowInputProbe
-                    ? _controller.ProbeInputAsync(_probe, encoder, input, inputArgs, capabilities, cancellation.Token)
-                    : _probe.ProbeAsync(encoder, input, inputArgs, cancellation.Token, capabilities)).ConfigureAwait(false);
-                // 常駐の初回検査ではDurationのログがまだ届かないことがある。
-                // 復元した非ゼロ時刻は、画像取得に進む前に自然終了する検査で長さを確かめる。
-                if (validateRestoredTime && seconds > 0 && info.Duration == null)
-                {
-                    try
-                    {
-                        var duration = await _probe.ProbeDurationAsync(encoder, input, inputArgs, cancellation.Token, capabilities).ConfigureAwait(false);
-                        info = info with { Duration = duration };
-                    }
-                    catch (Exception exception) when (!cancellation.IsCancellationRequested)
-                    {
-                        // 長さを判定できない入力も、従来どおりプレビューは利用できる。
-                        if (PerfTrace.Enabled) PerfTrace.Write("vm.startup_duration.failed", new { error = exception.Message });
-                    }
-                }
+                var configuration = new EncoderPreviewConfiguration(encoder, input, inputArgs, vpp);
+                var info = await _session.PrepareInputAsync(configuration, capabilities,
+                    _inputInfo, validateRestoredTime && seconds > 0, cancellation.Token).ConfigureAwait(false);
                 await PostAsync(() =>
                 {
                     if (_disposed || editEpoch != Volatile.Read(ref _editEpoch) || cancellation.IsCancellationRequested) return;
@@ -144,27 +129,9 @@ public sealed partial class MainWindowViewModel
                             ? 0 : Math.Min(target, DurationSeconds);
                     // 古い移動の準備完了で目標時刻を過去へ戻さない。
                     if (actualGeneration == Volatile.Read(ref _generation)) SetTimeOnly(target);
-                    var request = new PreviewRequest
-                    {
-                        EncoderPath = encoder, InputFile = input, InputArgs = inputArgs, VppArgs = vpp,
-                        AllowConcurrentBackground = _concurrentComparisonGeneration == actualGeneration,
-                        Fps = info.Fps, TargetSeconds = target, CorrelationId = actualGeneration,
-                        InputFormatHint = new Y4mHeader { Width = info.Width, Height = info.Height,
-                            FpsNum = info.FpsNum, FpsDen = info.FpsDen, Chroma = info.Chroma,
-                            BitDepth = info.BitDepth, ColorSpaceTag = info.ColorSpaceTag },
-                        PostMarginSeconds = capabilities.TimestampPassthrough && info.TimestampOriginSeconds.HasValue
-                            ? actualReverse ? 0.5 : 1.0 : 0.5,
-                        // 絶対時計の逆方向は、暖機2秒を除いても手前3秒を表示できる物理窓にする。
-                        // 順方向の論理2秒はCoreで物理3秒へ広げ、legacyの逆方向3秒は維持する。
-                        PreMarginSeconds = actualReverse
-                            ? capabilities.TimestampPassthrough && info.TimestampOriginSeconds.HasValue ? 5 : 3 : 2,
-                        Capabilities = capabilities, TimestampOriginSeconds = info.TimestampOriginSeconds,
-                        TimestampOriginTrusted = info.TimestampOriginTrusted,
-                        InputDurationSeconds = info.Duration?.TotalSeconds ?? (HasDuration ? DurationSeconds : null),
-                        Continuous = capabilities.TimestampPassthrough && info.TimestampOriginSeconds.HasValue && !actualReverse,
-                    };
-                    if (_controller.IsLegacySource(request))
-                        request = request with { Continuous = false, PreMarginSeconds = actualReverse ? 3 : request.PreMarginSeconds };
+                    var request = _session.CreateAfterRequest(configuration, info, capabilities, target,
+                        actualGeneration, actualReverse, _concurrentComparisonGeneration == actualGeneration,
+                        HasDuration ? DurationSeconds : null);
                     bool squarePixel = info.SarNum <= 0 || info.SarDen <= 0 || info.SarNum == info.SarDen;
                     string sar = squarePixel ? "" : $" (SAR {info.SarNum}:{info.SarDen})";
                     InputInfoText = $"{info.Width}x{info.Height}{sar}  {info.Fps:0.###}fps";
@@ -174,12 +141,9 @@ public sealed partial class MainWindowViewModel
                     CheckBeforeInterval(request);
                     RegisterContext(context);
                     StatusText = AppMessages.Processing;
-                    // 隣不足では旧cache hitを避ける。正方向だけ、生存中の同じ物理streamへ合流を明示する。
-                    bool reuseNeighbor = requirePhysicalRefetch && !bypassCache && actualNavigation && !actualReverse
-                        && neighbor is { Direction: > 0 } && request.Continuous;
                     ReleaseIntervalSnapshotsForSubmission();
-                    _controller.Submit(request, bypassCache || requirePhysicalRefetch, navigation: actualNavigation,
-                        reuseActiveStream: reuseNeighbor, bypassDebounce: bypassDebounce);
+                    _session.SubmitAfter(request, bypassCache, requirePhysicalRefetch, actualNavigation,
+                        actualReverse, neighbor?.Direction ?? 0, bypassDebounce);
                     // 無フィルタではAfterの確定frameがそのままBeforeなので、別の有限取得を競合させない。
                     if (request.AllowConcurrentBackground && request.VppArgs.Count > 0) QueueConcurrentBefore(request, actualGeneration);
                     Track(ReleaseContextAsync(context));

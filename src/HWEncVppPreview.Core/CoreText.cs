@@ -26,6 +26,7 @@ public static class CoreText
     public static string Y4mLineTooLong => T("y4m の行が長すぎます (4096 バイト超)", "A y4m line exceeds 4096 bytes.");
     public static string Y4mMissingNewline => T("y4m の行が改行なしで終わっています", "A y4m line ends without a newline.");
     public static string EncoderStartFailed => T("エンコーダを起動できませんでした", "Could not start the encoder.");
+    public static string EncoderInfoFailed(int exitCode) => T("エンコーダの情報取得に失敗しました: ", "Could not read encoder info: ") + exitCode;
     public static string DuplicateY4mHeader => T("1つの要求の中で y4m ヘッダが2回来ました", "Received two y4m headers in one request.");
     public static string FrameBeforeY4mHeader => T("y4m ヘッダの前に FRAME が来ました", "Received FRAME before the y4m header.");
     public static string BeginBeforeEnd => T("END なしで次の BEGIN が来ました", "Received another BEGIN before END.");
