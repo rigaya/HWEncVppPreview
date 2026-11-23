@@ -72,8 +72,19 @@ public sealed class InputProbeTests
                 probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", new[] { "--fake-rc", "23", "--fake-input-end", "0" }));
             Assert.Equal(23, error.ExitCode);
             Assert.Contains("FAKE requested rc=23", error.StandardError);
+            Assert.Contains("(FAKE requested rc=23)", error.Message);
         }
         Assert.Equal(2, backend.Commands.Count);
+    }
+
+    [Fact]
+    public async Task NativeFailureMessageIncludesTheLastEncoderError()
+    {
+        await using var probe = TestProcesses.CreateInputProbe();
+        var error = await Assert.ThrowsAsync<InputProbeException>(() =>
+            probe.ProbeAsync(BackendTests.FakeEncoderPath(), "in.ts", ["--fake-rc", "23", "--fake-input-end", "0"]));
+        Assert.Equal(23, error.ExitCode);
+        Assert.Contains("(FAKE requested rc=23)", error.Message);
     }
 
     [Fact]

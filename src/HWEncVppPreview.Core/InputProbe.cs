@@ -133,7 +133,8 @@ public sealed class InputProbe : IAsyncDisposable
             lifetime.ThrowIfCancellationRequested();
             // 自己中断と外部のキャンセルは区別する。最初のフレーム取得後の自己中断だけを成功扱いにする。
             if (!sink.HasFrame && result.ExitCode != 0)
-                throw new InputProbeException(CoreText.InputProbeEncoderExited(result.ExitCode), result.ExitCode, result.StandardError);
+                throw new InputProbeException(EncoderErrorDetails.Append(CoreText.InputProbeEncoderExited(result.ExitCode), result.StandardError),
+                    result.ExitCode, result.StandardError);
             if (!sink.HasFrame || sink.Header is not { } header || header.Fps <= 0 || !double.IsFinite(header.Fps))
                 throw new InputProbeException(CoreText.InputHeaderUnavailable, -1, result.StandardError);
             double? origin = capabilities?.TimestampPassthrough == true && sink.FirstTimestamp is double timestamp && double.IsFinite(timestamp) ? timestamp : null;

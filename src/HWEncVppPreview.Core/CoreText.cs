@@ -36,6 +36,8 @@ public static class CoreText
     public static string EncoderExitedBeforeEnd => T("ENDの前にエンコーダが終了しました", "The encoder exited before END.");
     public static string ServerReadyUnavailable => T("対応するREADYを受信できませんでした", "No compatible READY response was received.");
     public static string ServerHandshakeFailed => T("常駐サーバのハンドシェイクに失敗しました", "The server handshake failed.");
+    public static string ServerHandshakeUnsupported => ServerHandshakeFailed + T(
+        "。プレビューに対応していない版の可能性があります。", " This encoder version may not support preview.");
     public static string ServerStopTimedOut => T("常駐サーバの停止が期限内に完了しませんでした", "Timed out stopping the server.");
     public static string ServerCleanupTimedOut => T("常駐サーバの回収が期限内に完了しませんでした", "Timed out cleaning up the server.");
     public static string ServerCommandTimedOut => T("常駐サーバへのコマンド送信が期限内に完了しませんでした", "Timed out sending a server command.");

@@ -34,7 +34,13 @@ public interface IPreviewBackend : IAsyncDisposable
 
 public sealed class PreviewServerNotSupportedException : Exception
 {
-    public PreviewServerNotSupportedException(string message, Exception? innerException = null) : base(message, innerException) { }
+    public PreviewServerNotSupportedException(string message, Exception? innerException = null)
+        : this(message, "", innerException) { }
+
+    internal PreviewServerNotSupportedException(string message, string standardError, Exception? innerException)
+        : base(message, innerException) => StandardError = standardError;
+
+    public string StandardError { get; }
 }
 
 /// <summary>プロトコル破損等の異常と、その要求の標準エラーログ。</summary>

@@ -420,7 +420,7 @@ public sealed partial class PreviewController
             {
                 _cache.RemoveSegment(session.SegmentId);
                 if (!session.IsForwardPrefetch) Notify(session.Version, session.Navigation, () => Failed?.Invoke(new(session.LatestRequest,
-                    CoreText.EncoderExited(result.ExitCode), result)), true);
+                    EncoderErrorDetails.Append(CoreText.EncoderExited(result.ExitCode), result.StandardError), result)), true);
             }
 
             Task<PreviewRunResult> RunAsync()

@@ -77,6 +77,7 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
             throw;
         }
         catch (ObjectDisposedException) { throw; }
+        catch (PreviewServerNotSupportedException) { throw; }
         catch (Exception exception)
         {
             if (PerfTrace.Enabled) PerfTrace.Write("server.error", new { stage = "history", exception = exception.ToString() });
@@ -104,6 +105,7 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
             return history;
         }
         long id = Interlocked.Increment(ref _nextId);
+        Task<string> log = session.RegisterLog(id);
         long started = PerfTrace.Enabled ? Stopwatch.GetTimestamp() : 0;
         if (PerfTrace.Enabled) PerfTrace.Write("server.probe_send", new { correlationId = request.CorrelationId, id, pid = session.Process.Id });
         // run gateはENDとstderr末尾の回収まで保持されるため、映像の途中へprobeを混ぜない。
@@ -112,8 +114,19 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
         var read = Task.Run(session.Reader.ReadEvent);
         session.LastRead = read;
         PreviewEvent? response = await read.WaitAsync(_probeTimeout, _timeProvider, token).ConfigureAwait(false);
+        if (response == null)
+        {
+            // PROBEにはstderrのENDがない。相手が終了した場合はEOFまでの診断を回収する。
+            await DropSessionAsync(session).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            string diagnostics = await session.ReadLogAsync(log).ConfigureAwait(false);
+            throw new PreviewServerNotSupportedException(
+                EncoderErrorDetails.Append(CoreText.ServerHandshakeFailed, diagnostics), diagnostics,
+                new EndOfStreamException(CoreText.EncoderExitedBeforeEnd));
+        }
         if (response is not PreviewProbe probe || probe.Id != id)
             throw new PreviewProtocolException(CoreText.ServerEventMismatch);
+        session.ForgetLog(id);
         if (PerfTrace.Enabled) PerfTrace.Write("server.probe_receive", new { correlationId = request.CorrelationId, id,
             pid = session.Process.Id, history = probe.DependsOnHistory ? 1 : 0, rc = probe.Rc,
             elapsedMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds });
@@ -162,6 +175,7 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
                         throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed);
                 }
                 catch (OperationCanceledException) { throw; }
+                catch (PreviewServerNotSupportedException exception) when (exception.InnerException is EndOfStreamException) { throw; }
                 catch (Exception exception)
                 {
                     if (PerfTrace.Enabled) PerfTrace.Write("server.error", new { stage = "probe", exception = exception.ToString() });
@@ -240,7 +254,9 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
             if (PerfTrace.Enabled) PerfTrace.Write("server.error", new { stage = "request", exception = exception.ToString() });
             if (session != null) await DropSessionAsync(session).ConfigureAwait(false);
             string diagnostics = requestLog == null ? "" : await session!.ReadLogAsync(requestLog).ConfigureAwait(false);
-            throw new PreviewBackendException(CoreText.ServerRequestFailed, diagnostics, exception);
+            string message = exception is EndOfStreamException or Y4mTruncatedException
+                ? EncoderErrorDetails.Append(CoreText.ServerRequestFailed, diagnostics) : CoreText.ServerRequestFailed;
+            throw new PreviewBackendException(message, diagnostics, exception);
         }
         finally
         {
@@ -354,6 +370,7 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
             PreviewEvent? ready = await readyTask.WaitAsync(_readyTimeout, _timeProvider, token).ConfigureAwait(false);
             if (ready is not PreviewReady info || !info.Values.TryGetValue("version", out string? version) || version != "1")
                 throw new PreviewServerNotSupportedException(CoreText.ServerReadyUnavailable);
+            session.CompleteHandshake();
             session.SupportsProbe = info.Values.GetValueOrDefault("probe") == "1";
             session.SupportsWindowSeek = info.Values.GetValueOrDefault("window_seek") == "1";
             session.SupportsOutputStart = info.Values.GetValueOrDefault("output_start") == "1";
@@ -370,7 +387,9 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
             if (PerfTrace.Enabled) PerfTrace.Write("server.error", new { stage = "handshake", exception = exception.ToString() });
             await DropSessionAsync(session).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
-            throw new PreviewServerNotSupportedException(CoreText.ServerHandshakeFailed, exception);
+            string diagnostics = session.GetStartupLog();
+            throw new PreviewServerNotSupportedException(
+                EncoderErrorDetails.Append(CoreText.ServerHandshakeUnsupported, diagnostics), diagnostics, exception);
         }
     }
 
@@ -471,9 +490,12 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
 
     private sealed class Session
     {
+        private const int StartupLogLines = 100;
+        private const int StartupLogLineLength = 4096;
         private readonly object _sync = new();
         private readonly SemaphoreSlim _writeGate = new(1, 1);
         private readonly Dictionary<long, RequestLog> _logs = [];
+        private Queue<string>? _startupLog = new();
         private readonly Task _stderrTask;
         private Task<bool>? _stopTask;
         private Task<int>? _exitObservation;
@@ -517,6 +539,16 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
             }
         }
 
+        public void CompleteHandshake()
+        {
+            lock (_sync) _startupLog = null;
+        }
+
+        public string GetStartupLog()
+        {
+            lock (_sync) return _startupLog == null ? "" : string.Join(Environment.NewLine, _startupLog);
+        }
+
         public Task<string> RegisterLog(long id)
         {
             lock (_sync)
@@ -525,6 +557,11 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
                 _logs.Add(id, log);
                 return log.Completion.Task;
             }
+        }
+
+        public void ForgetLog(long id)
+        {
+            lock (_sync) _logs.Remove(id);
         }
 
         public async Task SendAsync<T>(T command, TimeSpan? timeout = null)
@@ -560,6 +597,11 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
                 {
                     lock (_sync)
                     {
+                        if (_startupLog != null)
+                        {
+                            _startupLog.Enqueue(line.Length > StartupLogLineLength ? line[..StartupLogLineLength] : line);
+                            if (_startupLog.Count > StartupLogLines) _startupLog.Dequeue();
+                        }
                         long? begin = ParseId(line, "RGYPREVIEW BEGIN id=");
                         if (begin.HasValue) _currentLog = begin;
                         if (PerfTrace.Enabled) PerfTrace.Write("server.stderr", new { pid = _pid, id = _currentLog, line });
@@ -572,6 +614,11 @@ public sealed partial class ServerBackend : IPreviewBackend, IRawOwnedBackend
                                 _logs.Remove(current);
                                 _currentLog = null;
                             }
+                        }
+                        else if (_currentLog == null && _logs.Count == 1)
+                        {
+                            // BEGINより先に終了したときも、実行中の要求に標準エラーを残す。
+                            _logs.Values.Single().Text.AppendLine(line);
                         }
                     }
                 }

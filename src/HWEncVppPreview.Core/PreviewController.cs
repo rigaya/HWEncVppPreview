@@ -474,7 +474,8 @@ public sealed partial class PreviewController : IAsyncDisposable
                 if (active.IsCancellationRequested || result.IsCancelled) return;
                 if (result.ExitCode != 0)
                 {
-                    Publish(() => Failed?.Invoke(new(request, CoreText.EncoderExited(result.ExitCode), result)), currentOnly: true);
+                    Publish(() => Failed?.Invoke(new(request,
+                        EncoderErrorDetails.Append(CoreText.EncoderExited(result.ExitCode), result.StandardError), result)), currentOnly: true);
                     return;
                 }
                 sink.Finish(scanToEnd && !stoppedAfterSelection);

@@ -252,7 +252,12 @@ public sealed partial class EncoderPreviewSession
         var context = ContextFor(value.Request);
         if (context == null) return;
         context.Segment = null;
-        string diagnostics = value.Diagnostic ?? value.Result?.StandardError ?? (value.Exception as PreviewBackendException)?.StandardError ?? context.Diagnostics;
+        string diagnostics = value.Diagnostic ?? value.Result?.StandardError ?? (value.Exception switch
+        {
+            PreviewBackendException backend => backend.StandardError,
+            PreviewServerNotSupportedException unsupported => unsupported.StandardError,
+            _ => context.Diagnostics,
+        });
         if (context.Kind == RequestKind.After) _afterRequests.TryRemove(context.Generation, out _);
         Action apply = () =>
         {

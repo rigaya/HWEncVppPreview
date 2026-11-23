@@ -33,7 +33,11 @@ public sealed partial class AmatsukazeEngine
         var state = await session.ConfigureAsync(new(encoder, Path.Combine(_tmp, "filter_preview", "src.avs"),
             arguments, vpp), token).ConfigureAwait(false);
         if (state.Input is not { } info)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!string.IsNullOrWhiteSpace(state.Diagnostics)) await _log.WriteLineAsync(state.Diagnostics).ConfigureAwait(false);
             throw new InvalidOperationException(state.Error ?? "入力映像の情報を取得できませんでした。");
+        }
         (_sarNum, _sarDen) = ReadSar(command, info.SarNum, info.SarDen);
         _sourceInterlace = sourceInterlace;
         _colorTags = tags;

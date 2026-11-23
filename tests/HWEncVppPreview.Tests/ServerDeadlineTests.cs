@@ -23,9 +23,58 @@ public sealed class ServerDeadlineTests
 
         var failure = await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => run);
         Assert.IsType<TimeoutException>(failure.InnerException);
+        Assert.Equal(CoreText.ServerHandshakeUnsupported, failure.Message);
         Assert.True(stalled.WasReaped);
         Peer recovery = await fixture.CompleteRunAsync();
         Assert.NotSame(stalled, recovery);
+    }
+
+    [Fact]
+    public async Task ExitBeforeEndPreservesTheErrorLineReadAfterExit()
+    {
+        await using var fixture = new Sessions(new FakeTimeProvider(), PreviewTimeouts.Infinite);
+        Task<PreviewRunResult> run = fixture.RunAsync();
+        Peer peer = await fixture.NextPeerAsync();
+        Assert.Equal("run", (await peer.NextCommandAsync()).Name);
+        peer.ExitBeforeStderrIsDrained();
+        await peer.ReapStarted.Task;
+        // 終了通知とstdoutのEOFが先に届き、stderrを読む側はその後で行とEOFを受け取る。
+        peer.FinishStderr("\u001b[31mError: original failure\u001b[0m", "closing resources");
+
+        var failure = await Assert.ThrowsAsync<PreviewBackendException>(() => run);
+        Assert.Equal(CoreText.ServerRequestFailed + " (Error: original failure)", failure.Message);
+        Assert.Contains("closing resources", failure.StandardError);
+    }
+
+    [Fact]
+    public async Task EncoderWithoutReadyExposesTheStartupErrorAndTheCompatibilityHint()
+    {
+        await using var fixture = new Sessions(new FakeTimeProvider(), PreviewTimeouts.Infinite, withholdFirstReady: true);
+        Task<PreviewRunResult> run = fixture.RunAsync();
+        Peer peer = await fixture.NextPeerAsync();
+        peer.ExitBeforeStderrIsDrained();
+        await peer.ReapStarted.Task;
+        peer.FinishStderr("Error: Unknown option: --preview-server", "Did you mean --seek?", "QSVEncC.exe finished with error!");
+
+        var failure = await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => run);
+        Assert.Equal(CoreText.ServerHandshakeUnsupported + " (Error: Unknown option: --preview-server)", failure.Message);
+        Assert.Contains("Did you mean --seek?", failure.StandardError);
+    }
+
+    [Fact]
+    public async Task EncoderExitingDuringHistoryProbeExposesTheErrorReadAtEof()
+    {
+        await using var fixture = new Sessions(new FakeTimeProvider(), PreviewTimeouts.Infinite, supportsProbe: true);
+        Task<bool?> run = fixture.Backend.GetHistoryRequirementAsync(Sessions.Request());
+        Peer peer = await fixture.NextPeerAsync();
+        Assert.Equal("probe", (await peer.NextCommandAsync()).Name);
+        peer.ExitBeforeStderrIsDrained();
+        await peer.ReapStarted.Task;
+        peer.FinishStderr("Error: could not probe the filter");
+
+        var failure = await Assert.ThrowsAsync<PreviewServerNotSupportedException>(() => run);
+        Assert.Equal(CoreText.ServerHandshakeFailed + " (Error: could not probe the filter)", failure.Message);
+        Assert.Contains("Error: could not probe the filter", failure.StandardError);
     }
 
     [Fact]
@@ -102,7 +151,7 @@ public sealed class ServerDeadlineTests
         await Assert.ThrowsAsync<ObjectDisposedException>(() => fixture.RunAsync());
     }
 
-    private sealed class Sessions(FakeTimeProvider clock, PreviewTimeouts timeouts, bool withholdFirstReady = false) : IAsyncDisposable
+    private sealed class Sessions(FakeTimeProvider clock, PreviewTimeouts timeouts, bool withholdFirstReady = false, bool supportsProbe = false) : IAsyncDisposable
     {
         private readonly List<Peer> _peers = [];
         private readonly Channel<Peer> _started = Channel.CreateUnbounded<Peer>();
@@ -111,18 +160,20 @@ public sealed class ServerDeadlineTests
         public ServerBackend Backend => _backend ??= new ServerBackend(timeouts, clock, startProcess: _ =>
         {
             var peer = new Peer(_peers.Count + 1);
-            if (!withholdFirstReady || _peers.Count != 0) peer.SendReady();
+            if (!withholdFirstReady || _peers.Count != 0) peer.SendReady(supportsProbe);
             _peers.Add(peer);
             _started.Writer.TryWrite(peer);
             return peer;
         });
 
-        public Task<PreviewRunResult> RunAsync(CancellationToken token = default) => Backend.RunAsync(new PreviewRequest
+        public static PreviewRequest Request() => new()
         {
             EncoderPath = "fake-encoder", InputFile = "fake.ts", Fps = 30,
             TargetSeconds = 0, PreMarginSeconds = 0, PostMarginSeconds = 0.1,
             InputArgs = ["--avhw"],
-        }, new Sink(), token);
+        };
+
+        public Task<PreviewRunResult> RunAsync(CancellationToken token = default) => Backend.RunAsync(Request(), new Sink(), token);
 
         public ValueTask<Peer> NextPeerAsync() => _started.Reader.ReadAsync();
 
@@ -163,14 +214,15 @@ public sealed class ServerDeadlineTests
         public Peer(int id) => Id = id;
 
         public int Id { get; }
-        public int ExitCode => 0;
+        public int ExitCode { get; private set; }
         public bool HasExited => _exited.Task.IsCompleted;
         public bool WasReaped { get; private set; }
+        public TaskCompletionSource ReapStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TextWriter StandardInput => _input;
         public Stream StandardOutput => _output;
         public TextReader StandardError => _error;
 
-        public void SendReady() => _output.WriteLine("RGYPREVIEW READY version=1");
+        public void SendReady(bool supportsProbe) => _output.WriteLine("RGYPREVIEW READY version=1" + (supportsProbe ? " probe=1" : ""));
 
         public void Begin(long id)
         {
@@ -197,8 +249,22 @@ public sealed class ServerDeadlineTests
         public Task<bool> ReapAsync(TimeProvider clock, TimeSpan timeout)
         {
             WasReaped = true;
-            Close();
+            if (!HasExited) Close();
+            ReapStarted.TrySetResult();
             return Task.FromResult(true);
+        }
+
+        public void ExitBeforeStderrIsDrained()
+        {
+            ExitCode = 23;
+            _exited.TrySetResult();
+            _output.CloseOutput();
+        }
+
+        public void FinishStderr(params string[] lines)
+        {
+            foreach (string line in lines) _error.WriteLine(line);
+            _error.CloseOutput();
         }
 
         public void Close()

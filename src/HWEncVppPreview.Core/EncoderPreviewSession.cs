@@ -193,7 +193,11 @@ public sealed partial class EncoderPreviewSession : IAsyncDisposable
             await process.WaitForExitAsync().ConfigureAwait(false);
             await Task.WhenAll(output, error).ConfigureAwait(false);
         }
-        if (process.ExitCode != 0) throw new InvalidOperationException(CoreText.EncoderInfoFailed(process.ExitCode));
+        if (process.ExitCode != 0)
+        {
+            string diagnostics = await error.ConfigureAwait(false);
+            throw new PreviewBackendException(EncoderErrorDetails.Append(CoreText.EncoderInfoFailed(process.ExitCode), diagnostics), diagnostics);
+        }
         string stdout = await output.ConfigureAwait(false);
         return string.IsNullOrWhiteSpace(stdout) ? await error.ConfigureAwait(false) : stdout;
     }

@@ -306,7 +306,8 @@ public sealed partial class EncoderPreviewSession
                 string diagnostics = exception switch
                 {
                     InputProbeException probe => probe.StandardError, InputProbeTimeoutException timeout => timeout.StandardError,
-                    PreviewBackendException backend => backend.StandardError, _ => "",
+                    PreviewBackendException backend => backend.StandardError,
+                    PreviewServerNotSupportedException unsupported => unsupported.StandardError, _ => "",
                 };
                 await PostAsync(() =>
                 {
