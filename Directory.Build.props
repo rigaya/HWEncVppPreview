@@ -1,7 +1,7 @@
 ﻿<Project>
   <PropertyGroup>
     <!-- 表示する版は文字列で保持する。数値化すると小数点以下の先頭の零が消えるため、画面には使わない。 -->
-    <HWEncVppPreviewVersion>0.01</HWEncVppPreviewVersion>
+    <HWEncVppPreviewVersion>0.02</HWEncVppPreviewVersion>
     <Version>$(HWEncVppPreviewVersion)</Version>
     <InformationalVersion>$(HWEncVppPreviewVersion)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>

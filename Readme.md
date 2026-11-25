@@ -10,6 +10,13 @@
 
 [こちら](https://github.com/rigaya/HWEncVppPreview/releases)から、ダウンロードして展開してください。
 
+リリースには、用途ごとに別々のアーカイブを置いています。通常はアプリのアーカイブだけを使います。
+
+| アーカイブ | 中身 | 用途 |
+|---|---|---|
+| `HWEncVppPreview_<版>_win-x64.zip`<br>`HWEncVppPreview_<版>_linux-x64.tar.xz` | `HWEncVppPreview(.exe)` | 画面で操作するプレビューアプリ |
+| `HWEncVppPreviewCLI_<版>_win-x64.zip`<br>`HWEncVppPreviewCLI_<版>_linux-x64.tar.xz` | `HWEncVppPreviewCLI(.exe)` | Amatsukazeのフィルタ調整が使うプレビューエンジン。Amatsukazeの配布物に同梱されます |
+
 ## 使い方
 
 アプリを開いたら、確認したい入力ファイルをドラッグドロップで開きます。
