@@ -184,7 +184,7 @@ jobs:
             $proc.Kill()
             throw 'CLIエンジンがタイムアウトしました。'
           }
-          if ($proc.ExitCode -ne 0 -or $ready -cne 'AMTPREVIEW READY version=1') {
+          if ($proc.ExitCode -ne 0 -or $ready -cne 'AMTPREVIEW READY version=2') {
             throw "CLIエンジンのREADYが不一致です: ready='$ready' exit=$($proc.ExitCode) stderr='$stderr'"
           }
       - name: Windowsの圧縮ファイルを作成
